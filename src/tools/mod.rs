@@ -5,3 +5,4 @@ pub mod lsp;
 pub mod registry;
 pub mod search;
 pub mod tests;
+pub mod web_fetch;
