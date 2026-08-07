@@ -1,0 +1,64 @@
+[package]
+name = "verve"
+version = "0.1.0"
+edition = "2021"
+description = "A local-first coding agent in the terminal, driven by a model on your own machine"
+repository = "https://github.com/loken-ai/verve"
+license = "MIT OR Apache-2.0"
+keywords = ["agent", "tui", "coding"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "verve"
+path = "src/lib.rs"
+
+[[bin]]
+name = "verve"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.13", features = ["json", "blocking", "stream", "multipart"] }
+clap = { version = "4.5", features = ["derive"] }
+futures = "0.3"
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+
+# Terminal
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tui-textarea = "0.7"
+
+# Server-sent events
+eventsource-stream = "0.2"
+
+# Tool arguments, and repairing the ones a model gets slightly wrong
+json5 = "0.4"
+jsonschema = { version = "0.30", default-features = false }
+schemars = "0.8"
+
+# Diff and patch
+similar = "2"
+diffy = "0.4"
+
+# Filesystem traversal that honours ignore files
+ignore = "0.4"
+
+uuid = { version = "1", features = ["v4"] }
+
+# Language server client: types only, the stdio JSON-RPC client is in-crate.
+# Pinned to 0.94, which still re-exports `Url`; 0.95 swapped it for `Uri`.
+lsp-types = "0.94"
+url = { version = "2", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
