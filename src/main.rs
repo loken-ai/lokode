@@ -255,6 +255,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             resume,
             tool_protocol,
             warnings,
+            mcp_servers: file.mcp.servers.clone(),
         },
     })
 }

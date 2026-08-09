@@ -105,6 +105,7 @@ pub async fn run(
         model,
         protocol,
         checkpoint_error,
+        mcp,
         ..
     } = boot::boot(&cfg).await?;
 
@@ -147,6 +148,17 @@ pub async fn run(
         ok: true,
     };
     let text_output = format == OutputFormat::Text;
+
+    // Said before the turn rather than after it: a tool server that would not start, or a
+    // tool that was refused, explains what the model then failed to do. It belongs in the
+    // report too, or a caller reading only JSON cannot see it at all.
+    for notice in &mcp.notices {
+        tracing::warn!(%notice, "mcp");
+        if text_output {
+            eprintln!("· {notice}");
+        }
+        report.notices.push(notice.clone());
+    }
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -210,6 +222,9 @@ pub async fn run(
     shutdown.cancel();
     approver.abort();
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), lsp.shutdown()).await;
+    for client in &mcp.clients {
+        client.shutdown().await;
+    }
     // The agent is finished, so the transcript is closed; waiting for the writer is what
     // gets the last records onto disk before the process leaves.
     if let Some(recorder) = recorder {

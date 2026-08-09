@@ -425,10 +425,10 @@ struct DiagArgs {
 
 #[async_trait]
 impl Tool for LspDiagnostics {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "lsp_diagnostics"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Return current LSP diagnostics (errors/warnings) for a source file."
     }
     fn args_schema(&self) -> Value {
@@ -500,10 +500,10 @@ struct HoverArgs {
 
 #[async_trait]
 impl Tool for LspHover {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "lsp_hover"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Get type/hover info at a 1-indexed (line, column) in a source file."
     }
     fn args_schema(&self) -> Value {

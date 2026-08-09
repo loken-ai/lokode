@@ -60,6 +60,12 @@ that is not ignored - including anything sensitive - and it outlives the session
 the project's `.gitignore`, so what git would not track it does not keep, but that is the only
 filter. Delete the directory when you are done with the session.
 
+**An MCP server is a third party with your privileges.** It is a program you configured, and
+`verve` starts it with the project as its working directory. Nothing here confines what it
+does — the path sandbox governs this agent's own file tools, not another process. Every call
+to one of its tools is approved and the approval names the server, but approving a call is
+approving whatever that program does with it.
+
 **The model is not trusted, but it is believed.** Tool arguments are validated and repaired,
 and a call to a tool that does not exist is refused. What is not checked is intent: a
 well-formed call to delete the right file is indistinguishable from a well-formed call to

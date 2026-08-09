@@ -30,10 +30,10 @@ struct Args {
 
 #[async_trait]
 impl Tool for WebFetch {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "web_fetch"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "GET a URL and return the response body (text). Requires user approval (network egress)."
     }
 

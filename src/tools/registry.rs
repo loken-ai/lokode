@@ -125,8 +125,10 @@ impl ToolOutput {
 
 #[async_trait]
 pub trait Tool: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn description(&self) -> &'static str;
+    /// Borrowed rather than `&'static str`, because a tool can come from somewhere that
+    /// was not known at compile time - an MCP server names its own.
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
     /// JSON Schema for the `arguments` object the model must emit.
     fn args_schema(&self) -> Value;
 
@@ -144,7 +146,7 @@ pub trait Tool: Send + Sync {
 }
 
 pub struct Registry {
-    tools: HashMap<&'static str, Arc<dyn Tool>>,
+    tools: HashMap<String, Arc<dyn Tool>>,
 }
 
 impl Registry {
@@ -154,12 +156,26 @@ impl Registry {
         }
     }
     pub fn register<T: Tool + 'static>(&mut self, tool: T) {
-        self.tools.insert(tool.name(), Arc::new(tool));
+        self.add(Arc::new(tool));
+    }
+
+    /// Register something already behind a pointer, which is how a tool built at runtime
+    /// arrives.
+    ///
+    /// Returns false when the name is taken. A silent overwrite would let one server
+    /// shadow a built-in tool by naming itself after it.
+    pub fn add(&mut self, tool: Arc<dyn Tool>) -> bool {
+        let name = tool.name().to_string();
+        if self.tools.contains_key(&name) {
+            return false;
+        }
+        self.tools.insert(name, tool);
+        true
     }
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
     }
-    pub fn iter(&self) -> impl Iterator<Item = (&&'static str, &Arc<dyn Tool>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Arc<dyn Tool>)> {
         self.tools.iter()
     }
     pub fn len(&self) -> usize {

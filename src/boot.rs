@@ -43,10 +43,15 @@ pub struct Booted {
     pub checkpoints: Option<Arc<Checkpoints>>,
     /// Why there is no history, when there is not one.
     pub checkpoint_error: Option<String>,
+    /// The tool servers that were started, and anything worth saying about them.
+    pub mcp: crate::mcp::Loaded,
 }
 
 pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
-    let (registry, lsp) = build_registry(cfg.root.clone());
+    let (mut registry, lsp) = build_registry(cfg.root.clone());
+    // Third-party tools go in after the built-ins, so a server cannot take a name the agent
+    // already relies on.
+    let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root).await;
     let registry = Arc::new(registry);
     let (approval_tx, approval_rx) = approval::channel();
     let shutdown = CancellationToken::new();
@@ -163,6 +168,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         restored,
         checkpoints,
         checkpoint_error,
+        mcp,
     })
 }
 

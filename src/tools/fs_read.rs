@@ -27,10 +27,10 @@ struct ReadFileArgs {
 
 #[async_trait]
 impl Tool for ReadFile {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "read_file"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Read a text file. Optional 1-indexed inclusive start_line/end_line."
     }
 
@@ -73,10 +73,10 @@ struct ListDirArgs {
 
 #[async_trait]
 impl Tool for ListDir {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "list_dir"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "List immediate children of a directory under the project root."
     }
 
@@ -132,10 +132,10 @@ struct GlobArgs {
 
 #[async_trait]
 impl Tool for Glob {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "glob"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Recursively list files matching a gitignore-aware glob from the project root."
     }
 

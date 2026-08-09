@@ -62,7 +62,7 @@ pub fn build_turn_schema(reg: &Registry) -> Value {
 /// order is a stable prompt prefix, and the server reuses its KV cache on one.
 pub fn tool_specs(reg: &Registry) -> Vec<ToolSpec> {
     let mut tools: Vec<_> = reg.iter().collect();
-    tools.sort_by_key(|(k, _)| **k);
+    tools.sort_by(|a, b| a.0.cmp(b.0));
     tools
         .into_iter()
         .map(|(_, tool)| ToolSpec {
@@ -82,7 +82,7 @@ pub fn tool_specs(reg: &Registry) -> Vec<ToolSpec> {
 pub fn tool_manifest(reg: &Registry) -> String {
     let mut out = String::from("Tools available:\n");
     let mut entries: Vec<_> = reg.iter().collect();
-    entries.sort_by_key(|(k, _)| **k);
+    entries.sort_by(|a, b| a.0.cmp(b.0));
     for (_, tool) in entries {
         out.push_str(&format!("- {}: {}\n", tool.name(), tool.description()));
     }

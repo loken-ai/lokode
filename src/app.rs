@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -34,6 +34,8 @@ pub struct AppConfig {
     pub tool_protocol: ProtocolChoice,
     /// Things worth telling the user at startup, shown once the screen exists.
     pub warnings: Vec<String>,
+    /// Tool servers to start, by name.
+    pub mcp_servers: BTreeMap<String, crate::config::McpServer>,
 }
 
 /// How tools should be asked for.

@@ -60,6 +60,11 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
   excluded. Undoing moves the history forward rather than rewinding it, so a file edited by
   hand between the change and the decision to take it back is not discarded to make the undo
   tidy.
+- MCP servers. Whatever a configured server offers is adapted into the same tool the rest of
+  the agent already knows, so the grammar, the manifest, the approval flow and the
+  checkpoints apply unchanged. What does not carry over is trust: every call is approved,
+  every call counts as mutating, and an advertised schema is checked before it can shape the
+  grammar.
 - `-p` runs one turn without the interface, for a git hook or a pipeline. `--approve` states
   what it may agree to, defaulting to nothing; `--output json` reports what it did; the exit
   code distinguishes finished, failed, and refused by the policy.
@@ -83,7 +88,9 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
-- Tests went from 21 to 156. Ten of the twelve tools now have one; the two LSP tools do not,
+- Tool names are borrowed rather than `&'static str`, so a tool can be named by something
+  that was not known at compile time.
+- Tests went from 21 to 162. Ten of the twelve tools now have one; the two LSP tools do not,
   because testing them needs a language server.
 - `src/tools/tests.rs` was the `run_tests` tool rather than tests, and is now `run_tests.rs`.
 - Two dependencies were declared and never used: `schemars`, never imported at all, and

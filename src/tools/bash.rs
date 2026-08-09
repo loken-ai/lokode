@@ -27,13 +27,13 @@ struct BashArgs {
 
 #[async_trait]
 impl Tool for Bash {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "bash"
     }
     fn mutates(&self) -> bool {
         true
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Run a shell command. Requires user approval. cwd must be inside project root."
     }
 

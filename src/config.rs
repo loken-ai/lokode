@@ -41,6 +41,33 @@ pub struct FileConfig {
     pub web: WebSection,
     #[serde(default)]
     pub session: SessionSection,
+    /// Tool servers to start, by name. The name prefixes their tools.
+    #[serde(default)]
+    pub mcp: McpSection,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct McpSection {
+    #[serde(default)]
+    pub servers: BTreeMap<String, McpServer>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct McpServer {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    /// Set false to keep a server configured but not started.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -153,6 +180,15 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
         session: SessionSection {
             transcripts: over.session.transcripts.or(base.session.transcripts),
             log_file: over.session.log_file.or(base.session.log_file),
+        },
+        mcp: McpSection {
+            servers: {
+                // Merged by name so a project can add a server without restating the
+                // user's, and can replace one of theirs by using the same name.
+                let mut servers = base.mcp.servers;
+                servers.extend(over.mcp.servers);
+                servers
+            },
         },
     }
 }

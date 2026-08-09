@@ -38,6 +38,7 @@ pub mod boot;
 pub mod checkpoint;
 pub mod config;
 pub mod headless;
+pub mod mcp;
 pub mod paths;
 pub mod sandbox;
 pub mod tools;

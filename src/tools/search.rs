@@ -24,10 +24,10 @@ struct GrepArgs {
 
 #[async_trait]
 impl Tool for Grep {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "grep"
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Search files for a regex (or literal with fixed_string=true). Uses ripgrep if available."
     }
 

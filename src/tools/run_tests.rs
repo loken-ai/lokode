@@ -20,13 +20,13 @@ struct Args {
 
 #[async_trait]
 impl Tool for RunTests {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "run_tests"
     }
     fn mutates(&self) -> bool {
         true
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Auto-detect project layout (Cargo.toml / package.json / pyproject.toml) and run the test suite."
     }
 

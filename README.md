@@ -168,6 +168,26 @@ unencrypted is warned about.
 Everything also has an environment variable: `VERVE_MODEL`, `VERVE_BACKEND_URL`,
 `VERVE_LOG_FILE`, `VERVE_API_KEY`.
 
+## Tools from elsewhere
+
+A Model Context Protocol server is a program you configure; whatever it offers becomes tools
+the model can call, named `<server>__<tool>` so nothing can take the name of a built-in.
+
+```toml
+[mcp.servers.github]
+command = "mcp-server-github"
+args = []
+env = { GITHUB_TOKEN = "…" }     # prefer naming a variable your shell already has
+```
+
+They are not trusted the way the built-in tools are. A built-in is trusted because its
+behaviour is in this repository; one of these is somebody else's program, and the root
+confines it no more than it confines a shell. So every call is approved, every call is
+treated as able to change the project, and the schema a server advertises is checked before
+it is allowed to shape the grammar the model is held to - a schema this code cannot compile
+would not break one tool, it would break the turn. A tool that fails that check is refused by
+name and said so, and a server that will not start takes only itself down.
+
 ## How tools are called
 
 Two protocols, and `--tool-protocol auto` picks between them.

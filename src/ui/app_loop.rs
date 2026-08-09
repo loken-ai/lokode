@@ -54,6 +54,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         restored,
         checkpoints,
         checkpoint_error,
+        mcp,
     } = boot::boot(&cfg).await?;
 
     // Channels:
@@ -89,6 +90,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         protocol,
         checkpoints,
         checkpoint_error,
+        mcp.notices.clone(),
         session_id,
         restored,
         &shutdown,
@@ -109,6 +111,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     // Language servers are killed on drop either way; this gives them the chance to put
     // their own caches down cleanly first.
     let _ = tokio::time::timeout(SHUTDOWN_GRACE, lsp.shutdown()).await;
+    for client in &mcp.clients {
+        client.shutdown().await;
+    }
     let agent_stopped = tokio::time::timeout(SHUTDOWN_GRACE, agent_task)
         .await
         .is_ok();
@@ -152,6 +157,7 @@ async fn run_ui(
     protocol: ToolProtocol,
     checkpoints: Option<Arc<Checkpoints>>,
     checkpoint_error: Option<String>,
+    mcp_notices: Vec<String>,
     session_id: String,
     restored: usize,
     shutdown: &CancellationToken,
@@ -176,6 +182,9 @@ async fn run_ui(
         state.entries.push(Entry::Notice(format!(
             "no change history for this session ({why}); /undo and /diff are unavailable"
         )));
+    }
+    for notice in &mcp_notices {
+        state.entries.push(Entry::Notice(notice.clone()));
     }
     // Raised while resolving settings, before there was a screen to say them on.
     for warning in &cfg.warnings {
