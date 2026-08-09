@@ -119,7 +119,8 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 - Tool names are borrowed rather than `&'static str`, so a tool can be named by something
   that was not known at compile time.
-- Tests went from 21 to 183. Ten of the twelve tools now have one; the two LSP tools do not,
+- Tests went from 21 to 200. All twelve tools have them now; the LSP pair talk to a stub
+  language server, which is what finally tests that an edited file is re-sent. Ten of the twelve tools now have one; the two LSP tools do not,
   because testing them needs a language server.
 - `src/tools/tests.rs` was the `run_tests` tool rather than tests, and is now `run_tests.rs`.
 - Two dependencies were declared and never used: `schemars`, never imported at all, and

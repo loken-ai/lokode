@@ -11,9 +11,11 @@ cargo fmt --all --check
 CI runs exactly those, on Linux and macOS, plus `cargo deny check` and a build against the
 declared MSRV. Nothing lands red.
 
-Two tools shell out and their tests skip themselves when the binary is missing, so a clean
-checkout passes without `ripgrep` installed. The LSP tools have no tests, because testing them
-needs a language server to talk to.
+Every tool has tests. The ones that need another program skip themselves when it is missing,
+so a clean checkout passes: `run_tests` wants a project manifest, and the LSP tools speak to a
+stub language server the test writes out in Python. That stub reports the document version
+back inside its diagnostic, which is the only way to tell a fresh answer from a stale one -
+the bug it exists to catch was the server never being told a file had changed.
 
 `verve -p "…" --output json` drives one turn against a real backend without the interface,
 which is the quickest way to see a change end to end. `src/boot.rs` assembles the agent for

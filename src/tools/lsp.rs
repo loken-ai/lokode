@@ -606,3 +606,136 @@ fn pretty_contents(c: &Value) -> String {
     }
     c.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::harness::{Answer, Harness};
+    use serde_json::json;
+
+    /// A language server that answers the parts of the protocol these two tools use.
+    ///
+    /// Written out by the test rather than kept as a fixture so it cannot drift from the
+    /// test that runs it. It reports the document version back inside the diagnostic, which
+    /// is what makes it possible to tell whether an edit actually reached the server -
+    /// without that, a stale diagnostic and a fresh one look identical.
+    const STUB: &str = r#"
+import json, sys
+
+def read():
+    length = 0
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line or line in (b"\r\n", b"\n"):
+            break
+        if line.lower().startswith(b"content-length:"):
+            length = int(line.split(b":")[1])
+    if not length:
+        return None
+    return json.loads(sys.stdin.buffer.read(length))
+
+def send(msg):
+    body = json.dumps(msg).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+versions = {}
+while True:
+    msg = read()
+    if msg is None:
+        break
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"capabilities": {"hoverProvider": True}}})
+    elif method in ("textDocument/didOpen", "textDocument/didChange"):
+        doc = msg["params"]["textDocument"]
+        versions[doc["uri"]] = doc.get("version", 0)
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {
+            "uri": doc["uri"],
+            "diagnostics": [{
+                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                "severity": 1,
+                "message": "stub saw version %d" % versions[doc["uri"]],
+            }],
+        }})
+    elif method == "textDocument/hover":
+        send({"jsonrpc": "2.0", "id": mid, "result": {
+            "contents": {"kind": "plaintext", "value": "stub hover"}}})
+    elif mid is not None:
+        send({"jsonrpc": "2.0", "id": mid, "result": None})
+"#;
+
+    /// Point the Rust language server at the stub.
+    ///
+    /// The override is read from the environment when a server is spawned, and the
+    /// environment belongs to the whole process - so these tests are the only ones that
+    /// touch it, and they run one after another inside a single test function.
+    fn install_stub(h: &Harness) -> bool {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return false;
+        }
+        let script = h.path("stub_lsp.py");
+        std::fs::write(&script, STUB).unwrap();
+        std::env::set_var("VERVE_LSP_RUST", format!("python3 {}", script.display()));
+        true
+    }
+
+    /// One function, because they share the process environment and a language-server pool.
+    #[tokio::test]
+    async fn the_language_server_tools_talk_to_a_server() {
+        let h = Harness::new(Answer::Yes);
+        if !install_stub(&h) {
+            eprintln!("skipping: python3 is not available");
+            return;
+        }
+        h.write("a.rs", "fn main() {}\n");
+        let pool = LspPool::new(h.root.clone());
+
+        // Diagnostics come back from a server that was actually spoken to.
+        let out = LspDiagnostics { pool: pool.clone() }
+            .run(&h.ctx, json!({"path": "a.rs"}))
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert!(out.content.contains("stub saw version"), "{}", out.content);
+
+        // The file is edited behind the server's back, exactly as the agent's own write
+        // tools do it. Asking again must describe the new text: the server used to be told
+        // once and never again, so from the first edit every diagnostic described code that
+        // no longer existed.
+        let first = out.content.clone();
+        h.write("a.rs", "fn main() { let x = 1; }\n");
+        let after = LspDiagnostics { pool: pool.clone() }
+            .run(&h.ctx, json!({"path": "a.rs"}))
+            .await
+            .unwrap();
+        assert_ne!(
+            first, after.content,
+            "the server was not told the file had changed"
+        );
+        assert!(after.content.contains("version 2"), "{}", after.content);
+
+        // Hover reaches the same server.
+        let hover = LspHover { pool: pool.clone() }
+            .run(&h.ctx, json!({"path": "a.rs", "line": 1, "column": 4}))
+            .await
+            .unwrap();
+        assert!(!hover.is_error, "{}", hover.content);
+        assert!(hover.content.contains("stub hover"), "{}", hover.content);
+
+        // A path outside the root is refused before any of this is reached.
+        let escaped = LspDiagnostics { pool: pool.clone() }
+            .run(&h.ctx, json!({"path": "../outside.rs"}))
+            .await
+            .unwrap();
+        assert!(escaped.is_error, "{}", escaped.content);
+
+        pool.shutdown().await;
+        std::env::remove_var("VERVE_LSP_RUST");
+    }
+}

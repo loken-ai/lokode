@@ -29,7 +29,9 @@
 //! client-side and why a single tool result is sized against the window it has to fit in.
 //!
 //! The path sandbox in [`sandbox::allowlist`] confines every tool that takes a path. It does
-//! not confine `bash`, which by construction runs a shell. See `SECURITY.md`.
+//! not confine `bash`, which by construction runs a shell - on Linux
+//! [`sandbox::confine`] can make everything outside the root read-only for one, but that is
+//! off unless asked for. See `SECURITY.md`.
 
 pub mod agent;
 pub mod app;
