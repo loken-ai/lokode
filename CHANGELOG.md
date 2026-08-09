@@ -46,6 +46,9 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
   to `/dev/null`, so a server that refused to start reported nothing and looked like a file
   with nothing wrong with it.
 - Quitting aborted the agent mid-write, which could truncate a file.
+- Scrolling past the top blanked the chat pane: the window slid off the end of the content
+  instead of stopping at its oldest line. Mouse capture had been on from the beginning with
+  nothing reading an event, so the wheel did nothing.
 - Results were returned against invented ids matching no call the model had made, which a
   strict OpenAI-compatible server rejects.
 
@@ -80,6 +83,8 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 - Authentication: `VERVE_API_KEY`, an `api-key-env` naming a variable, or an `api-key` in a
   file that only you can read. `--header name=value` for anything else. A key about to cross a
   network unencrypted is warned about.
+- Input history on the arrows, mouse-wheel scrolling, light markdown in the model's prose,
+  and colour on anything shaped like a diff.
 - `--allow-host` for a service on your own network that `web_fetch` would otherwise refuse.
 - `VERVE_LSP_RUST` and its siblings, for a language server that is not on the path under the
   usual name or is there and does not work.
@@ -90,7 +95,7 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 - Tool names are borrowed rather than `&'static str`, so a tool can be named by something
   that was not known at compile time.
-- Tests went from 21 to 162. Ten of the twelve tools now have one; the two LSP tools do not,
+- Tests went from 21 to 176. Ten of the twelve tools now have one; the two LSP tools do not,
   because testing them needs a language server.
 - `src/tools/tests.rs` was the `run_tests` tool rather than tests, and is now `run_tests.rs`.
 - Two dependencies were declared and never used: `schemars`, never imported at all, and

@@ -65,8 +65,12 @@ Two things it uses if they are present, and says so if they are not:
 | `Enter` | send |
 | `Shift-Enter` | newline |
 | `Esc` | interrupt the running turn |
-| `PageUp` / `PageDown` | scroll |
+| `↑` / `↓` | walk what you have already sent (from an empty input) |
+| `PageUp` / `PageDown`, wheel | scroll |
 | `Ctrl-C`, `Ctrl-Q` | quit |
+
+The model's prose is rendered as the light markdown it tends to write - fenced code,
+headings, `code` and **bold** - and anything that is a diff is coloured as one.
 
 At an approval prompt: `y` accepts once, `a` accepts everything in the stated scope for this
 session, `n` or `Esc` declines. `Enter` deliberately does nothing there - it is the send key,

@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -147,6 +149,79 @@ struct UiState {
     step: usize,
     /// Abandons the turn in flight. `None` between turns.
     turn_cancel: Option<CancellationToken>,
+    /// What the chat pane last drew, so scrolling can be bounded by what exists.
+    ///
+    /// Known only after a draw, which is why it is remembered rather than computed: the
+    /// height comes from the terminal and the wrapping from its width.
+    content_lines: usize,
+    view_height: usize,
+    /// What has been sent this session, oldest first, for the up arrow.
+    history: Vec<String>,
+    /// Where in that history the arrows are. `None` means at the live input.
+    history_at: Option<usize>,
+}
+
+impl UiState {
+    /// Move towards older lines, stopping where they run out.
+    fn scroll_back(&mut self, by: usize) {
+        let max = self.content_lines.saturating_sub(self.view_height);
+        self.scroll = (self.scroll as usize).saturating_add(by).min(max) as u16;
+    }
+
+    fn scroll_forward(&mut self, by: usize) {
+        self.scroll = (self.scroll as usize).saturating_sub(by) as u16;
+    }
+
+    fn remember(&mut self, text: &str) {
+        // Repeating the last line adds nothing to walk through.
+        if self.history.last().map(String::as_str) != Some(text) {
+            self.history.push(text.to_string());
+        }
+        self.history_at = None;
+    }
+
+    /// The previous thing sent, or `None` at the beginning of the history.
+    fn older(&mut self) -> Option<String> {
+        if self.history.is_empty() {
+            return None;
+        }
+        let next = match self.history_at {
+            None => self.history.len() - 1,
+            Some(0) => 0,
+            Some(i) => i - 1,
+        };
+        self.history_at = Some(next);
+        self.history.get(next).cloned()
+    }
+
+    /// The next thing sent, ending at an empty input rather than on the last entry.
+    fn newer(&mut self) -> Option<String> {
+        match self.history_at {
+            None => None,
+            Some(i) if i + 1 < self.history.len() => {
+                self.history_at = Some(i + 1);
+                self.history.get(i + 1).cloned()
+            }
+            Some(_) => {
+                self.history_at = None;
+                Some(String::new())
+            }
+        }
+    }
+}
+
+/// Whether the cursor is at the very start of the input.
+///
+/// The test for "the arrows are free to mean history": anywhere else they are how you move
+/// around what you are writing, and taking them would throw away a half-written line.
+fn at_start(input: &TextArea) -> bool {
+    input.cursor() == (0, 0)
+}
+
+fn fresh_input(text: &str) -> TextArea<'static> {
+    let mut input = TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
+    input.set_block(Block::default().borders(Borders::ALL).title(" input "));
+    input
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -219,7 +294,13 @@ async fn run_ui(
             let chat_block = Block::default().borders(Borders::ALL).title(" chat ");
             let inner_h = chat_block.inner(chunks[0]).height as usize;
             let total = lines.len();
-            let scroll = state.scroll as usize;
+            // Remembered for the scroll keys, which cannot know either of these.
+            state.content_lines = total;
+            state.view_height = inner_h;
+            // Scrolling past the top used to blank the pane: the window slid off the end of
+            // the content instead of stopping at its oldest line.
+            let scroll = (state.scroll as usize).min(total.saturating_sub(inner_h));
+            state.scroll = scroll as u16;
             let end = total.saturating_sub(scroll);
             let start = end.saturating_sub(inner_h);
             let visible: Vec<Line<'static>> =
@@ -250,6 +331,9 @@ async fn run_ui(
             }
         })?;
 
+        // No timer branch: every reason to redraw arrives as an event - a keystroke, a
+        // resize, a piece of the model's answer, an approval. A tick woke this loop twelve
+        // times a second to repaint a screen nothing had changed.
         tokio::select! {
             biased;
 
@@ -299,6 +383,16 @@ async fn run_ui(
 
             maybe_evt = events.next() => {
                 let Some(Ok(evt)) = maybe_evt else { continue };
+                // Mouse capture was turned on from the beginning and nothing ever read an
+                // event, so the wheel did nothing in a pane whose purpose is scrolling.
+                if let Event::Mouse(mouse) = evt {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => state.scroll_back(3),
+                        MouseEventKind::ScrollDown => state.scroll_forward(3),
+                        _ => {}
+                    }
+                    continue;
+                }
                 if let Event::Key(key) = evt {
                     // Quit is tested before anything else can swallow the key. It used to
                     // sit after the approval branch, which returned early - so the one
@@ -326,8 +420,26 @@ async fn run_ui(
                                 }
                                 continue;
                             }
-                            KeyCode::PageUp   => { state.scroll = state.scroll.saturating_add(5); continue; }
-                            KeyCode::PageDown => { state.scroll = state.scroll.saturating_sub(5); continue; }
+                            KeyCode::PageUp => {
+                                state.scroll_back(state.view_height.max(1));
+                                continue;
+                            }
+                            KeyCode::PageDown => {
+                                state.scroll_forward(state.view_height.max(1));
+                                continue;
+                            }
+                            KeyCode::Up if at_start(&input) => {
+                                if let Some(text) = state.older() {
+                                    input = fresh_input(&text);
+                                }
+                                continue;
+                            }
+                            KeyCode::Down if at_start(&input) => {
+                                if let Some(text) = state.newer() {
+                                    input = fresh_input(&text);
+                                }
+                                continue;
+                            }
                             KeyCode::Enter if !key.modifiers.contains(KeyModifiers::SHIFT) => {
                                 if state.busy { continue; }
                                 let text: String = input.lines().join("\n");
@@ -338,6 +450,7 @@ async fn run_ui(
                                 // A line beginning with `/` is for verve, not the model.
                                 // Handled before the turn is started so that `/undo` works
                                 // when the thing you want undone is what the model just did.
+                                state.remember(&text);
                                 if let Some(command) = text.strip_prefix('/') {
                                     let reply = run_command(command.trim(), checkpoints.as_deref()).await;
                                     state.entries.push(Entry::Notice(reply));
@@ -494,6 +607,77 @@ mod tests {
 
     /// Quit is consulted before the approval branch, so these must be recognised as quit
     /// even though the modal would otherwise read them as "not a decision".
+    fn scrollable(content: usize, view: usize) -> UiState {
+        UiState {
+            content_lines: content,
+            view_height: view,
+            ..Default::default()
+        }
+    }
+
+    /// Scrolling past the top used to leave the pane blank: the window slid off the end of
+    /// the content instead of stopping at its oldest line.
+    #[test]
+    fn scrolling_back_stops_at_the_oldest_line() {
+        let mut s = scrollable(100, 20);
+        for _ in 0..50 {
+            s.scroll_back(20);
+        }
+        assert_eq!(s.scroll, 80, "scrolled past the content");
+    }
+
+    #[test]
+    fn scrolling_forward_stops_at_the_newest() {
+        let mut s = scrollable(100, 20);
+        s.scroll_back(40);
+        s.scroll_forward(1000);
+        assert_eq!(s.scroll, 0);
+    }
+
+    /// Content shorter than the window has nowhere to scroll to.
+    #[test]
+    fn a_short_conversation_does_not_scroll() {
+        let mut s = scrollable(5, 20);
+        s.scroll_back(10);
+        assert_eq!(s.scroll, 0);
+    }
+
+    /// The up arrow walks back through what was sent; the down arrow returns to an empty
+    /// input rather than sticking on the last entry.
+    #[test]
+    fn the_arrows_walk_what_was_sent() {
+        let mut s = UiState::default();
+        s.remember("first");
+        s.remember("second");
+
+        assert_eq!(s.older().as_deref(), Some("second"));
+        assert_eq!(s.older().as_deref(), Some("first"));
+        assert_eq!(
+            s.older().as_deref(),
+            Some("first"),
+            "walked off the beginning"
+        );
+
+        assert_eq!(s.newer().as_deref(), Some("second"));
+        assert_eq!(s.newer().as_deref(), Some(""));
+        assert_eq!(s.newer(), None);
+    }
+
+    #[test]
+    fn nothing_sent_means_nothing_to_walk() {
+        let mut s = UiState::default();
+        assert_eq!(s.older(), None);
+        assert_eq!(s.newer(), None);
+    }
+
+    #[test]
+    fn a_repeat_is_not_remembered_twice() {
+        let mut s = UiState::default();
+        s.remember("same");
+        s.remember("same");
+        assert_eq!(s.history.len(), 1);
+    }
+
     #[test]
     fn quit_is_recognised() {
         assert!(is_quit(&ctrl('c')));
