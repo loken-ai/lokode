@@ -182,3 +182,144 @@ impl Tool for Glob {
         Ok(ToolOutput::ok(hits.join("\n")))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::harness::{outside, refused, succeeded, Answer, Harness};
+    use serde_json::json;
+
+    // --------------------------------------------------------------- read_file --
+
+    #[tokio::test]
+    async fn read_file_numbers_the_lines_it_returns() {
+        let h = Harness::new(Answer::No);
+        h.write("a.txt", "alpha\nbeta\ngamma\n");
+        let out = h.run(&ReadFile, json!({"path": "a.txt"})).await;
+        succeeded(&out);
+        assert_eq!(out.content, "    1 | alpha\n    2 | beta\n    3 | gamma");
+    }
+
+    #[tokio::test]
+    async fn read_file_honours_a_line_window() {
+        let h = Harness::new(Answer::No);
+        h.write("a.txt", "one\ntwo\nthree\nfour\n");
+        let out = h
+            .run(
+                &ReadFile,
+                json!({"path": "a.txt", "start_line": 2, "end_line": 3}),
+            )
+            .await;
+        succeeded(&out);
+        assert_eq!(out.content, "    2 | two\n    3 | three");
+    }
+
+    /// Reading is not gated on approval, so the root is the only thing standing between
+    /// the model and the rest of the filesystem.
+    #[tokio::test]
+    async fn read_file_refuses_to_leave_the_root() {
+        let h = Harness::new(Answer::No);
+        let out = h
+            .run(&ReadFile, json!({"path": outside().to_str().unwrap()}))
+            .await;
+        refused(&out, "outside the project root");
+    }
+
+    #[tokio::test]
+    async fn read_file_refuses_a_binary_file() {
+        let h = Harness::new(Answer::No);
+        h.write("logo.png", "\u{0}\u{0}not text");
+        let out = h.run(&ReadFile, json!({"path": "logo.png"})).await;
+        refused(&out, "not a text file");
+    }
+
+    #[tokio::test]
+    async fn read_file_reports_a_missing_file_rather_than_failing() {
+        let h = Harness::new(Answer::No);
+        let out = h.run(&ReadFile, json!({"path": "nope.txt"})).await;
+        assert!(out.is_error, "expected a refusal: {}", out.content);
+    }
+
+    // ---------------------------------------------------------------- list_dir --
+
+    #[tokio::test]
+    async fn list_dir_shows_children_with_their_kind() {
+        let h = Harness::new(Answer::No);
+        h.write("src/main.rs", "fn main() {}");
+        h.write("README.md", "hi");
+        let out = h.run(&ListDir, json!({"path": "."})).await;
+        succeeded(&out);
+        assert!(out.content.contains("README.md"), "{}", out.content);
+        assert!(
+            out.content.contains("DIR"),
+            "src should be listed as a directory: {}",
+            out.content
+        );
+        // Immediate children only.
+        assert!(!out.content.contains("main.rs"), "{}", out.content);
+    }
+
+    #[tokio::test]
+    async fn list_dir_refuses_to_leave_the_root() {
+        let h = Harness::new(Answer::No);
+        let out = h.run(&ListDir, json!({"path": "/etc"})).await;
+        refused(&out, "outside the project root");
+    }
+
+    // -------------------------------------------------------------------- glob --
+
+    #[tokio::test]
+    async fn glob_finds_files_recursively() {
+        let h = Harness::new(Answer::No);
+        h.write("src/a.rs", "");
+        h.write("src/deep/b.rs", "");
+        h.write("notes.md", "");
+        let out = h.run(&Glob, json!({"pattern": "**/*.rs"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("src/a.rs"), "{}", out.content);
+        assert!(out.content.contains("src/deep/b.rs"), "{}", out.content);
+        assert!(!out.content.contains("notes.md"), "{}", out.content);
+    }
+
+    /// The walk is gitignore-aware, which is the difference between listing a project and
+    /// listing its build directory.
+    #[tokio::test]
+    async fn glob_skips_what_the_project_ignores() {
+        let h = Harness::new(Answer::No);
+        // The rules only apply inside a repository, so there has to be one.
+        std::fs::create_dir_all(h.path(".git")).unwrap();
+        h.write(".gitignore", "target/\n");
+        h.write("src/a.rs", "");
+        h.write("target/debug/b.rs", "");
+        let out = h.run(&Glob, json!({"pattern": "**/*.rs"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("src/a.rs"), "{}", out.content);
+        assert!(
+            !out.content.contains("target/debug/b.rs"),
+            "an ignored path was walked: {}",
+            out.content
+        );
+    }
+
+    /// Outside a repository a `.gitignore` carries no authority, and the walk says so by
+    /// returning the files anyway. Worth pinning down: the tool describes itself as
+    /// gitignore-aware, and this is the edge of what that means.
+    #[tokio::test]
+    async fn glob_ignores_a_gitignore_with_no_repository_around_it() {
+        let h = Harness::new(Answer::No);
+        h.write(".gitignore", "target/\n");
+        h.write("target/debug/b.rs", "");
+        let out = h.run(&Glob, json!({"pattern": "**/*.rs"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("target/debug/b.rs"), "{}", out.content);
+    }
+
+    #[tokio::test]
+    async fn glob_matching_nothing_is_not_an_error() {
+        let h = Harness::new(Answer::No);
+        h.write("a.txt", "");
+        let out = h.run(&Glob, json!({"pattern": "**/*.rs"})).await;
+        succeeded(&out);
+        assert_eq!(out.content, "");
+    }
+}

@@ -95,3 +95,94 @@ impl Tool for Grep {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::harness::{refused, succeeded, Answer, Harness};
+    use serde_json::json;
+
+    fn have_ripgrep() -> bool {
+        std::process::Command::new("rg")
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn grep_reports_matches_with_line_numbers() {
+        if !have_ripgrep() {
+            return;
+        }
+        let h = Harness::new(Answer::No);
+        h.write("a.rs", "fn alpha() {}\nfn beta() {}\n");
+        let out = h.run(&Grep, json!({"pattern": "beta"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("a.rs"), "{}", out.content);
+        assert!(
+            out.content.contains(":2:"),
+            "line number missing: {}",
+            out.content
+        );
+    }
+
+    /// No matches is an answer, not a failure: ripgrep exits 1 for it, and treating that
+    /// as an error would tell the model its search was broken.
+    #[tokio::test]
+    async fn grep_finding_nothing_is_a_success() {
+        if !have_ripgrep() {
+            return;
+        }
+        let h = Harness::new(Answer::No);
+        h.write("a.rs", "nothing to see\n");
+        let out = h.run(&Grep, json!({"pattern": "absent"})).await;
+        succeeded(&out);
+        assert_eq!(out.content, "(no matches)");
+    }
+
+    #[tokio::test]
+    async fn grep_can_be_told_to_ignore_case() {
+        if !have_ripgrep() {
+            return;
+        }
+        let h = Harness::new(Answer::No);
+        h.write("a.rs", "Alpha\n");
+        let sensitive = h.run(&Grep, json!({"pattern": "alpha"})).await;
+        assert_eq!(sensitive.content, "(no matches)");
+        let insensitive = h
+            .run(&Grep, json!({"pattern": "alpha", "case_insensitive": true}))
+            .await;
+        assert!(
+            insensitive.content.contains("Alpha"),
+            "{}",
+            insensitive.content
+        );
+    }
+
+    /// A regex metacharacter searched as a literal must not be compiled as a pattern.
+    #[tokio::test]
+    async fn grep_can_search_for_a_literal() {
+        if !have_ripgrep() {
+            return;
+        }
+        let h = Harness::new(Answer::No);
+        h.write("a.rs", "a+b\naxb\n");
+        let out = h
+            .run(&Grep, json!({"pattern": "a+b", "fixed_string": true}))
+            .await;
+        succeeded(&out);
+        assert!(out.content.contains("a+b"), "{}", out.content);
+        assert!(
+            !out.content.contains("axb"),
+            "the pattern was compiled: {}",
+            out.content
+        );
+    }
+
+    #[tokio::test]
+    async fn grep_refuses_to_search_outside_the_root() {
+        let h = Harness::new(Answer::No);
+        let out = h.run(&Grep, json!({"pattern": "x", "path": "/etc"})).await;
+        refused(&out, "outside the project root");
+    }
+}

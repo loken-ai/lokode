@@ -100,3 +100,69 @@ fn detect_runner(
     }
     anyhow::bail!("no recognised test manifest at {}", root.display())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::harness::{refused, Answer, Harness};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn the_runner_is_chosen_by_what_the_project_carries() {
+        let h = Harness::new(Answer::No);
+        h.write("Cargo.toml", "");
+        assert_eq!(detect_runner(&h.root).unwrap().2, "cargo");
+
+        let h = Harness::new(Answer::No);
+        h.write("package.json", "{}");
+        assert_eq!(detect_runner(&h.root).unwrap().2, "npm");
+
+        let h = Harness::new(Answer::No);
+        h.write("pyproject.toml", "");
+        assert_eq!(detect_runner(&h.root).unwrap().2, "pytest");
+
+        let h = Harness::new(Answer::No);
+        h.write("go.mod", "");
+        assert_eq!(detect_runner(&h.root).unwrap().2, "go");
+    }
+
+    #[tokio::test]
+    async fn a_project_with_no_recognisable_layout_is_reported() {
+        let h = Harness::new(Answer::Yes);
+        let out = h.run(&RunTests, json!({})).await;
+        refused(&out, "no recognised test manifest");
+    }
+
+    #[tokio::test]
+    async fn a_declined_run_does_not_happen() {
+        let h = Harness::new(Answer::No);
+        h.write("Cargo.toml", "");
+        let out = h.run(&RunTests, json!({})).await;
+        refused(&out, "user denied");
+    }
+
+    /// The summary has to name the command, because running a project's tests runs the
+    /// project's code - build scripts, lifecycle hooks, conftest - and the user is
+    /// agreeing to that.
+    #[tokio::test]
+    async fn the_user_is_shown_what_will_be_run() {
+        let h = Harness::new(Answer::No);
+        h.write("Cargo.toml", "");
+        let _ = h.run(&RunTests, json!({})).await;
+        let asked = h.asked();
+        assert_eq!(asked.len(), 1);
+        assert!(
+            asked[0].summary.contains("cargo test"),
+            "{}",
+            asked[0].summary
+        );
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_turn_stops_the_run_before_it_asks() {
+        let h = Harness::cancelled();
+        h.write("Cargo.toml", "");
+        let out = h.run(&RunTests, json!({})).await;
+        refused(&out, "interrupted");
+    }
+}

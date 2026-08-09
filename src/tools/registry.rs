@@ -166,3 +166,74 @@ impl Default for Registry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::harness::{Answer, Harness};
+
+    /// The harness is returned rather than dropped, because the context it hands out
+    /// points into a temporary directory it owns.
+    fn with_ceiling(n: usize) -> Harness {
+        let mut h = Harness::new(Answer::No);
+        h.ctx.max_output_chars = n;
+        h
+    }
+
+    #[tokio::test]
+    async fn output_under_the_ceiling_is_untouched() {
+        let h = with_ceiling(100);
+        assert_eq!(h.ctx.clamp("short".into()), "short");
+    }
+
+    #[tokio::test]
+    async fn output_over_the_ceiling_says_it_was_cut() {
+        let h = with_ceiling(10);
+        let out = h.ctx.clamp("x".repeat(50));
+        assert!(out.starts_with(&"x".repeat(10)));
+        assert!(
+            out.contains("truncated"),
+            "the cut has to be visible: {out}"
+        );
+    }
+
+    /// Truncating by byte count lands mid-character on anything but ASCII, and a `String`
+    /// cut there is not a `String` at all - it panics. Emoji are four bytes, so a ceiling
+    /// that is not a multiple of four falls inside one.
+    #[tokio::test]
+    async fn cutting_never_lands_inside_a_character() {
+        for ceiling in 1..24 {
+            let h = with_ceiling(ceiling);
+            let out = h.ctx.clamp("🙂🙂🙂🙂🙂🙂".into());
+            assert!(out.contains("truncated"), "ceiling {ceiling} did not cut");
+            // Getting here at all means the cut was on a boundary; this pins down that
+            // no half-character was left behind.
+            assert!(
+                !out.trim_end_matches("\n… (truncated to fit the context window)")
+                    .contains('\u{fffd}'),
+                "ceiling {ceiling} left a broken character"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_ceiling_below_one_character_yields_no_content() {
+        let h = with_ceiling(1);
+        let out = h.ctx.clamp("🙂".into());
+        assert!(
+            out.starts_with('\n') || out.starts_with('…'),
+            "unexpected: {out:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_registry_answers_for_what_it_holds() {
+        use crate::tools::fs_read::ListDir;
+        let mut reg = Registry::new();
+        assert!(reg.is_empty());
+        reg.register(ListDir);
+        assert_eq!(reg.len(), 1);
+        assert!(reg.get("list_dir").is_some());
+        assert!(reg.get("no_such_tool").is_none());
+    }
+}

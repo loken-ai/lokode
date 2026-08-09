@@ -557,4 +557,269 @@ mod tests {
             }
         );
     }
+    // ---------------------------------------------------------- through a ToolCtx --
+
+    use crate::sandbox::approval::ApprovalScope;
+    use crate::tools::harness::{refused, succeeded, Answer, Harness};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn write_file_creates_and_replaces() {
+        let h = Harness::new(Answer::Yes);
+        let out = h
+            .run(&WriteFile, json!({"path": "src/a.rs", "content": "first"}))
+            .await;
+        succeeded(&out);
+        assert_eq!(h.read("src/a.rs"), "first");
+
+        let out = h
+            .run(&WriteFile, json!({"path": "src/a.rs", "content": "second"}))
+            .await;
+        succeeded(&out);
+        assert_eq!(h.read("src/a.rs"), "second");
+    }
+
+    #[tokio::test]
+    async fn a_declined_write_does_not_happen() {
+        let h = Harness::new(Answer::No);
+        let out = h
+            .run(&WriteFile, json!({"path": "a.txt", "content": "nope"}))
+            .await;
+        refused(&out, "user denied");
+        assert!(
+            !h.exists("a.txt"),
+            "the file was written despite being declined"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_outside_the_root_is_refused_without_asking() {
+        let h = Harness::new(Answer::Yes);
+        let out = h
+            .run(
+                &WriteFile,
+                json!({"path": "../escaped.txt", "content": "x"}),
+            )
+            .await;
+        assert!(out.is_error, "expected a refusal: {}", out.content);
+        assert!(
+            h.asked().is_empty(),
+            "the user was asked about a path that was never going to be allowed"
+        );
+    }
+
+    /// The scope shown to the user is the one that gets recorded, and it is the directory
+    /// the file lives in - not the tool.
+    #[tokio::test]
+    async fn agreeing_always_covers_the_directory_and_stops_there() {
+        let h = Harness::new(Answer::Always);
+        succeeded(
+            &h.run(&WriteFile, json!({"path": "src/a.rs", "content": "1"}))
+                .await,
+        );
+        assert_eq!(h.asked().len(), 1);
+        assert_eq!(
+            h.asked()[0].scope,
+            ApprovalScope::Path {
+                tool: "write_file".into(),
+                prefix: h.path("src"),
+            }
+        );
+
+        // Same directory: no second question.
+        succeeded(
+            &h.run(&WriteFile, json!({"path": "src/b.rs", "content": "2"}))
+                .await,
+        );
+        assert_eq!(h.asked().len(), 1, "a covered write asked again");
+
+        // Somewhere else: asked again.
+        succeeded(
+            &h.run(&WriteFile, json!({"path": "Cargo.toml", "content": "3"}))
+                .await,
+        );
+        assert_eq!(
+            h.asked().len(),
+            2,
+            "a write outside the agreement did not ask"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_turn_stops_a_write_before_it_asks() {
+        let h = Harness::cancelled();
+        let out = h
+            .run(&WriteFile, json!({"path": "a.txt", "content": "x"}))
+            .await;
+        refused(&out, "interrupted");
+        assert!(!h.exists("a.txt"));
+    }
+
+    // ------------------------------------------------------------------ edit_file --
+
+    #[tokio::test]
+    async fn edit_file_replaces_a_unique_substring() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "let x = 1;\nlet y = 2;\n");
+        let out = h
+            .run(
+                &EditFile,
+                json!({"path": "a.rs", "old_string": "let y = 2;", "new_string": "let y = 3;"}),
+            )
+            .await;
+        succeeded(&out);
+        assert_eq!(h.read("a.rs"), "let x = 1;\nlet y = 3;\n");
+    }
+
+    /// An ambiguous match is the case where guessing would silently edit the wrong line.
+    #[tokio::test]
+    async fn edit_file_refuses_an_ambiguous_match() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "same\nsame\n");
+        let out = h
+            .run(
+                &EditFile,
+                json!({"path": "a.rs", "old_string": "same", "new_string": "changed"}),
+            )
+            .await;
+        refused(&out, "ambiguous");
+        assert_eq!(
+            h.read("a.rs"),
+            "same\nsame\n",
+            "the file was touched anyway"
+        );
+        assert!(
+            h.asked().is_empty(),
+            "the user was asked about an edit that could not be made"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_file_refuses_a_string_that_is_not_there() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "hello\n");
+        let out = h
+            .run(
+                &EditFile,
+                json!({"path": "a.rs", "old_string": "goodbye", "new_string": "x"}),
+            )
+            .await;
+        refused(&out, "not found");
+    }
+
+    // ---------------------------------------------------------------- apply_patch --
+
+    fn patch_for(name: &str, before: &str, after: &str) -> String {
+        unified_diff(before, after, name)
+    }
+
+    #[tokio::test]
+    async fn apply_patch_changes_every_file_it_names() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one\n");
+        h.write("b.txt", "two\n");
+        let diff = format!(
+            "{}{}",
+            patch_for("a.txt", "one\n", "ONE\n"),
+            patch_for("b.txt", "two\n", "TWO\n")
+        );
+        let out = h.run(&ApplyPatch, json!({"unified_diff": diff})).await;
+        succeeded(&out);
+        assert_eq!(h.read("a.txt"), "ONE\n");
+        assert_eq!(h.read("b.txt"), "TWO\n");
+    }
+
+    /// The whole point of staging: if any file in the patch cannot be applied, none of
+    /// them are written.
+    #[tokio::test]
+    async fn a_patch_that_cannot_apply_wholly_changes_nothing() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one\n");
+        h.write("b.txt", "something else entirely\n");
+        let diff = format!(
+            "{}{}",
+            patch_for("a.txt", "one\n", "ONE\n"),
+            // Written against contents b.txt does not have.
+            patch_for("b.txt", "two\n", "TWO\n")
+        );
+        let out = h.run(&ApplyPatch, json!({"unified_diff": diff})).await;
+        assert!(out.is_error, "expected a refusal: {}", out.content);
+        assert_eq!(h.read("a.txt"), "one\n", "an earlier file was left changed");
+        assert!(
+            h.asked().is_empty(),
+            "the user was asked to approve a patch that could not apply"
+        );
+    }
+
+    /// Paths are resolved before the question is put, so what the user approves is what
+    /// happens.
+    #[tokio::test]
+    async fn a_patch_reaching_outside_the_root_is_refused_before_asking() {
+        let h = Harness::new(Answer::Yes);
+        let diff = patch_for("../escaped.txt", "", "gotcha\n");
+        let out = h.run(&ApplyPatch, json!({"unified_diff": diff})).await;
+        assert!(out.is_error, "expected a refusal: {}", out.content);
+        assert!(
+            h.asked().is_empty(),
+            "the user was asked about a path outside the root"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_declined_patch_changes_nothing() {
+        let h = Harness::new(Answer::No);
+        h.write("a.txt", "one\n");
+        let diff = patch_for("a.txt", "one\n", "ONE\n");
+        let out = h.run(&ApplyPatch, json!({"unified_diff": diff})).await;
+        refused(&out, "user denied");
+        assert_eq!(h.read("a.txt"), "one\n");
+    }
+
+    #[tokio::test]
+    async fn an_empty_patch_is_refused() {
+        let h = Harness::new(Answer::Yes);
+        let out = h.run(&ApplyPatch, json!({"unified_diff": ""})).await;
+        refused(&out, "empty patch");
+    }
+
+    // ------------------------------------------------------- parse_multifile_patch --
+
+    /// Hand-rolled splitting on `--- ` boundaries, and until now untested.
+    #[test]
+    fn a_diff_splits_into_one_patch_per_file() {
+        let diff = format!(
+            "{}{}",
+            unified_diff("a\n", "A\n", "one.txt"),
+            unified_diff("b\n", "B\n", "two.txt")
+        );
+        let parsed = parse_multifile_patch(&diff).unwrap();
+        assert_eq!(parsed.len(), 2);
+    }
+
+    #[test]
+    fn a_single_file_diff_is_one_patch() {
+        let diff = unified_diff("a\n", "A\n", "one.txt");
+        assert_eq!(parse_multifile_patch(&diff).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn text_with_no_diff_in_it_yields_nothing() {
+        assert!(parse_multifile_patch("just some prose\n")
+            .unwrap()
+            .is_empty());
+    }
+
+    /// A removed line beginning with `-` must not be read as the start of a new file.
+    #[test]
+    fn a_removed_line_is_not_mistaken_for_a_boundary() {
+        let before = "keep\n--- not a header\nkeep2\n";
+        let after = "keep\nkeep2\n";
+        let diff = unified_diff(before, after, "one.txt");
+        let parsed = parse_multifile_patch(&diff).unwrap();
+        assert_eq!(
+            parsed.len(),
+            1,
+            "a deleted line that looks like a header split the patch: {diff}"
+        );
+    }
 }

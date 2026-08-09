@@ -103,3 +103,96 @@ impl Tool for Bash {
         Ok(ToolOutput::ok(report))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sandbox::approval::ApprovalScope;
+    use crate::tools::harness::{refused, succeeded, Answer, Harness};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn a_command_runs_and_reports_its_output_and_status() {
+        let h = Harness::new(Answer::Yes);
+        let out = h.run(&Bash, json!({"cmd": "echo hello; exit 3"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("exit: 3"), "{}", out.content);
+        assert!(out.content.contains("hello"), "{}", out.content);
+    }
+
+    #[tokio::test]
+    async fn a_declined_command_does_not_run() {
+        let h = Harness::new(Answer::No);
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": format!("touch {}", h.path("ran").display())}),
+            )
+            .await;
+        refused(&out, "user denied");
+        assert!(!h.exists("ran"), "the command ran despite being declined");
+    }
+
+    #[tokio::test]
+    async fn a_command_runs_in_the_root_by_default() {
+        let h = Harness::new(Answer::Yes);
+        h.write("marker.txt", "");
+        let out = h.run(&Bash, json!({"cmd": "ls"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("marker.txt"), "{}", out.content);
+    }
+
+    #[tokio::test]
+    async fn a_working_directory_outside_the_root_is_refused() {
+        let h = Harness::new(Answer::Yes);
+        let out = h.run(&Bash, json!({"cmd": "ls", "cwd": "/etc"})).await;
+        refused(&out, "outside the project root");
+        assert!(
+            h.asked().is_empty(),
+            "the user was asked about a command that could not run"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_command_that_overruns_its_time_is_stopped() {
+        let h = Harness::new(Answer::Yes);
+        let out = h
+            .run(&Bash, json!({"cmd": "sleep 5", "timeout_s": 1}))
+            .await;
+        refused(&out, "timed out");
+    }
+
+    /// The scope of an `Always` here is the command as shown, not the shell in general.
+    /// Anything else and one approved `ls` is a standing permission to run anything.
+    #[tokio::test]
+    async fn agreeing_always_covers_only_that_command() {
+        let h = Harness::new(Answer::Always);
+        succeeded(&h.run(&Bash, json!({"cmd": "true"})).await);
+        assert_eq!(h.asked()[0].scope, ApprovalScope::Command("true".into()));
+
+        // The same command again: no second question.
+        succeeded(&h.run(&Bash, json!({"cmd": "true"})).await);
+        assert_eq!(h.asked().len(), 1);
+
+        // A different one, however similar: asked.
+        succeeded(&h.run(&Bash, json!({"cmd": "true; echo more"})).await);
+        assert_eq!(
+            h.asked().len(),
+            2,
+            "a different command inherited the agreement"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_turn_stops_the_command_before_it_asks() {
+        let h = Harness::cancelled();
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": format!("touch {}", h.path("ran").display())}),
+            )
+            .await;
+        refused(&out, "interrupted");
+        assert!(!h.exists("ran"));
+    }
+}

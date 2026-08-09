@@ -212,8 +212,8 @@ fn build_registry(root: std::path::PathBuf) -> (Registry, Arc<LspPool>) {
         fs_read::{Glob, ListDir, ReadFile},
         fs_write::{ApplyPatch, EditFile, WriteFile},
         lsp::{LspDiagnostics, LspHover},
+        run_tests::RunTests,
         search::Grep,
-        tests::RunTests,
         web_fetch::WebFetch,
     };
 

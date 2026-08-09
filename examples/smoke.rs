@@ -25,8 +25,8 @@ use verve::tools::{
     fs_write::{ApplyPatch, EditFile, WriteFile},
     lsp::{LspDiagnostics, LspHover, LspPool},
     registry::{Registry, ToolCtx},
+    run_tests::RunTests,
     search::Grep,
-    tests::RunTests,
     web_fetch::WebFetch,
 };
 
