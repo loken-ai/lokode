@@ -1,8 +1,9 @@
 //! Minimal LSP stdio client. Spawns one language server per detected
 //! file extension and reuses it for the lifetime of the TUI session.
 //!
-//! Scope: initialize → didOpen → hover, pullDiagnostics. Enough for the
-//! agent to surface compile errors and type info.
+//! Scope: initialize → didOpen/didChange → hover, pullDiagnostics → shutdown. Enough for
+//! the agent to surface compile errors and type info, and to keep surfacing them after it
+//! has edited the file itself.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
