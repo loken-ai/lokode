@@ -19,6 +19,9 @@ pub struct AppConfig {
     pub model: Option<String>,
     pub root: PathBuf,
     pub backend_url: String,
+    /// Sent with every backend request, including any `Authorization` resolved from the
+    /// environment or a config file.
+    pub headers: Vec<(String, String)>,
     pub grammar_enabled: bool,
     pub max_steps: usize,
     pub context_tokens: usize,
@@ -29,6 +32,8 @@ pub struct AppConfig {
     pub transcripts: bool,
     pub resume: Option<Resume>,
     pub tool_protocol: ProtocolChoice,
+    /// Things worth telling the user at startup, shown once the screen exists.
+    pub warnings: Vec<String>,
 }
 
 /// How tools should be asked for.

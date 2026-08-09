@@ -49,9 +49,36 @@ pub struct BackendClient {
 
 impl BackendClient {
     pub fn new(base_url: impl Into<String>) -> Self {
+        Self::with_headers(base_url, &[])
+    }
+
+    /// A client that sends `headers` with every request.
+    ///
+    /// Built into the client's defaults rather than added per call, so there is one place
+    /// a credential can be attached and no request path that can forget it. Headers that
+    /// will not encode are dropped with a warning naming the header - never its value,
+    /// which is the thing that must not reach a log.
+    pub fn with_headers(base_url: impl Into<String>, headers: &[(String, String)]) -> Self {
+        let mut map = reqwest::header::HeaderMap::new();
+        for (name, value) in headers {
+            match (
+                name.parse::<reqwest::header::HeaderName>(),
+                reqwest::header::HeaderValue::from_str(value),
+            ) {
+                (Ok(n), Ok(mut v)) => {
+                    // Marked sensitive so it is not echoed by anything that formats the
+                    // client's state.
+                    v.set_sensitive(true);
+                    map.insert(n, v);
+                }
+                _ => tracing::warn!(header = %name, "unusable header, not sent"),
+            }
+        }
+
         Self {
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(900))
+                .default_headers(map)
                 .build()
                 .expect("reqwest client"),
             base: base_url.into(),

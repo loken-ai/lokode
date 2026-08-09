@@ -134,7 +134,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     };
 
     let mut agent = Agent {
-        backend: BackendClient::new(cfg.backend_url.clone()),
+        backend: BackendClient::with_headers(cfg.backend_url.clone(), &cfg.headers),
         registry: registry.clone(),
         session,
         cfg: agent_cfg,
@@ -304,6 +304,12 @@ async fn run_ui(
         state.entries.push(Entry::Notice(format!(
             "resumed session {session_id}: {restored} earlier message(s) are back in view"
         )));
+    }
+    // Raised while resolving settings, before there was a screen to say them on.
+    for warning in &cfg.warnings {
+        state
+            .entries
+            .push(Entry::Notice(format!("warning: {warning}")));
     }
 
     let mut input = TextArea::default();

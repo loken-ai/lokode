@@ -3,8 +3,21 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use verve::app;
+use verve::{app, config};
 
+/// Defaults, in one place, so that "not specified anywhere" has a single answer.
+mod default {
+    pub const BACKEND_URL: &str = "http://127.0.0.1:11435";
+    pub const MAX_STEPS: usize = 16;
+    pub const CONTEXT_TOKENS: usize = 8192;
+    pub const MAX_ANSWER_TOKENS: usize = 4096;
+}
+
+/// Flags carry no defaults of their own.
+///
+/// A flag with a `default_value` cannot be told apart from one the user did not pass, and
+/// a setting that is always "specified" can never be overridden by a config file. The
+/// defaults live above and are applied last, once everything else has had its say.
 #[derive(Parser, Debug)]
 #[command(name = "verve", about = "Local-first code agent TUI")]
 struct Cli {
@@ -17,26 +30,30 @@ struct Cli {
     root: PathBuf,
 
     /// Backend base URL (OpenAI-compatible).
-    #[arg(short = 'u', long, default_value = "http://127.0.0.1:11435")]
-    backend_url: String,
+    #[arg(short = 'u', long)]
+    backend_url: Option<String>,
+
+    /// Extra header sent with every backend request, as `name=value`. Repeatable.
+    #[arg(long = "header", value_name = "NAME=VALUE")]
+    headers: Vec<String>,
 
     /// Disable server-side grammar (forces Layer 2/3 repair to do all the work).
     #[arg(long)]
     no_grammar: bool,
 
     /// Maximum agent loop iterations per user turn.
-    #[arg(long, default_value = "16")]
-    max_steps: usize,
+    #[arg(long)]
+    max_steps: Option<usize>,
 
     /// Context window the backend offers for this model, in tokens. The history is
     /// compacted client-side to fit it: a server that has to truncate keeps the tail,
     /// which would drop the system preamble carrying the tool manifest.
-    #[arg(long, default_value = "8192")]
-    context_tokens: usize,
+    #[arg(long)]
+    context_tokens: Option<usize>,
 
     /// Tokens held back from the window for the answer.
-    #[arg(long, default_value = "4096")]
-    max_answer_tokens: usize,
+    #[arg(long)]
+    max_answer_tokens: Option<usize>,
 
     /// Let `web_fetch` reach this host even though it resolves to a private address.
     ///
@@ -69,30 +86,86 @@ struct Cli {
     /// `auto` uses the server's own tool-calling and falls back to the JSON envelope if it
     /// is refused. Pin `envelope` for a backend that accepts the `tools` field and then
     /// ignores it, which cannot be told apart from a model choosing not to call anything.
-    #[arg(long, value_enum, default_value = "auto")]
-    tool_protocol: app::ProtocolChoice,
+    #[arg(long, value_enum)]
+    tool_protocol: Option<app::ProtocolChoice>,
+
+    /// Print where settings were read from, and what they resolved to, then exit.
+    #[arg(long)]
+    show_config: bool,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Installed before the runtime so that a panic during setup is reported on a terminal
-    // nobody has taken yet, and after that by the hook the UI installs.
-    let _log_guard = init_logging(cli.log_file.clone())?;
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(run(cli))
-}
-
-async fn run(cli: Cli) -> Result<()> {
     let root = cli.root.canonicalize().map_err(|e| {
         anyhow::anyhow!(
             "--root {} could not be canonicalized: {e}",
             cli.root.display()
         )
     })?;
+    let file = config::load(&root)?;
+
+    let log_file = cli
+        .log_file
+        .clone()
+        .or_else(|| env_path("VERVE_LOG_FILE"))
+        .or_else(|| file.session.log_file.clone());
+    let _log_guard = init_logging(log_file)?;
+
+    let cfg = resolve(cli, root, file)?;
+
+    if cfg.show_config {
+        print_config(&cfg);
+        return Ok(());
+    }
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(app::run(cfg.app))
+}
+
+/// Everything resolved, plus what the user should be told about it.
+struct Resolved {
+    app: app::AppConfig,
+    show_config: bool,
+    sources: Vec<String>,
+}
+
+fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved> {
+    let mut sources = Vec::new();
+    if let Some(p) = config::user_config_path() {
+        if p.exists() {
+            sources.push(p.display().to_string());
+        }
+    }
+    let project = config::project_config_path(&root);
+    if project.exists() {
+        sources.push(project.display().to_string());
+    }
+
+    let backend_url = cli
+        .backend_url
+        .or_else(|| env_string("VERVE_BACKEND_URL"))
+        .or_else(|| file.backend.url.clone())
+        .unwrap_or_else(|| default::BACKEND_URL.to_string());
+
+    let config::Headers {
+        headers,
+        mut warnings,
+    } = config::resolve_headers(&file, &cli.headers, &backend_url)?;
+
+    let tool_protocol = match cli.tool_protocol {
+        Some(p) => p,
+        None => match file.tool_protocol.as_deref() {
+            None | Some("auto") => app::ProtocolChoice::Auto,
+            Some("native") => app::ProtocolChoice::Native,
+            Some("envelope") => app::ProtocolChoice::Envelope,
+            Some(other) => {
+                anyhow::bail!("tool-protocol must be auto, native or envelope, got {other:?}")
+            }
+        },
+    };
 
     let resume = match (&cli.resume, cli.continue_last) {
         (Some(id), _) => Some(app::Resume::Id(id.clone())),
@@ -100,23 +173,97 @@ async fn run(cli: Cli) -> Result<()> {
         _ => None,
     };
 
-    // Resuming can supply the model, so the flag is only required when nothing else can
-    // answer for it.
-    let cfg = app::AppConfig {
-        model: cli.model,
-        root,
-        backend_url: cli.backend_url,
-        grammar_enabled: !cli.no_grammar,
-        max_steps: cli.max_steps,
-        context_tokens: cli.context_tokens,
-        max_answer_tokens: cli.max_answer_tokens,
-        allow_hosts: cli.allow_hosts.into_iter().collect(),
-        transcripts: !cli.no_transcript,
-        resume,
-        tool_protocol: cli.tool_protocol,
+    // A flag that was not passed is silence, not a "no": only `--no-transcript` and
+    // `--no-grammar` being present count as an opinion, so a file can still turn either
+    // off without the flag having to be repeated.
+    let transcripts = if cli.no_transcript {
+        false
+    } else {
+        file.session.transcripts.unwrap_or(true)
     };
 
-    app::run(cfg).await
+    if warnings.is_empty() && headers.iter().any(|(k, _)| k == "Authorization") {
+        tracing::info!("sending an Authorization header to {backend_url}");
+    }
+    for w in &warnings {
+        tracing::warn!("{w}");
+    }
+    warnings.shrink_to_fit();
+
+    Ok(Resolved {
+        show_config: cli.show_config,
+        sources,
+        app: app::AppConfig {
+            model: cli
+                .model
+                .or_else(|| env_string("VERVE_MODEL"))
+                .or(file.model.clone()),
+            root,
+            backend_url,
+            headers,
+            grammar_enabled: !cli.no_grammar,
+            max_steps: cli
+                .max_steps
+                .or(file.limits.max_steps)
+                .unwrap_or(default::MAX_STEPS),
+            context_tokens: cli
+                .context_tokens
+                .or(file.limits.context_tokens)
+                .unwrap_or(default::CONTEXT_TOKENS),
+            max_answer_tokens: cli
+                .max_answer_tokens
+                .or(file.limits.max_answer_tokens)
+                .unwrap_or(default::MAX_ANSWER_TOKENS),
+            allow_hosts: config::resolve_allow_hosts(&file, cli.allow_hosts),
+            transcripts,
+            resume,
+            tool_protocol,
+            warnings,
+        },
+    })
+}
+
+fn env_string(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
+fn env_path(name: &str) -> Option<PathBuf> {
+    env_string(name).map(PathBuf::from)
+}
+
+/// Say what was read and what it came to, without ever printing a secret.
+fn print_config(cfg: &Resolved) {
+    if cfg.sources.is_empty() {
+        println!("config files: none found");
+    } else {
+        println!("config files (later wins):");
+        for s in &cfg.sources {
+            println!("  {s}");
+        }
+    }
+    let a = &cfg.app;
+    println!("\nresolved:");
+    println!(
+        "  model              {}",
+        a.model.as_deref().unwrap_or("(unset)")
+    );
+    println!("  root               {}", a.root.display());
+    println!("  backend-url        {}", a.backend_url);
+    println!("  tool-protocol      {:?}", a.tool_protocol);
+    println!("  grammar            {}", a.grammar_enabled);
+    println!("  max-steps          {}", a.max_steps);
+    println!("  context-tokens     {}", a.context_tokens);
+    println!("  max-answer-tokens  {}", a.max_answer_tokens);
+    println!("  transcripts        {}", a.transcripts);
+    let hosts: Vec<_> = a.allow_hosts.iter().cloned().collect();
+    println!("  allow-hosts        {}", hosts.join(", "));
+    // Names only. The whole point of the file-permission check is that these do not get
+    // shown to whoever is looking over your shoulder either.
+    let names: Vec<_> = a.headers.iter().map(|(k, _)| k.as_str()).collect();
+    println!("  headers            {} (values hidden)", names.join(", "));
+    for w in &a.warnings {
+        println!("\nwarning: {w}");
+    }
 }
 
 /// Send the log to a file, and return the guard that keeps the writer alive.
