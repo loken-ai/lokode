@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -17,6 +18,7 @@ use crate::agent::agent_loop::AgentEvent;
 use crate::agent::protocol::ToolProtocol;
 use crate::app::AppConfig;
 use crate::boot;
+use crate::checkpoint::Checkpoints;
 use crate::sandbox::approval::{ApprovalDecision, ApprovalPrompt};
 use crate::ui::approval::ApprovalView;
 use crate::ui::chat::Entry;
@@ -50,7 +52,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         model,
         protocol,
         restored,
-    } = boot::boot(&cfg)?;
+        checkpoints,
+        checkpoint_error,
+    } = boot::boot(&cfg).await?;
 
     // Channels:
     //   input_tx → agent task ── pushes "user said X"
@@ -83,6 +87,8 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         &cfg,
         &model,
         protocol,
+        checkpoints,
+        checkpoint_error,
         session_id,
         restored,
         &shutdown,
@@ -144,6 +150,8 @@ async fn run_ui(
     cfg: &AppConfig,
     model: &str,
     protocol: ToolProtocol,
+    checkpoints: Option<Arc<Checkpoints>>,
+    checkpoint_error: Option<String>,
     session_id: String,
     restored: usize,
     shutdown: &CancellationToken,
@@ -162,6 +170,11 @@ async fn run_ui(
     if restored > 0 {
         state.entries.push(Entry::Notice(format!(
             "resumed session {session_id}: {restored} earlier message(s) are back in view"
+        )));
+    }
+    if let Some(why) = &checkpoint_error {
+        state.entries.push(Entry::Notice(format!(
+            "no change history for this session ({why}); /undo and /diff are unavailable"
         )));
     }
     // Raised while resolving settings, before there was a screen to say them on.
@@ -313,6 +326,14 @@ async fn run_ui(
                                 state.entries.push(Entry::User(text.clone()));
                                 input = TextArea::default();
                                 input.set_block(Block::default().borders(Borders::ALL).title(" input "));
+                                // A line beginning with `/` is for verve, not the model.
+                                // Handled before the turn is started so that `/undo` works
+                                // when the thing you want undone is what the model just did.
+                                if let Some(command) = text.strip_prefix('/') {
+                                    let reply = run_command(command.trim(), checkpoints.as_deref()).await;
+                                    state.entries.push(Entry::Notice(reply));
+                                    continue;
+                                }
                                 state.busy = true;
                                 state.step = 0;
                                 // A child of the shutdown token, so quitting cancels the
@@ -343,6 +364,52 @@ fn is_quit(k: &KeyEvent) -> bool {
         (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), KeyModifiers::CONTROL)
     )
 }
+
+/// Answer a slash command.
+///
+/// These do not reach the model and do not become part of the conversation: they are things
+/// the user is asking of the tool about the session, and putting them in the transcript
+/// would describe a turn that never happened.
+async fn run_command(command: &str, checkpoints: Option<&Checkpoints>) -> String {
+    match command {
+        "help" | "" => HELP.into(),
+        "undo" => match checkpoints {
+            None => "no change history for this session".into(),
+            Some(cp) => match cp.undo().await {
+                Err(e) => format!("undo failed: {e:#}"),
+                Ok(None) => "nothing to undo: the agent has not changed anything".into(),
+                Ok(Some(done)) => {
+                    if done.files.is_empty() {
+                        format!("turn {} put back", done.turn)
+                    } else {
+                        format!(
+                            "turn {} put back, {} file(s):\n{}",
+                            done.turn,
+                            done.files.len(),
+                            done.files.join("\n")
+                        )
+                    }
+                }
+            },
+        },
+        "diff" => match checkpoints {
+            None => "no change history for this session".into(),
+            Some(cp) => match cp.diff().await {
+                Err(e) => format!("diff failed: {e:#}"),
+                Ok(d) if d.trim().is_empty() => {
+                    "the agent has not changed anything this session".into()
+                }
+                Ok(d) => d,
+            },
+        },
+        other => format!("no such command: /{other}\n{HELP}"),
+    }
+}
+
+const HELP: &str = "\
+/diff   everything the agent has changed this session
+/undo   put back the most recent turn that changed something
+/help   this";
 
 /// Which decision a keystroke stands for at the approval modal.
 ///

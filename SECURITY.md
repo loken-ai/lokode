@@ -53,6 +53,13 @@ read is approving whatever that repository wants to run.
 token in it - all readable by the model if they are under the root, and all recorded in the
 session transcript. The transcript is written with your umask; nothing in it is encrypted.
 
+**The change history holds copies of your files.** `/undo` and `/diff` work because every
+change is committed to a git repository under `$XDG_DATA_HOME/verve/checkpoints/<session>`,
+whose work tree is the project. It therefore contains full copies of everything under the root
+that is not ignored - including anything sensitive - and it outlives the session. It respects
+the project's `.gitignore`, so what git would not track it does not keep, but that is the only
+filter. Delete the directory when you are done with the session.
+
 **The model is not trusted, but it is believed.** Tool arguments are validated and repaired,
 and a call to a tool that does not exist is refused. What is not checked is intent: a
 well-formed call to delete the right file is indistinguishable from a well-formed call to

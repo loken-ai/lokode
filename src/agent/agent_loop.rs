@@ -17,6 +17,7 @@ use crate::backend::schema::{build_turn_schema, tool_manifest, tool_specs};
 use crate::backend::wire::{
     ChatCompletionRequest, FunctionCall, Message, ResponseFormat, ToolCall, Usage,
 };
+use crate::checkpoint::{Checkpoints, Snapshot};
 use crate::tools::registry::{Registry, ToolCtx, ToolOutput};
 
 /// Events the agent loop emits so the UI can render progress.
@@ -73,6 +74,11 @@ pub struct Agent {
     pub session: Session,
     pub cfg: AgentConfig,
     pub ctx: ToolCtx,
+    /// Records what the agent changes, so a turn can be shown or taken back.
+    pub checkpoints: Option<Arc<Checkpoints>>,
+    /// Which turn this is, counted from one. Checkpoints are labelled with it, which is
+    /// what lets `/undo` take back a turn rather than a single tool call.
+    pub turn: u32,
 }
 
 impl Agent {
@@ -126,6 +132,7 @@ impl Agent {
         events: mpsc::Sender<AgentEvent>,
     ) -> Result<()> {
         self.ctx.cancel = cancel.clone();
+        self.turn += 1;
         tracing::info!(
             session = %self.session.id,
             chars = user_input.len(),
@@ -279,6 +286,11 @@ impl Agent {
                         args_pretty,
                     })
                     .await;
+                let mutating = self
+                    .registry
+                    .get(&call.name)
+                    .map(|t| t.mutates())
+                    .unwrap_or(false);
                 let result = self.dispatch_tool(&call.name, call.arguments).await;
                 let _ = events
                     .send(AgentEvent::ToolResult {
@@ -291,6 +303,14 @@ impl Agent {
                     format!("{prefix}{}", result.content),
                     call.id,
                 ));
+
+                // After the call rather than before it: the state to return to is the one
+                // that preceded this turn, and that was recorded when the turn before it
+                // ended. Recording here also means a tool that changed nothing leaves
+                // nothing behind.
+                if mutating && !result.is_error {
+                    self.record_change(&call.name, &events).await;
+                }
             }
         }
 
@@ -313,6 +333,28 @@ impl Agent {
         self.session.push(Message::assistant(TURN_ABANDONED));
         let _ = events.send(AgentEvent::Notice(why.to_string())).await;
         let _ = events.send(AgentEvent::TurnDone).await;
+    }
+
+    /// Commit what a tool just changed, if a history is being kept.
+    ///
+    /// A failure to record is reported and not fatal: losing the ability to undo is bad,
+    /// and refusing to continue the turn over it would be worse.
+    async fn record_change(&self, tool: &str, events: &mpsc::Sender<AgentEvent>) {
+        let Some(cp) = &self.checkpoints else { return };
+        match cp.snapshot(tool, self.turn).await {
+            Ok(Snapshot::Recorded(sha)) => {
+                tracing::info!(tool, turn = self.turn, %sha, "checkpoint recorded")
+            }
+            Ok(Snapshot::Unchanged) => {}
+            Err(e) => {
+                tracing::warn!(tool, why = %format!("{e:#}"), "could not record a checkpoint");
+                let _ = events
+                    .send(AgentEvent::Notice(format!(
+                        "could not checkpoint after {tool}: {e:#}; /undo will not reach this change"
+                    )))
+                    .await;
+            }
+        }
     }
 
     /// Turn a completion into the one shape the loop reads, whichever protocol produced it.
@@ -678,6 +720,8 @@ mod tests {
                 allow_fallback: true,
             },
             ctx: h.ctx.clone(),
+            checkpoints: None,
+            turn: 0,
         }
     }
 

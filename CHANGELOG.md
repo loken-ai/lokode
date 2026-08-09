@@ -55,6 +55,14 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 - Native tool calling, with the JSON envelope as the fallback. `--tool-protocol auto` starts
   native and drops to the envelope the first time a backend refuses the field, finishing the
   turn either way; `native` and `envelope` pin one.
+- `/undo` and `/diff`. Every change the agent makes is committed to a git repository kept
+  beside the session, with the project as its work tree and the project's own repository
+  excluded. Undoing moves the history forward rather than rewinding it, so a file edited by
+  hand between the change and the decision to take it back is not discarded to make the undo
+  tidy.
+- `-p` runs one turn without the interface, for a git hook or a pipeline. `--approve` states
+  what it may agree to, defaulting to nothing; `--output json` reports what it did; the exit
+  code distinguishes finished, failed, and refused by the policy.
 - Session transcripts, written as they happen to `$XDG_DATA_HOME/verve/sessions`, with
   `--resume <id>` and `--continue`. A resumed session keeps its id, appends to the file it
   came from, and remembers its model.
@@ -75,7 +83,7 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
-- Tests went from 21 to 143. Ten of the twelve tools now have one; the two LSP tools do not,
+- Tests went from 21 to 156. Ten of the twelve tools now have one; the two LSP tools do not,
   because testing them needs a language server.
 - `src/tools/tests.rs` was the `run_tests` tool rather than tests, and is now `run_tests.rs`.
 - Two dependencies were declared and never used: `schemars`, never imported at all, and

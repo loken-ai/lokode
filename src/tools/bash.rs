@@ -30,6 +30,9 @@ impl Tool for Bash {
     fn name(&self) -> &'static str {
         "bash"
     }
+    fn mutates(&self) -> bool {
+        true
+    }
     fn description(&self) -> &'static str {
         "Run a shell command. Requires user approval. cwd must be inside project root."
     }

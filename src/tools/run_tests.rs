@@ -23,6 +23,9 @@ impl Tool for RunTests {
     fn name(&self) -> &'static str {
         "run_tests"
     }
+    fn mutates(&self) -> bool {
+        true
+    }
     fn description(&self) -> &'static str {
         "Auto-detect project layout (Cargo.toml / package.json / pyproject.toml) and run the test suite."
     }

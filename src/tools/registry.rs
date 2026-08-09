@@ -130,6 +130,16 @@ pub trait Tool: Send + Sync {
     /// JSON Schema for the `arguments` object the model must emit.
     fn args_schema(&self) -> Value;
 
+    /// Whether running this can leave the project different from how it found it.
+    ///
+    /// Declared here rather than inferred from the tool's name, so that the loop can take a
+    /// checkpoint around exactly the calls that need one. A tool that runs something is
+    /// mutating even when it usually changes nothing: `bash` and the test runner both
+    /// execute code that is free to write.
+    fn mutates(&self) -> bool {
+        false
+    }
+
     async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput>;
 }
 

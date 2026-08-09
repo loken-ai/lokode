@@ -72,6 +72,23 @@ At an approval prompt: `y` accepts once, `a` accepts everything in the stated sc
 session, `n` or `Esc` declines. `Enter` deliberately does nothing there - it is the send key,
 and a prompt appearing mid-sentence should not be able to approve a command you have not read.
 
+## Taking something back
+
+Every change the agent makes is committed to a git repository kept beside the session, with
+the project as its work tree. Your own repository is not touched: different directory, and
+excluded from this one.
+
+```
+/diff    everything the agent has changed this session
+/undo    put back the most recent turn that changed something
+/help
+```
+
+`/undo` again goes one turn further back. It never rewinds - the undo is itself a commit
+carrying the older state - so a file you edited by hand between the agent's change and your
+decision to take it back is still in that history rather than discarded. See
+[SECURITY.md](SECURITY.md): the history holds copies of your files and outlives the session.
+
 ## Sessions
 
 Every session is written to `$XDG_DATA_HOME/verve/sessions/<id>.jsonl` as it happens, which

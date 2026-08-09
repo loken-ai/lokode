@@ -104,8 +104,13 @@ pub async fn run(
         session_id,
         model,
         protocol,
+        checkpoint_error,
         ..
-    } = boot::boot(&cfg)?;
+    } = boot::boot(&cfg).await?;
+
+    if let Some(why) = &checkpoint_error {
+        tracing::warn!(%why, "running without a change history");
+    }
 
     let mut blocked = false;
     // Answering from the policy rather than from a person. Every prompt is still raised and

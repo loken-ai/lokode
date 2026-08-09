@@ -18,6 +18,7 @@ use crate::agent::session::Session;
 use crate::agent::transcript::{self, Record, Transcript};
 use crate::app::{AppConfig, ProtocolChoice, Resume};
 use crate::backend::client::BackendClient;
+use crate::checkpoint::Checkpoints;
 use crate::sandbox::approval::{self, ApprovalReceiver, SessionApprovals};
 use crate::tools::lsp::LspPool;
 use crate::tools::registry::{Registry, ToolCtx};
@@ -38,9 +39,13 @@ pub struct Booted {
     pub protocol: ToolProtocol,
     /// How many messages came back from a resumed session.
     pub restored: usize,
+    /// The change history, if one could be opened.
+    pub checkpoints: Option<Arc<Checkpoints>>,
+    /// Why there is no history, when there is not one.
+    pub checkpoint_error: Option<String>,
 }
 
-pub fn boot(cfg: &AppConfig) -> Result<Booted> {
+pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let (registry, lsp) = build_registry(cfg.root.clone());
     let registry = Arc::new(registry);
     let (approval_tx, approval_rx) = approval::channel();
@@ -118,6 +123,17 @@ pub fn boot(cfg: &AppConfig) -> Result<Booted> {
         "session ready"
     );
 
+    // A history of what the agent changes, so a turn can be shown or taken back. Not fatal
+    // if it cannot be opened - git may be missing, or the root may be somewhere unusual -
+    // but the user is told, because finding out later means finding out when it was needed.
+    let (checkpoints, checkpoint_error) = match Checkpoints::open(&session_id, &cfg.root).await {
+        Ok(cp) => (Some(Arc::new(cp)), None),
+        Err(e) => {
+            tracing::warn!(why = %format!("{e:#}"), "checkpoints unavailable");
+            (None, Some(format!("{e:#}")))
+        }
+    };
+
     let agent = Agent {
         backend: BackendClient::with_headers(cfg.backend_url.clone(), &cfg.headers),
         registry,
@@ -131,6 +147,8 @@ pub fn boot(cfg: &AppConfig) -> Result<Booted> {
             allow_fallback: cfg.tool_protocol == ProtocolChoice::Auto,
         },
         ctx,
+        checkpoints: checkpoints.clone(),
+        turn: 0,
     };
 
     Ok(Booted {
@@ -143,6 +161,8 @@ pub fn boot(cfg: &AppConfig) -> Result<Booted> {
         model,
         protocol,
         restored,
+        checkpoints,
+        checkpoint_error,
     })
 }
 

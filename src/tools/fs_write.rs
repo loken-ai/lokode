@@ -29,6 +29,9 @@ impl Tool for WriteFile {
     fn name(&self) -> &'static str {
         "write_file"
     }
+    fn mutates(&self) -> bool {
+        true
+    }
     fn description(&self) -> &'static str {
         "Overwrite a file (or create it). Requires user approval."
     }
@@ -105,6 +108,9 @@ struct EditFileArgs {
 impl Tool for EditFile {
     fn name(&self) -> &'static str {
         "edit_file"
+    }
+    fn mutates(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Replace a unique substring in a file. Fails if old_string is not found or is ambiguous."
@@ -187,6 +193,9 @@ struct ApplyPatchArgs {
 impl Tool for ApplyPatch {
     fn name(&self) -> &'static str {
         "apply_patch"
+    }
+    fn mutates(&self) -> bool {
+        true
     }
     fn description(&self) -> &'static str {
         "Apply a unified diff that may touch multiple files. Requires user approval."
