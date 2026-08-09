@@ -15,8 +15,9 @@ Two tools shell out and their tests skip themselves when the binary is missing, 
 checkout passes without `ripgrep` installed. The LSP tools have no tests, because testing them
 needs a language server to talk to.
 
-`cargo run --example smoke -- --model <m> --prompt "…"` drives one turn against a real backend
-without the interface, which is the quickest way to see a change end to end.
+`verve -p "…" --output json` drives one turn against a real backend without the interface,
+which is the quickest way to see a change end to end. `src/boot.rs` assembles the agent for
+both that and the terminal, so neither entry point can drift from the other.
 
 ## What the code is trying to be
 

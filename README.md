@@ -89,6 +89,29 @@ model, so `--model` becomes optional.
 Logs go to `$XDG_STATE_HOME/verve/verve.log`, never to the terminal - the interface owns that
 screen. `RUST_LOG=verve=debug` turns the volume up; `--log-file` puts it somewhere else.
 
+## Without the interface
+
+`-p` runs one turn and exits, for a git hook, a pipeline, or anything else with nobody sitting
+in front of it.
+
+```sh
+verve -p "fix the clippy warnings" --approve edits --output json
+```
+
+Since there is nobody to answer an approval, the policy is stated up front. `--approve none`
+is the default and declines everything that would change anything - the agent can still read
+and search. `edits` allows writes, edits and patches, and not the shell, the test suite or the
+network. `all` allows everything. Each call is judged on its own; a policy never grants a
+standing agreement.
+
+`--output text` streams the model's prose to stdout and progress to stderr, so a caller can
+take the answer and discard the narration. `--output json` writes one object at the end, with
+the result, every tool call and its output, and whether anything was refused.
+
+The exit code says what happened without anything having to be parsed: `0` finished, `1`
+something failed - a backend error, or the step limit - and `2` a tool was refused by the
+policy, which is a different thing from the model deciding not to use one.
+
 ## Configuring it
 
 Settings come from four places. The narrower statement wins, because it is the one made
@@ -150,9 +173,6 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 ```
-
-`cargo run --example smoke -- --model <m> --prompt "…"` drives one turn headlessly against a
-real backend, with approvals stubbed.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -92,6 +92,22 @@ struct Cli {
     /// Print where settings were read from, and what they resolved to, then exit.
     #[arg(long)]
     show_config: bool,
+
+    /// Run one turn without the interface and exit. Everything below applies to that.
+    #[arg(short, long)]
+    prompt: Option<String>,
+
+    /// What a headless run may agree to, with nobody there to be asked.
+    ///
+    /// Read-only tools never prompt, so this governs the ones that change something, run
+    /// something, or leave the machine. The default refuses all of them.
+    #[arg(long, value_enum, default_value = "none", requires = "prompt")]
+    approve: verve::headless::ApprovePolicy,
+
+    /// How a headless run reports. `text` streams prose to stdout and progress to stderr;
+    /// `json` writes one object to stdout at the end.
+    #[arg(long, value_enum, default_value = "text", requires = "prompt")]
+    output: verve::headless::OutputFormat,
 }
 
 fn main() -> Result<()> {
@@ -119,10 +135,23 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?
-        .block_on(app::run(cfg.app))
+        .build()?;
+
+    match cfg.prompt {
+        // A headless run answers with an exit code, because the caller is a script.
+        Some(prompt) => {
+            let code = runtime.block_on(verve::headless::run(
+                cfg.app,
+                prompt,
+                cfg.approve,
+                cfg.output,
+            ))?;
+            std::process::exit(code);
+        }
+        None => runtime.block_on(app::run(cfg.app)),
+    }
 }
 
 /// Everything resolved, plus what the user should be told about it.
@@ -130,6 +159,10 @@ struct Resolved {
     app: app::AppConfig,
     show_config: bool,
     sources: Vec<String>,
+    /// Present when this is a headless run.
+    prompt: Option<String>,
+    approve: verve::headless::ApprovePolicy,
+    output: verve::headless::OutputFormat,
 }
 
 fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved> {
@@ -193,6 +226,9 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
     Ok(Resolved {
         show_config: cli.show_config,
         sources,
+        prompt: cli.prompt.clone(),
+        approve: cli.approve,
+        output: cli.output,
         app: app::AppConfig {
             model: cli
                 .model

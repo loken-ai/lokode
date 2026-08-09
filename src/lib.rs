@@ -34,7 +34,9 @@
 pub mod agent;
 pub mod app;
 pub mod backend;
+pub mod boot;
 pub mod config;
+pub mod headless;
 pub mod paths;
 pub mod sandbox;
 pub mod tools;
