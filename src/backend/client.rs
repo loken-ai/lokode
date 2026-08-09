@@ -69,8 +69,7 @@ impl BackendClient {
                         .json(&req)
                         .send()
                         .await
-                        .with_context(|| format!("POST {url}"))
-                        .map_err(Retry::Fatal)?;
+                        .map_err(|e| classify_transport(e, &url))?;
                     let status = resp.status();
                     let body = resp.text().await.map_err(|e| Retry::Fatal(e.into()))?;
                     if !status.is_success() {
@@ -118,8 +117,7 @@ impl BackendClient {
                             .json(&req)
                             .send()
                             .await
-                            .with_context(|| format!("POST {url}"))
-                            .map_err(Retry::Fatal)?;
+                            .map_err(|e| classify_transport(e, &url))?;
                         let status = resp.status();
                         if !status.is_success() {
                             let body = resp.text().await.unwrap_or_default();
@@ -135,6 +133,10 @@ impl BackendClient {
                 // A server that does not know the field says so with a 4xx. Give up the
                 // token counts rather than the request.
                 Err(e) if asked_for_usage && mentions_stream_options(&e) => {
+                    tracing::warn!(
+                        why = %e,
+                        "backend will not take stream_options; giving up token counts for this session"
+                    );
                     self.usage_supported.store(false, Ordering::Relaxed);
                     continue;
                 }
@@ -199,8 +201,15 @@ impl BackendClient {
                 Err(Retry::Fatal(e)) => return Err(e),
                 Err(Retry::Transient(e)) => {
                     if attempt == MAX_ATTEMPTS {
+                        tracing::error!(why = %e, "backend unreachable after {MAX_ATTEMPTS} attempts");
                         return Err(e.context(format!("gave up after {MAX_ATTEMPTS} attempts")));
                     }
+                    tracing::warn!(
+                        attempt,
+                        retry_in_ms = delay.as_millis(),
+                        why = %e,
+                        "backend failed in a way worth retrying"
+                    );
                     tokio::time::sleep(delay).await;
                     delay *= 2;
                 }
@@ -214,6 +223,24 @@ impl BackendClient {
 enum Retry {
     Transient(anyhow::Error),
     Fatal(anyhow::Error),
+}
+
+/// A request that never reached a server at all.
+///
+/// Refusing to connect is the most retryable failure there is - it is what a backend that
+/// is still starting up looks like from here, and it was the one case the first version
+/// of this treated as final.
+fn classify_transport(e: reqwest::Error, url: &str) -> Retry {
+    let wrapped = anyhow::Error::new(e);
+    let transient = wrapped
+        .downcast_ref::<reqwest::Error>()
+        .is_some_and(|e| e.is_connect() || e.is_timeout() || e.is_request());
+    let wrapped = wrapped.context(format!("POST {url}"));
+    if transient {
+        Retry::Transient(wrapped)
+    } else {
+        Retry::Fatal(wrapped)
+    }
 }
 
 /// A request the server refused is only worth repeating if the refusal was about the

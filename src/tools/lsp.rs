@@ -271,6 +271,11 @@ impl LspProcess {
                         text,
                     }],
                 };
+                tracing::info!(
+                    path = %path.display(),
+                    version = doc.version,
+                    "file changed under the language server; resyncing"
+                );
                 self.notify(DidChangeTextDocument::METHOD, serde_json::to_value(params)?)
                     .await?;
                 Ok((uri, true))

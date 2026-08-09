@@ -16,7 +16,8 @@ use tui_textarea::TextArea;
 
 use crate::agent::agent_loop::{Agent, AgentConfig, AgentEvent};
 use crate::agent::session::Session;
-use crate::app::AppConfig;
+use crate::agent::transcript::{self, Record, Transcript};
+use crate::app::{AppConfig, Resume};
 use crate::backend::client::BackendClient;
 use crate::sandbox::approval::{self, ApprovalDecision, ApprovalPrompt, SessionApprovals};
 use crate::tools::lsp::LspPool;
@@ -67,12 +68,57 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         allow_hosts: Arc::new(cfg.allow_hosts.clone()),
     };
 
+    let earlier = open_session(&cfg)?;
+    let model = match cfg.model.clone().or_else(|| {
+        earlier
+            .as_ref()
+            .map(|e| e.model.clone())
+            .filter(|m| !m.is_empty())
+    }) {
+        Some(m) => m,
+        None => anyhow::bail!("--model is required unless resuming a session that recorded one"),
+    };
+
     let system = Agent::build_system_prompt(&registry);
-    let session = Session::new(system, cfg.context_tokens, cfg.max_answer_tokens);
-    let session_id = session.id.clone();
+    let mut session = Session::new(system, cfg.context_tokens, cfg.max_answer_tokens);
+    let restored = earlier.as_ref().map(|e| e.messages.len()).unwrap_or(0);
+    let mut recorder: Option<tokio::task::JoinHandle<()>> = None;
+    let session_id = match earlier {
+        Some(e) => {
+            // Appending to the file it came from, rather than starting a new one: a
+            // session that is resumed three times should be one story, not four.
+            let (transcript, writer) = Transcript::create(session_path(&e.id)?)?;
+            recorder = Some(writer);
+            session = session.with_transcript(transcript, e.id.clone());
+            session.restore(e.messages);
+            e.id
+        }
+        None if cfg.transcripts => {
+            let id = session.id.clone();
+            let (transcript, writer) = Transcript::create(session_path(&id)?)?;
+            recorder = Some(writer);
+            transcript.append(Record::Meta {
+                id: id.clone(),
+                root: cfg.root.clone(),
+                model: model.clone(),
+                started_at: transcript::now_secs(),
+            });
+            session = session.with_transcript(transcript, id.clone());
+            id
+        }
+        None => session.id.clone(),
+    };
+
+    tracing::info!(
+        session = %session_id,
+        model = %model,
+        root = %cfg.root.display(),
+        restored_messages = restored,
+        "session ready"
+    );
 
     let agent_cfg = AgentConfig {
-        model: cfg.model.clone(),
+        model: model.clone(),
         grammar_enabled: cfg.grammar_enabled,
         max_steps: cfg.max_steps,
         max_answer_tokens: cfg.max_answer_tokens,
@@ -115,7 +161,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     let result = run_ui(
         &mut terminal,
         &cfg,
+        &model,
         session_id,
+        restored,
         &shutdown,
         input_tx,
         &mut agent_evt_rx,
@@ -134,10 +182,22 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     // Language servers are killed on drop either way; this gives them the chance to put
     // their own caches down cleanly first.
     let _ = tokio::time::timeout(SHUTDOWN_GRACE, lsp.shutdown()).await;
-    if tokio::time::timeout(SHUTDOWN_GRACE, agent_task)
+    let agent_stopped = tokio::time::timeout(SHUTDOWN_GRACE, agent_task)
         .await
-        .is_err()
-    {
+        .is_ok();
+
+    // The agent owned the session, so its ending closed the transcript. Waiting for the
+    // writer here is what gets the last few records onto disk: without it the process
+    // exits first and a session loses precisely the part someone wanted to read.
+    if let Some(recorder) = recorder {
+        if agent_stopped {
+            let _ = tokio::time::timeout(SHUTDOWN_GRACE, recorder).await;
+        } else {
+            recorder.abort();
+        }
+    }
+
+    if !agent_stopped {
         eprintln!(
             "verve: the agent did not stop within {}s; exiting anyway",
             SHUTDOWN_GRACE.as_secs()
@@ -185,10 +245,37 @@ struct UiState {
     turn_cancel: Option<CancellationToken>,
 }
 
+/// Find the session being resumed, if one was asked for.
+fn open_session(cfg: &AppConfig) -> Result<Option<transcript::Replay>> {
+    let Some(which) = &cfg.resume else {
+        return Ok(None);
+    };
+    let dir = crate::paths::sessions_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home directory, so no sessions to resume"))?;
+    let path = match which {
+        Resume::Id(id) => dir.join(format!("{id}.jsonl")),
+        Resume::Latest => transcript::latest_for_root(&dir, &cfg.root)
+            .ok_or_else(|| anyhow::anyhow!("no recorded session for {}", cfg.root.display()))?,
+    };
+    if !path.exists() {
+        anyhow::bail!("no session at {}", path.display());
+    }
+    Ok(Some(transcript::replay(&path)?))
+}
+
+fn session_path(id: &str) -> Result<std::path::PathBuf> {
+    Ok(crate::paths::sessions_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home directory to record a session in"))?
+        .join(format!("{id}.jsonl")))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_ui(
     term: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     cfg: &AppConfig,
+    model: &str,
     session_id: String,
+    restored: usize,
     shutdown: &CancellationToken,
     input_tx: mpsc::Sender<TurnRequest>,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
@@ -200,6 +287,11 @@ async fn run_ui(
          PageUp/PageDown scroll, Ctrl-C or Ctrl-Q quits. Backend: {}",
         cfg.backend_url
     )));
+    if restored > 0 {
+        state.entries.push(Entry::Notice(format!(
+            "resumed session {session_id}: {restored} earlier message(s) are back in view"
+        )));
+    }
 
     let mut input = TextArea::default();
     input.set_placeholder_text(
@@ -240,7 +332,7 @@ async fn run_ui(
             f.render_widget(&input, chunks[1]);
 
             let status = Status {
-                model: cfg.model.clone(),
+                model: model.to_string(),
                 root: cfg.root.display().to_string(),
                 session: session_id.clone(),
                 grammar: cfg.grammar_enabled,

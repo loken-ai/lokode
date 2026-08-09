@@ -1,5 +1,6 @@
 use uuid::Uuid;
 
+use crate::agent::transcript::{Record, Transcript};
 use crate::backend::wire::Message;
 
 /// Roughly how many characters one token covers on English prose and code.
@@ -50,6 +51,11 @@ pub struct Session {
     /// client believes the history fits, sends it anyway, and the server truncates from
     /// the front - taking the preamble.
     chars_per_token: f64,
+    /// Durable record of everything said, if one is being kept.
+    ///
+    /// Attached here because `push` is the single place a message enters the
+    /// conversation, so nothing can join the history without also being written down.
+    transcript: Option<Transcript>,
 }
 
 /// What a single tool result may contribute to the conversation.
@@ -73,10 +79,36 @@ impl Session {
             budget_chars: (usable_tokens as f64 * CHARS_PER_TOKEN as f64 * SAFETY) as usize,
             usable_tokens,
             chars_per_token: CHARS_PER_TOKEN as f64,
+            transcript: None,
         }
     }
 
+    /// Keep a durable record of this session, and adopt the identity it was written under.
+    ///
+    /// The id comes from the transcript rather than the other way round so that a resumed
+    /// session keeps appending to the file it came from, instead of leaving a trail of
+    /// fragments across as many files as it had lives.
+    pub fn with_transcript(mut self, transcript: Transcript, id: String) -> Self {
+        self.id = id;
+        self.transcript = Some(transcript);
+        self
+    }
+
+    /// Put back the messages of an earlier session, after the system message.
+    pub fn restore(&mut self, messages: Vec<Message>) {
+        // Straight onto the history: these are already in the transcript, and writing
+        // them again would double the file on every resume.
+        self.history.extend(messages);
+    }
+
+    pub fn transcript(&self) -> Option<&Transcript> {
+        self.transcript.as_ref()
+    }
+
     pub fn push(&mut self, m: Message) {
+        if let Some(t) = &self.transcript {
+            t.append(Record::Message(m.clone()));
+        }
         self.history.push(m);
     }
 

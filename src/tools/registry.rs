@@ -61,14 +61,22 @@ impl ToolCtx {
     /// which is how it came to mean the whole tool.
     pub async fn approve(&self, req: ApprovalRequest) -> Approval {
         if self.session_approvals.is_always(&req.scope).await {
+            tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by an earlier agreement");
             return Approval::Proceed;
         }
+        let tool = req.tool.clone();
         let scope = req.scope.clone();
         let decision = tokio::select! {
             biased;
-            _ = self.cancel.cancelled() => return Approval::Interrupted,
+            _ = self.cancel.cancelled() => {
+                tracing::info!(%tool, "approval abandoned with the turn");
+                return Approval::Interrupted;
+            }
             d = approval::ask(&self.approval, req) => d,
         };
+        // Worth recording at every session: what the user agreed to, and how widely, is
+        // the first question anyone asks about a run that did something unexpected.
+        tracing::info!(%tool, ?decision, ?scope, "approval decided");
         match decision {
             ApprovalDecision::Deny => Approval::Denied,
             ApprovalDecision::Once => Approval::Proceed,

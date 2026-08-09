@@ -89,6 +89,11 @@ impl Agent {
         events: mpsc::Sender<AgentEvent>,
     ) -> Result<()> {
         self.ctx.cancel = cancel.clone();
+        tracing::info!(
+            session = %self.session.id,
+            chars = user_input.len(),
+            "turn started"
+        );
         self.session.push(Message::user(user_input));
 
         let turn_schema = build_turn_schema(&self.registry);
@@ -104,6 +109,12 @@ impl Agent {
             // middle of a turn as easily as between two.
             let dropped = self.session.compact();
             if dropped > 0 {
+                tracing::warn!(
+                    dropped,
+                    budget_chars = self.session.budget_chars(),
+                    size_chars = self.session.size_chars(),
+                    "history compacted"
+                );
                 let _ = events
                     .send(AgentEvent::Notice(format!(
                         "context full: {dropped} earlier message(s) elided to keep the tool manifest in view"
@@ -118,6 +129,7 @@ impl Agent {
                     return Ok(());
                 }
                 Err(e) => {
+                    tracing::error!(why = %format!("{e:#}"), "turn stopped on a backend error");
                     let _ = events
                         .send(AgentEvent::Notice(format!("backend error: {e:#}")))
                         .await;
@@ -136,7 +148,17 @@ impl Agent {
             // A response stopped by the token limit is a truncated JSON object. Without
             // this it goes into the repair path looking like a model that cannot write
             // JSON, and the repair fails for a reason nobody is told.
+            tracing::info!(
+                step = step + 1,
+                sent_chars,
+                answer_chars = completion.text.len(),
+                finish_reason = completion.finish_reason.as_deref().unwrap_or("-"),
+                prompt_tokens = completion.usage.map(|u| u.prompt_tokens),
+                completion_tokens = completion.usage.map(|u| u.completion_tokens),
+                "model responded"
+            );
             if completion.finish_reason.as_deref() == Some("length") {
+                tracing::warn!("answer truncated by the token limit");
                 let _ = events
                     .send(AgentEvent::Notice(
                         "the answer hit the token limit and was cut off; \
@@ -347,6 +369,12 @@ impl Agent {
             }
 
             // Layer 3: repair round-trip (non-streaming for snappiness).
+            tracing::warn!(
+                attempt = attempt + 1,
+                max = MAX_REPAIR_ATTEMPTS,
+                why = %last_err,
+                "asking the model to repair its own output"
+            );
             let prompt = repair::repair_prompt(&last_err.to_string(), &current);
             let repair_req = ChatCompletionRequest {
                 model: self.cfg.model.clone(),
@@ -374,11 +402,21 @@ impl Agent {
 
     async fn dispatch_tool(&self, name: &str, args: Value) -> ToolOutput {
         let Some(tool) = self.registry.get(name) else {
+            tracing::warn!(tool = name, "model called a tool that does not exist");
             return ToolOutput::err(format!("unknown tool '{name}'"));
         };
-        match tool.run(&self.ctx, args).await {
+        let started = std::time::Instant::now();
+        let out = match tool.run(&self.ctx, args).await {
             Ok(o) => o,
             Err(e) => ToolOutput::err(format!("tool '{name}' failed: {e:#}")),
-        }
+        };
+        tracing::info!(
+            tool = name,
+            ms = started.elapsed().as_millis(),
+            error = out.is_error,
+            out_chars = out.content.len(),
+            "tool finished"
+        );
+        out
     }
 }

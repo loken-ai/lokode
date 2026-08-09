@@ -5,9 +5,18 @@ use anyhow::Result;
 
 use crate::ui;
 
+/// Which recorded session to pick up.
+#[derive(Debug, Clone)]
+pub enum Resume {
+    Id(String),
+    /// The most recent one recorded against this root.
+    Latest,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
-    pub model: String,
+    /// `None` when the model is to come from the session being resumed.
+    pub model: Option<String>,
     pub root: PathBuf,
     pub backend_url: String,
     pub grammar_enabled: bool,
@@ -16,6 +25,9 @@ pub struct AppConfig {
     pub max_answer_tokens: usize,
     /// Hosts `web_fetch` may reach even though they resolve to a private address.
     pub allow_hosts: HashSet<String>,
+    /// Whether to record this session to disk.
+    pub transcripts: bool,
+    pub resume: Option<Resume>,
 }
 
 pub async fn run(cfg: AppConfig) -> Result<()> {
