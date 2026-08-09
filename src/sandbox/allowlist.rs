@@ -43,6 +43,21 @@ pub fn resolve(root: &Path, candidate: &Path, must_exist: bool) -> Result<PathBu
             }
         })?
     } else {
+        // A name that does not resolve may still exist as a symlink whose target has not
+        // been created yet: `exists()` follows the link and reports false, so the parent's
+        // canonical form says "inside the root" while a write through that name lands
+        // wherever the link points. Follow the link itself before trusting the name.
+        let via_link = match absolute.symlink_metadata() {
+            Ok(m) if m.file_type().is_symlink() => Some(std::fs::read_link(&absolute).map_err(
+                |source| PathError::Io { path: absolute.clone(), source },
+            )?),
+            _ => None,
+        };
+        let absolute = match via_link {
+            Some(t) if t.is_absolute() => t,
+            Some(t) => absolute.parent().unwrap_or(&root_canon).join(t),
+            None => absolute,
+        };
         // Parent must exist & canonicalise; the final filename can be new.
         let parent = absolute.parent().ok_or_else(|| PathError::NotFound {
             path: absolute.clone(),
@@ -121,5 +136,39 @@ mod tests {
         let r = resolve(dir.path(), Path::new("new.txt"), false).unwrap();
         assert!(r.starts_with(dir.path().canonicalize().unwrap()));
         assert_eq!(r.file_name().unwrap(), "new.txt");
+    }
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// A symlink pointing at a file that does not exist yet is not caught by
+    /// `exists()`, so resolution falls to the branch that canonicalises only the
+    /// parent - and a write through that name lands wherever the link points.
+    #[test]
+    fn rejects_a_dangling_symlink_that_leaves_the_root() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let target = outside.path().join("not-created-yet.txt");
+        let link = dir.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&target, &link).unwrap();
+        assert!(!link.exists(), "the link must dangle for this to be the case under test");
+
+        let resolved = resolve(dir.path(), Path::new("link"), false);
+        if let Ok(p) = &resolved {
+            // Demonstrate the consequence rather than asserting on the path alone.
+            fs::write(p, b"escaped").unwrap();
+            assert!(!target.exists(),
+                "writing through the resolved path escaped the root: {} landed outside",
+                p.display());
+        }
+        assert!(matches!(resolved, Err(PathError::Outside { .. })),
+            "a dangling link out of the root must be refused, got {resolved:?}");
     }
 }
