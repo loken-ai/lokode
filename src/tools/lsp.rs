@@ -13,11 +13,12 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use lsp_types::{
-    notification::{DidOpenTextDocument, Initialized, Notification},
+    notification::{DidChangeTextDocument, DidOpenTextDocument, Initialized, Notification},
     request::{HoverRequest, Initialize, Request as LspRequest},
-    ClientCapabilities, DidOpenTextDocumentParams, HoverParams, InitializeParams,
-    InitializedParams, Position, TextDocumentIdentifier, TextDocumentItem,
-    TextDocumentPositionParams, Url, WorkDoneProgressParams,
+    ClientCapabilities, DidChangeTextDocumentParams, DidOpenTextDocumentParams, HoverParams,
+    InitializeParams, InitializedParams, Position, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, Url,
+    VersionedTextDocumentIdentifier, WorkDoneProgressParams,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -56,18 +57,42 @@ impl LangId {
             LangId::JavaScript => "javascript",
         }
     }
-    fn server(self) -> (&'static str, &'static [&'static str]) {
-        match self {
+    fn server(self) -> (String, Vec<String>) {
+        let (program, args): (&str, &[&str]) = match self {
             LangId::Rust => ("rust-analyzer", &[]),
             LangId::Python => ("pyright-langserver", &["--stdio"]),
             LangId::TypeScript | LangId::JavaScript => {
                 ("typescript-language-server", &["--stdio"])
             }
+        };
+        // An override for a server that is not on the path under its usual name, or is
+        // there under it and does not work - a rustup shim for a component that was never
+        // installed answers to `rust-analyzer` and fails.
+        let var = format!("VERVE_LSP_{}", self.language_id().to_uppercase());
+        match std::env::var(&var) {
+            Ok(cmd) if !cmd.trim().is_empty() => {
+                let mut parts = cmd.split_whitespace().map(String::from);
+                let program = parts.next().unwrap_or_else(|| program.to_string());
+                (program, parts.collect())
+            }
+            _ => (
+                program.to_string(),
+                args.iter().map(|s| s.to_string()).collect(),
+            ),
         }
     }
 }
 
 // ----------------------------------------------------------------- client --
+
+/// What was last sent to the server for one file.
+struct OpenDoc {
+    version: i32,
+    text: String,
+}
+
+/// Bytes of the server's own complaints to keep for when something goes wrong.
+const STDERR_TAIL: usize = 4 * 1024;
 
 struct LspProcess {
     _child: Child,
@@ -75,23 +100,35 @@ struct LspProcess {
     next_id: AtomicI64,
     pending: Mutex<HashMap<i64, oneshot::Sender<Value>>>,
     diagnostics: Mutex<HashMap<Url, Vec<lsp_types::Diagnostic>>>,
-    opened: Mutex<HashMap<PathBuf, i32>>,
+    opened: Mutex<HashMap<PathBuf, OpenDoc>>,
+    /// The tail of the server's stderr.
+    ///
+    /// It used to go to `/dev/null`, so a language server that refused to start - a
+    /// missing toolchain, an unreadable project file - reported nothing at all and the
+    /// tool simply returned no diagnostics, which reads like a file with no problems.
+    stderr: Arc<Mutex<String>>,
 }
 
 impl LspProcess {
     async fn spawn(lang: LangId, root: &Path) -> Result<Arc<Self>> {
         let (program, args) = lang.server();
-        let mut child = tokio::process::Command::new(program)
-            .args(args)
+        let mut child = tokio::process::Command::new(&program)
+            .args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| anyhow!("spawn {program}: {e}"))?;
 
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
+
+        let stderr_buf = Arc::new(Mutex::new(String::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let buf = stderr_buf.clone();
+            tokio::spawn(async move { drain_stderr(stderr, buf).await });
+        }
 
         let proc = Arc::new(Self {
             _child: child,
@@ -100,6 +137,7 @@ impl LspProcess {
             pending: Mutex::new(HashMap::new()),
             diagnostics: Mutex::new(HashMap::new()),
             opened: Mutex::new(HashMap::new()),
+            stderr: stderr_buf,
         });
 
         // Spawn the reader task.
@@ -127,12 +165,38 @@ impl LspProcess {
             locale: None,
             root_path: None,
         };
-        let _: Value = proc
+        let init_result: Result<Value> = proc
             .request(Initialize::METHOD, serde_json::to_value(init)?)
-            .await?;
+            .await;
+        if let Err(e) = init_result {
+            return Err(anyhow!("{program} did not initialise: {e}{}", proc.stderr_tail().await));
+        }
         proc.notify(Initialized::METHOD, serde_json::to_value(InitializedParams {})?)
             .await?;
         Ok(proc)
+    }
+
+    /// What the server has said on stderr, formatted for appending to an error.
+    async fn stderr_tail(&self) -> String {
+        let buf = self.stderr.lock().await;
+        if buf.trim().is_empty() {
+            String::new()
+        } else {
+            format!("\nserver said:\n{}", buf.trim())
+        }
+    }
+
+    /// Ask the server to stop, and wait briefly for it to agree.
+    ///
+    /// Being killed on drop is enough to reclaim the process, but a server given no
+    /// chance to shut down can leave its own caches half-written.
+    async fn shutdown(&self) {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            self.request("shutdown", Value::Null),
+        )
+        .await;
+        let _ = self.notify("exit", Value::Null).await;
     }
 
     async fn request(&self, method: &str, params: Value) -> Result<Value> {
@@ -156,24 +220,80 @@ impl LspProcess {
         write_frame(&self.stdin, &frame).await
     }
 
-    async fn ensure_opened(&self, path: &Path, lang: LangId) -> Result<Url> {
+    /// Make the server's copy of a file match the one on disk.
+    ///
+    /// This used to open a file once and never mention it again, so the server kept
+    /// answering about the version it first read: after the agent's own first edit, every
+    /// diagnostic for the rest of the session described code that no longer existed.
+    /// Stale diagnostics are worse than none, because they read as current.
+    ///
+    /// Syncing from disk rather than from a notification sent by whoever wrote the file
+    /// also covers the cases the agent did not cause - the user's editor, a formatter, a
+    /// build script.
+    async fn sync(&self, path: &Path, lang: LangId) -> Result<(Url, bool)> {
         let uri = Url::from_file_path(path).map_err(|_| anyhow!("bad file url"))?;
+        let text = tokio::fs::read_to_string(path).await?;
         let mut opened = self.opened.lock().await;
-        if !opened.contains_key(path) {
-            let text = tokio::fs::read_to_string(path).await?;
-            let params = DidOpenTextDocumentParams {
-                text_document: TextDocumentItem {
-                    uri: uri.clone(),
-                    language_id: lang.language_id().to_string(),
-                    version: 1,
-                    text,
-                },
-            };
-            self.notify(DidOpenTextDocument::METHOD, serde_json::to_value(params)?)
-                .await?;
-            opened.insert(path.to_path_buf(), 1);
+
+        match opened.get_mut(path) {
+            None => {
+                let params = DidOpenTextDocumentParams {
+                    text_document: TextDocumentItem {
+                        uri: uri.clone(),
+                        language_id: lang.language_id().to_string(),
+                        version: 1,
+                        text: text.clone(),
+                    },
+                };
+                self.notify(DidOpenTextDocument::METHOD, serde_json::to_value(params)?)
+                    .await?;
+                opened.insert(path.to_path_buf(), OpenDoc { version: 1, text });
+                Ok((uri, true))
+            }
+            Some(doc) if doc.text != text => {
+                doc.version += 1;
+                doc.text = text.clone();
+                let params = DidChangeTextDocumentParams {
+                    text_document: VersionedTextDocumentIdentifier {
+                        uri: uri.clone(),
+                        version: doc.version,
+                    },
+                    // Whole-file replacement: the agent edits by rewriting, and computing
+                    // ranges here would be inventing precision the caller never had.
+                    content_changes: vec![TextDocumentContentChangeEvent {
+                        range: None,
+                        range_length: None,
+                        text,
+                    }],
+                };
+                self.notify(DidChangeTextDocument::METHOD, serde_json::to_value(params)?)
+                    .await?;
+                Ok((uri, true))
+            }
+            Some(_) => Ok((uri, false)),
         }
-        Ok(uri)
+    }
+}
+
+/// Keep the tail of a language server's stderr.
+async fn drain_stderr(stderr: tokio::process::ChildStderr, buf: Arc<Mutex<String>>) {
+    let mut reader = BufReader::new(stderr);
+    let mut chunk = [0u8; 1024];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => {
+                let mut held = buf.lock().await;
+                held.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                if held.len() > STDERR_TAIL {
+                    let cut = held.len() - STDERR_TAIL;
+                    let cut = (cut..held.len())
+                        .find(|&i| held.is_char_boundary(i))
+                        .unwrap_or(held.len());
+                    *held = held[cut..].to_string();
+                }
+            }
+        }
     }
 }
 
@@ -269,6 +389,14 @@ impl LspPool {
         procs.insert(key, proc.clone());
         Ok(proc)
     }
+
+    /// Ask every running server to stop.
+    pub async fn shutdown(&self) {
+        let procs: Vec<_> = self.procs.lock().await.drain().map(|(_, p)| p).collect();
+        for proc in procs {
+            proc.shutdown().await;
+        }
+    }
 }
 
 // --------------------------------------------------------------- tools --
@@ -310,10 +438,16 @@ impl Tool for LspDiagnostics {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(format!("spawn LSP failed: {e}"))),
         };
-        let uri = match proc.ensure_opened(&path, lang).await {
+        let (uri, changed) = match proc.sync(&path, lang).await {
             Ok(u) => u,
-            Err(e) => return Ok(ToolOutput::err(format!("didOpen failed: {e}"))),
+            Err(e) => return Ok(ToolOutput::err(format!("sync failed: {e}"))),
         };
+        // What the server last published describes the file as it was before the change.
+        // Keeping it would let the poll below return immediately with diagnostics for
+        // code that no longer exists - the exact staleness this sync exists to end.
+        if changed {
+            proc.diagnostics.lock().await.remove(&uri);
+        }
         // Give the server up to 4s to publish.
         for _ in 0..40 {
             if let Some(diags) = proc.diagnostics.lock().await.get(&uri).cloned() {
@@ -375,9 +509,11 @@ impl Tool for LspHover {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(format!("spawn LSP failed: {e}"))),
         };
-        let uri = match proc.ensure_opened(&path, lang).await {
+        // Hover answers about a position, so it is even more sensitive to the server
+        // holding an older copy: the line and column mean nothing against the wrong text.
+        let (uri, _) = match proc.sync(&path, lang).await {
             Ok(u) => u,
-            Err(e) => return Ok(ToolOutput::err(format!("didOpen failed: {e}"))),
+            Err(e) => return Ok(ToolOutput::err(format!("sync failed: {e}"))),
         };
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {

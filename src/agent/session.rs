@@ -9,6 +9,28 @@ use crate::backend::wire::Message;
 /// off by a fifth moves the trigger point and never corrupts the conversation.
 const CHARS_PER_TOKEN: usize = 4;
 
+/// Fraction of the estimated capacity actually used.
+///
+/// The estimate is corrected against the server's own count, but a correction only
+/// arrives after a request has already been sent - so the figure that decides whether to
+/// send is deliberately pessimistic. Being early to compact costs a few dropped steps;
+/// being late costs the system message, which is the failure this module exists for.
+const SAFETY: f64 = 0.9;
+
+/// Bounds on the corrected ratio.
+///
+/// A ratio outside these says the arithmetic went wrong rather than that the tokenizer is
+/// unusual - one malformed usage report should not be able to collapse the budget to
+/// nothing or inflate it past the window.
+const MIN_RATIO: f64 = 1.5;
+const MAX_RATIO: f64 = 8.0;
+
+/// How much of a new observation to believe.
+///
+/// Each request's ratio varies with what happens to be in the history, so corrections are
+/// smoothed rather than taken whole.
+const SMOOTHING: f64 = 0.3;
+
 /// Note left in place of what was dropped, so the model can tell that the conversation
 /// it can see is not the whole of it.
 const ELISION: &str = "[earlier steps of this session were elided to fit the context window]";
@@ -19,6 +41,15 @@ pub struct Session {
     pub history: Vec<Message>,
     /// Characters the history may occupy before older steps are dropped.
     budget_chars: usize,
+    /// Tokens the history may occupy, which is the figure the budget is derived from.
+    usable_tokens: usize,
+    /// Characters one token is currently believed to cover.
+    ///
+    /// Starts at the constant and is corrected from what the server reports. The guess
+    /// under-counts on dense code, and under-counting is the direction that hurts: the
+    /// client believes the history fits, sends it anyway, and the server truncates from
+    /// the front - taking the preamble.
+    chars_per_token: f64,
 }
 
 /// What a single tool result may contribute to the conversation.
@@ -35,10 +66,13 @@ impl Session {
     /// `context_tokens` is the window the backend is expected to offer, and
     /// `reserve_tokens` what to leave free for the answer.
     pub fn new(system_prompt: String, context_tokens: usize, reserve_tokens: usize) -> Self {
+        let usable_tokens = context_tokens.saturating_sub(reserve_tokens);
         Self {
             id: Uuid::new_v4().to_string(),
             history: vec![Message::system(system_prompt)],
-            budget_chars: context_tokens.saturating_sub(reserve_tokens) * CHARS_PER_TOKEN,
+            budget_chars: (usable_tokens as f64 * CHARS_PER_TOKEN as f64 * SAFETY) as usize,
+            usable_tokens,
+            chars_per_token: CHARS_PER_TOKEN as f64,
         }
     }
 
@@ -46,8 +80,46 @@ impl Session {
         self.history.push(m);
     }
 
-    fn size_chars(&self) -> usize {
+    pub fn size_chars(&self) -> usize {
         self.history.iter().map(|m| m.content.len() + m.role.len()).sum()
+    }
+
+    /// Characters the history may currently occupy.
+    pub fn budget_chars(&self) -> usize {
+        self.budget_chars
+    }
+
+    /// Correct the estimate from what the server actually counted.
+    ///
+    /// `sent_chars` is what this client measured before the request; `prompt_tokens` is
+    /// what the server made of it. Their ratio is the one measurement of the model's
+    /// tokenizer available without shipping one, and it is the whole reason the budget
+    /// can be wrong in the dangerous direction without anyone noticing.
+    ///
+    /// Returns a note for the user when the correction moves the budget enough to matter.
+    pub fn observe(&mut self, sent_chars: usize, prompt_tokens: u32) -> Option<String> {
+        if sent_chars == 0 || prompt_tokens == 0 {
+            return None;
+        }
+        let measured = sent_chars as f64 / prompt_tokens as f64;
+        if !measured.is_finite() || !(MIN_RATIO..=MAX_RATIO).contains(&measured) {
+            return None;
+        }
+
+        let before = self.budget_chars;
+        self.chars_per_token =
+            self.chars_per_token * (1.0 - SMOOTHING) + measured * SMOOTHING;
+        self.budget_chars = (self.usable_tokens as f64 * self.chars_per_token * SAFETY) as usize;
+
+        // Only worth saying when the change is large enough to alter behaviour; the ratio
+        // drifts a little on every request and narrating that would be noise.
+        let moved = before.abs_diff(self.budget_chars);
+        (moved * 10 > before.max(1)).then(|| {
+            format!(
+                "context budget now {} chars ({:.1} chars/token, measured against the server)",
+                self.budget_chars, self.chars_per_token
+            )
+        })
     }
 
     /// Drop the oldest steps until the history fits the budget, and report how many
@@ -108,8 +180,57 @@ mod tests {
     #[test]
     fn a_single_tool_result_cannot_fill_the_budget() {
         let (ctx_tok, reserve) = (8192, 4096);
-        let budget = (ctx_tok - reserve) * CHARS_PER_TOKEN;
-        assert!(tool_output_chars(ctx_tok, reserve) * 2 < budget);
+        let s = Session::new("sys".into(), ctx_tok, reserve);
+        assert!(tool_output_chars(ctx_tok, reserve) * 2 < s.budget_chars());
+    }
+
+    /// The ratio is corrected towards what the server counted, not replaced by it: one
+    /// request's ratio depends on what happens to be in the history.
+    #[test]
+    fn the_budget_follows_the_server_count() {
+        let mut s = Session::new("sys".into(), 8192, 4096);
+        let started_at = s.budget_chars();
+
+        // A tokenizer that gets ~2 chars to the token: dense code, the case the constant
+        // is wrong about and the direction that loses the preamble.
+        for _ in 0..20 {
+            s.observe(20_000, 10_000);
+        }
+        assert!(
+            s.budget_chars() < started_at,
+            "a denser tokenizer must shrink the budget: {} vs {started_at}",
+            s.budget_chars()
+        );
+        assert!((s.chars_per_token - 2.0).abs() < 0.1, "ratio: {}", s.chars_per_token);
+    }
+
+    /// A nonsense report must not be able to collapse the budget or inflate it.
+    #[test]
+    fn an_impossible_measurement_is_ignored() {
+        let mut s = Session::new("sys".into(), 8192, 4096);
+        let before = s.budget_chars();
+        for (chars, tokens) in [(0, 100), (100, 0), (1, 1_000_000), (1_000_000, 1)] {
+            s.observe(chars, tokens);
+            assert_eq!(s.budget_chars(), before, "{chars} chars / {tokens} tokens moved the budget");
+        }
+    }
+
+    /// The estimate is used to decide whether to send, and the correction only arrives
+    /// after sending - so it has to sit under the window rather than on it.
+    #[test]
+    fn the_budget_leaves_room_for_being_wrong() {
+        let s = Session::new("sys".into(), 8192, 4096);
+        assert!(s.budget_chars() < (8192 - 4096) * CHARS_PER_TOKEN);
+    }
+
+    /// A drift too small to change behaviour is not worth interrupting the user over.
+    #[test]
+    fn only_a_meaningful_correction_is_reported() {
+        let mut s = Session::new("sys".into(), 8192, 4096);
+        // Exactly the ratio already believed: nothing moves, nothing is said.
+        assert_eq!(s.observe(40_000, 10_000), None);
+        // A tokenizer half as generous moves the budget a long way.
+        assert!(s.observe(20_000, 10_000).is_some());
     }
 
     /// A generous budget must leave the conversation exactly as it was.

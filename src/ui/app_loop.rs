@@ -43,7 +43,8 @@ struct TurnRequest {
 }
 
 pub async fn run(cfg: AppConfig) -> Result<()> {
-    let registry = Arc::new(build_registry(cfg.root.clone()));
+    let (registry, lsp) = build_registry(cfg.root.clone());
+    let registry = Arc::new(registry);
     let (approval_tx, mut approval_rx) = approval::channel();
     let session_approvals = Arc::new(SessionApprovals::new());
 
@@ -127,6 +128,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     // `input_tx` above closed the channel, so the agent's own loop ends once the turn in
     // flight notices the cancellation.
     shutdown.cancel();
+    // Language servers are killed on drop either way; this gives them the chance to put
+    // their own caches down cleanly first.
+    let _ = tokio::time::timeout(SHUTDOWN_GRACE, lsp.shutdown()).await;
     if tokio::time::timeout(SHUTDOWN_GRACE, agent_task).await.is_err() {
         eprintln!(
             "verve: the agent did not stop within {}s; exiting anyway",
@@ -136,7 +140,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     result
 }
 
-fn build_registry(root: std::path::PathBuf) -> Registry {
+fn build_registry(root: std::path::PathBuf) -> (Registry, Arc<LspPool>) {
     use crate::tools::{
         bash::Bash,
         fs_read::{Glob, ListDir, ReadFile},
@@ -160,8 +164,8 @@ fn build_registry(root: std::path::PathBuf) -> Registry {
     reg.register(WebFetch);
     let pool = LspPool::new(root);
     reg.register(LspDiagnostics { pool: pool.clone() });
-    reg.register(LspHover { pool });
-    reg
+    reg.register(LspHover { pool: pool.clone() });
+    (reg, pool)
 }
 
 #[derive(Default)]

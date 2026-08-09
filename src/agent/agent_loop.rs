@@ -9,7 +9,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::protocol::TurnEnvelope;
 use crate::agent::session::Session;
-use crate::backend::client::BackendClient;
+use crate::backend::client::{BackendClient, StreamEvent};
+use crate::backend::wire::Usage;
 use crate::backend::repair::{self, MAX_REPAIR_ATTEMPTS};
 use crate::backend::schema::{build_turn_schema, tool_manifest};
 use crate::backend::wire::{ChatCompletionRequest, Message, ResponseFormat};
@@ -33,6 +34,18 @@ pub enum AgentEvent {
 /// behind it puts two `user` roles in a row and moves a boundary the compactor reasons
 /// about, so an abandoned turn is closed off rather than left open.
 const TURN_ABANDONED: &str = "[this turn ended without an answer]";
+
+/// How long to wait between two pieces of a streaming answer before giving up on it.
+const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// One model response, with whatever the server said about how it ended.
+#[derive(Default)]
+struct Completion {
+    text: String,
+    /// `"length"` means the answer was cut off rather than finished.
+    finish_reason: Option<String>,
+    usage: Option<Usage>,
+}
 
 pub struct AgentConfig {
     pub model: String,
@@ -97,8 +110,9 @@ impl Agent {
                     )))
                     .await;
             }
-            let raw = match self.stream_one(&turn_schema, &cancel, &events).await {
-                Ok(raw) => raw,
+            let sent_chars = self.session.size_chars();
+            let completion = match self.stream_one(&turn_schema, &cancel, &events).await {
+                Ok(c) => c,
                 Err(_) if cancel.is_cancelled() => {
                     self.abandon(&events, "interrupted").await;
                     return Ok(());
@@ -111,6 +125,28 @@ impl Agent {
                     return Ok(());
                 }
             };
+
+            // The server's count is the only tokenizer this client can reach, so it is
+            // what the chars-per-token estimate is corrected against.
+            if let Some(usage) = completion.usage {
+                if let Some(note) = self.session.observe(sent_chars, usage.prompt_tokens) {
+                    let _ = events.send(AgentEvent::Notice(note)).await;
+                }
+            }
+            // A response stopped by the token limit is a truncated JSON object. Without
+            // this it goes into the repair path looking like a model that cannot write
+            // JSON, and the repair fails for a reason nobody is told.
+            if completion.finish_reason.as_deref() == Some("length") {
+                let _ = events
+                    .send(AgentEvent::Notice(
+                        "the answer hit the token limit and was cut off; \
+                         raise --max-answer-tokens if this repeats"
+                            .into(),
+                    ))
+                    .await;
+            }
+
+            let raw = completion.text;
             let envelope = match self
                 .parse_with_repair(&raw, &turn_schema, &validator, &cancel)
                 .await
@@ -214,7 +250,7 @@ impl Agent {
         schema: &Value,
         cancel: &CancellationToken,
         events: &mpsc::Sender<AgentEvent>,
-    ) -> Result<String> {
+    ) -> Result<Completion> {
         let response_format = if self.cfg.grammar_enabled {
             Some(ResponseFormat::json_schema("turn", schema.clone()))
         } else {
@@ -231,6 +267,7 @@ impl Agent {
             seed: None,
             response_format,
             user: Some(self.session.id.clone()),
+            stream_options: None,
         };
 
         let mut stream = tokio::select! {
@@ -238,25 +275,38 @@ impl Agent {
             _ = cancel.cancelled() => return Err(anyhow::anyhow!("interrupted")),
             r = self.backend.stream(req) => r?,
         };
-        let mut accum = String::new();
+
+        let mut out = Completion::default();
         loop {
-            let piece = tokio::select! {
+            let next = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(anyhow::anyhow!("interrupted")),
+                // A server that stops speaking mid-answer would otherwise hold the turn
+                // until the client's own timeout, which is fifteen minutes of a interface
+                // that says it is busy and is not.
+                _ = tokio::time::sleep(STREAM_IDLE_TIMEOUT) => {
+                    return Err(anyhow::anyhow!(
+                        "backend sent nothing for {}s",
+                        STREAM_IDLE_TIMEOUT.as_secs()
+                    ))
+                }
                 p = stream.next() => match p {
                     Some(p) => p,
                     None => break,
                 },
             };
-            match piece {
-                Ok(p) => {
-                    accum.push_str(&p);
+            match next? {
+                StreamEvent::Delta(p) => {
+                    out.text.push_str(&p);
                     let _ = events.send(AgentEvent::AssistantDelta(p)).await;
                 }
-                Err(e) => return Err(e),
+                StreamEvent::End { finish_reason, usage } => {
+                    out.finish_reason = finish_reason.or(out.finish_reason);
+                    out.usage = usage.or(out.usage);
+                }
             }
         }
-        Ok(accum)
+        Ok(out)
     }
 
     async fn parse_with_repair(
@@ -306,6 +356,7 @@ impl Agent {
                 seed: Some(0),
                 response_format: Some(ResponseFormat::json_schema("turn", schema.clone())),
                 user: Some(format!("{}-repair", self.session.id)),
+                stream_options: None,
             };
             current = tokio::select! {
                 biased;

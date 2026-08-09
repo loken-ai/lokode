@@ -74,6 +74,18 @@ pub struct ChatCompletionRequest {
     /// Server reuses prompt KV cache when this stays constant across turns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    /// Asks a streaming response to end with a usage report.
+    ///
+    /// Dropped and the request retried without it if the server rejects the field, since
+    /// not every OpenAI-compatible implementation accepts it and the token counts are
+    /// worth having where they are on offer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StreamOptions {
+    pub include_usage: bool,
 }
 
 // ---------------------------------------------------------------- Responses --
@@ -82,12 +94,28 @@ pub struct ChatCompletionRequest {
 pub struct ChatChunk {
     #[serde(default)]
     pub choices: Vec<ChatChunkChoice>,
+    /// Present on the final chunk when the server was asked for it.
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatChunkChoice {
     #[serde(default)]
     pub delta: ChunkDelta,
+    /// Why generation stopped. `"length"` means the answer was cut off, which is
+    /// otherwise indistinguishable from a model that emits malformed JSON.
+    #[serde(default)]
+    pub finish_reason: Option<String>,
+}
+
+/// What the server counted, which is the only tokenizer this client has access to.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
