@@ -15,18 +15,22 @@ impl<'a> ApprovalView<'a> {
         let area = centered(80, 70, area);
         f.render_widget(Clear, area);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(Span::styled(
-                format!(" approval required: {} ", self.req.tool),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ));
+        let block = Block::default().borders(Borders::ALL).title(Span::styled(
+            format!(" approval required: {} ", self.req.tool),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
         f.render_widget(block.clone(), area);
 
         let inner = block.inner(area);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Min(1), Constraint::Length(2)])
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Min(1),
+                Constraint::Length(2),
+            ])
             .split(inner);
 
         let summary = Paragraph::new(self.req.summary.clone())
@@ -34,9 +38,12 @@ impl<'a> ApprovalView<'a> {
             .wrap(Wrap { trim: false });
         f.render_widget(summary, chunks[0]);
 
-        let body = self.req.diff_preview.clone().unwrap_or_else(|| "(no preview)".into());
-        let preview = Paragraph::new(colorise_diff(&body))
-            .wrap(Wrap { trim: false });
+        let body = self
+            .req
+            .diff_preview
+            .clone()
+            .unwrap_or_else(|| "(no preview)".into());
+        let preview = Paragraph::new(colorise_diff(&body)).wrap(Wrap { trim: false });
         f.render_widget(preview, chunks[1]);
 
         // What `Always` covers is spelled out rather than left to the word: it used to
@@ -44,9 +51,17 @@ impl<'a> ApprovalView<'a> {
         // command had no way to know that.
         let footer = Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("[Y]es", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[Y]es",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("  "),
-                Span::styled("[N]o", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[N]o",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("  "),
                 Span::styled("[A]lways", Style::default().fg(Color::Cyan)),
                 Span::raw("  "),
@@ -54,7 +69,10 @@ impl<'a> ApprovalView<'a> {
                 Span::raw(" declines"),
             ]),
             Line::from(Span::styled(
-                format!("Always covers {} for this session", self.req.scope.describe()),
+                format!(
+                    "Always covers {} for this session",
+                    self.req.scope.describe()
+                ),
                 Style::default().fg(Color::DarkGray),
             )),
         ])

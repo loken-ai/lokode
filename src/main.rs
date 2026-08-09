@@ -58,7 +58,10 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let root = cli.root.canonicalize().map_err(|e| {
-        anyhow::anyhow!("--root {} could not be canonicalized: {e}", cli.root.display())
+        anyhow::anyhow!(
+            "--root {} could not be canonicalized: {e}",
+            cli.root.display()
+        )
     })?;
 
     let cfg = app::AppConfig {

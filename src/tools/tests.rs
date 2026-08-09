@@ -20,7 +20,9 @@ struct Args {
 
 #[async_trait]
 impl Tool for RunTests {
-    fn name(&self) -> &'static str { "run_tests" }
+    fn name(&self) -> &'static str {
+        "run_tests"
+    }
     fn description(&self) -> &'static str {
         "Auto-detect project layout (Cargo.toml / package.json / pyproject.toml) and run the test suite."
     }
@@ -81,7 +83,9 @@ impl Tool for RunTests {
     }
 }
 
-fn detect_runner(root: &std::path::Path) -> Result<(&'static str, Vec<&'static str>, &'static str)> {
+fn detect_runner(
+    root: &std::path::Path,
+) -> Result<(&'static str, Vec<&'static str>, &'static str)> {
     if root.join("Cargo.toml").exists() {
         return Ok(("cargo", vec!["test", "--quiet"], "cargo"));
     }
@@ -96,4 +100,3 @@ fn detect_runner(root: &std::path::Path) -> Result<(&'static str, Vec<&'static s
     }
     anyhow::bail!("no recognised test manifest at {}", root.display())
 }
-

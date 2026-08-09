@@ -26,7 +26,9 @@ struct WriteFileArgs {
 
 #[async_trait]
 impl Tool for WriteFile {
-    fn name(&self) -> &'static str { "write_file" }
+    fn name(&self) -> &'static str {
+        "write_file"
+    }
     fn description(&self) -> &'static str {
         "Overwrite a file (or create it). Requires user approval."
     }
@@ -59,7 +61,12 @@ impl Tool for WriteFile {
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),
-                summary: format!("write_file {}  ({} → {} bytes)", target.display(), before.len(), a.content.len()),
+                summary: format!(
+                    "write_file {}  ({} → {} bytes)",
+                    target.display(),
+                    before.len(),
+                    a.content.len()
+                ),
                 diff_preview: Some(diff.clone()),
                 scope: write_scope(self.name(), &target),
             })
@@ -96,7 +103,9 @@ struct EditFileArgs {
 
 #[async_trait]
 impl Tool for EditFile {
-    fn name(&self) -> &'static str { "edit_file" }
+    fn name(&self) -> &'static str {
+        "edit_file"
+    }
     fn description(&self) -> &'static str {
         "Replace a unique substring in a file. Fails if old_string is not found or is ambiguous."
     }
@@ -176,7 +185,9 @@ struct ApplyPatchArgs {
 
 #[async_trait]
 impl Tool for ApplyPatch {
-    fn name(&self) -> &'static str { "apply_patch" }
+    fn name(&self) -> &'static str {
+        "apply_patch"
+    }
     fn description(&self) -> &'static str {
         "Apply a unified diff that may touch multiple files. Requires user approval."
     }
@@ -228,7 +239,11 @@ impl Tool for ApplyPatch {
                 Ok(s) => s,
                 Err(e) => return Ok(ToolOutput::err(format!("{rel}: apply failed: {e}"))),
             };
-            staged.push(Staged { target, before, after });
+            staged.push(Staged {
+                target,
+                before,
+                after,
+            });
         }
 
         let targets: Vec<&std::path::Path> = staged.iter().map(|s| s.target.as_path()).collect();
@@ -304,7 +319,10 @@ async fn roll_back(committed: &[&Staged]) -> String {
         }
     }
     if failures.is_empty() {
-        format!("rolled back {} earlier file(s); the tree is as it was", committed.len())
+        format!(
+            "rolled back {} earlier file(s); the tree is as it was",
+            committed.len()
+        )
     } else {
         format!(
             "ROLLBACK INCOMPLETE - these files are left changed:\n{}",
@@ -395,9 +413,13 @@ fn parse_multifile_patch(src: &str) -> Result<Vec<diffy::Patch<'_, str>>, diffy:
     while i < bytes.len() {
         let line_start = i;
         // Find end of line
-        while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
         let line_end = i;
-        if i < bytes.len() { i += 1; }
+        if i < bytes.len() {
+            i += 1;
+        }
 
         let line = &src[line_start..line_end];
         if line.starts_with("--- ") {
@@ -435,7 +457,10 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.starts_with(".verve-"))
             .collect();
-        assert!(leftovers.is_empty(), "temporary files left behind: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temporary files left behind: {leftovers:?}"
+        );
     }
 
     #[tokio::test]
@@ -473,8 +498,14 @@ mod tests {
         ];
         let report = roll_back(&staged.iter().collect::<Vec<_>>()).await;
 
-        assert_eq!(tokio::fs::read_to_string(&modified).await.unwrap(), "original");
-        assert!(!created.exists(), "a file the patch created should be gone again");
+        assert_eq!(
+            tokio::fs::read_to_string(&modified).await.unwrap(),
+            "original"
+        );
+        assert!(
+            !created.exists(),
+            "a file the patch created should be gone again"
+        );
         assert!(report.contains("as it was"), "unexpected report: {report}");
     }
 
@@ -489,7 +520,10 @@ mod tests {
             after: String::new(),
         }];
         let report = roll_back(&staged.iter().collect::<Vec<_>>()).await;
-        assert!(report.contains("ROLLBACK INCOMPLETE"), "unexpected report: {report}");
+        assert!(
+            report.contains("ROLLBACK INCOMPLETE"),
+            "unexpected report: {report}"
+        );
     }
 
     #[test]

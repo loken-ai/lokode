@@ -81,7 +81,10 @@ impl Session {
     }
 
     pub fn size_chars(&self) -> usize {
-        self.history.iter().map(|m| m.content.len() + m.role.len()).sum()
+        self.history
+            .iter()
+            .map(|m| m.content.len() + m.role.len())
+            .sum()
     }
 
     /// Characters the history may currently occupy.
@@ -107,8 +110,7 @@ impl Session {
         }
 
         let before = self.budget_chars;
-        self.chars_per_token =
-            self.chars_per_token * (1.0 - SMOOTHING) + measured * SMOOTHING;
+        self.chars_per_token = self.chars_per_token * (1.0 - SMOOTHING) + measured * SMOOTHING;
         self.budget_chars = (self.usable_tokens as f64 * self.chars_per_token * SAFETY) as usize;
 
         // Only worth saying when the change is large enough to alter behaviour; the ratio
@@ -139,7 +141,9 @@ impl Session {
         // Everything from index 1 on is fair game; stop while a user turn remains, so
         // the conversation the model reads still opens on somebody asking for something.
         while self.size_chars() > self.budget_chars {
-            let Some(next) = self.next_user_boundary() else { break };
+            let Some(next) = self.next_user_boundary() else {
+                break;
+            };
             if next >= self.history.len() {
                 break;
             }
@@ -155,9 +159,8 @@ impl Session {
     /// Index of the second retained user message, i.e. where the history would resume
     /// after dropping the oldest step. `None` when there is nothing left to drop.
     fn next_user_boundary(&self) -> Option<usize> {
-        let first = (1..self.history.len()).find(|&i| {
-            self.history[i].role == "user" && self.history[i].content != ELISION
-        })?;
+        let first = (1..self.history.len())
+            .find(|&i| self.history[i].role == "user" && self.history[i].content != ELISION)?;
         (first + 1..self.history.len()).find(|&i| self.history[i].role == "user")
     }
 }
@@ -201,7 +204,11 @@ mod tests {
             "a denser tokenizer must shrink the budget: {} vs {started_at}",
             s.budget_chars()
         );
-        assert!((s.chars_per_token - 2.0).abs() < 0.1, "ratio: {}", s.chars_per_token);
+        assert!(
+            (s.chars_per_token - 2.0).abs() < 0.1,
+            "ratio: {}",
+            s.chars_per_token
+        );
     }
 
     /// A nonsense report must not be able to collapse the budget or inflate it.
@@ -211,7 +218,11 @@ mod tests {
         let before = s.budget_chars();
         for (chars, tokens) in [(0, 100), (100, 0), (1, 1_000_000), (1_000_000, 1)] {
             s.observe(chars, tokens);
-            assert_eq!(s.budget_chars(), before, "{chars} chars / {tokens} tokens moved the budget");
+            assert_eq!(
+                s.budget_chars(),
+                before,
+                "{chars} chars / {tokens} tokens moved the budget"
+            );
         }
     }
 
@@ -272,9 +283,21 @@ mod tests {
         }
         s.compact();
         // Past the system line and the elision note, the transcript opens on a request.
-        let first_real = s.history.iter().skip(1).find(|m| m.content != ELISION).unwrap();
-        assert_eq!(first_real.role, "user", "history: {:?}",
-            s.history.iter().map(|m| m.role.as_str()).collect::<Vec<_>>());
+        let first_real = s
+            .history
+            .iter()
+            .skip(1)
+            .find(|m| m.content != ELISION)
+            .unwrap();
+        assert_eq!(
+            first_real.role,
+            "user",
+            "history: {:?}",
+            s.history
+                .iter()
+                .map(|m| m.role.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 
     /// Compaction says how much it removed, and leaves one note rather than one per pass.
@@ -286,7 +309,10 @@ mod tests {
             s.push(msg("assistant", 200));
         }
         let dropped = s.compact();
-        assert!(dropped > 0, "nothing was dropped despite exceeding the budget");
+        assert!(
+            dropped > 0,
+            "nothing was dropped despite exceeding the budget"
+        );
         assert_eq!(s.history.iter().filter(|m| m.content == ELISION).count(), 1);
         assert!(s.history.len() < 21);
     }

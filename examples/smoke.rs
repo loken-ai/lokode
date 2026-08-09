@@ -105,7 +105,11 @@ async fn main() -> Result<()> {
     let mut agent = Agent {
         backend: BackendClient::new(cli.backend_url),
         registry: registry.clone(),
-        session: Session::new(Agent::build_system_prompt(&registry), cli.context_tokens, cli.max_answer_tokens),
+        session: Session::new(
+            Agent::build_system_prompt(&registry),
+            cli.context_tokens,
+            cli.max_answer_tokens,
+        ),
         cfg: AgentConfig {
             model: cli.model,
             grammar_enabled: !cli.no_grammar,
@@ -136,9 +140,7 @@ async fn main() -> Result<()> {
     });
 
     let (evt_tx, mut evt_rx) = mpsc::channel::<AgentEvent>(128);
-    let driver = tokio::spawn(async move {
-        agent.run_user_turn(cli.prompt, cancel, evt_tx).await
-    });
+    let driver = tokio::spawn(async move { agent.run_user_turn(cli.prompt, cancel, evt_tx).await });
 
     let mut streaming = String::new();
     while let Some(evt) = evt_rx.recv().await {

@@ -73,7 +73,9 @@ mod tests {
         let mut reg = Registry::new();
         reg.register(ListDir);
         let schema = build_turn_schema(&reg);
-        let one_of = schema["properties"]["tool_calls"]["items"]["oneOf"].as_array().unwrap();
+        let one_of = schema["properties"]["tool_calls"]["items"]["oneOf"]
+            .as_array()
+            .unwrap();
         assert_eq!(one_of.len(), 1);
         assert_eq!(one_of[0]["properties"]["name"]["const"], "list_dir");
     }

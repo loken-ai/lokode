@@ -99,10 +99,12 @@ impl BackendClient {
         let url = self.url();
 
         let resp = loop {
-            req.stream_options = self
-                .usage_supported
-                .load(Ordering::Relaxed)
-                .then_some(StreamOptions { include_usage: true });
+            req.stream_options =
+                self.usage_supported
+                    .load(Ordering::Relaxed)
+                    .then_some(StreamOptions {
+                        include_usage: true,
+                    });
             let asked_for_usage = req.stream_options.is_some();
 
             let attempt = self

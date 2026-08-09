@@ -48,8 +48,14 @@ impl ApprovalScope {
     fn covered_by(&self, granted: &ApprovalScope) -> bool {
         match (granted, self) {
             (
-                ApprovalScope::Path { tool: gt, prefix: gp },
-                ApprovalScope::Path { tool: st, prefix: sp },
+                ApprovalScope::Path {
+                    tool: gt,
+                    prefix: gp,
+                },
+                ApprovalScope::Path {
+                    tool: st,
+                    prefix: sp,
+                },
             ) => gt == st && sp.starts_with(gp),
             _ => granted == self,
         }
@@ -135,7 +141,11 @@ impl SessionApprovals {
 /// `Deny` if the UI channel is closed (e.g. user quit the app).
 pub async fn ask(sender: &ApprovalSender, req: ApprovalRequest) -> ApprovalDecision {
     let (tx, rx) = oneshot::channel();
-    if sender.send(ApprovalPrompt { req, reply: tx }).await.is_err() {
+    if sender
+        .send(ApprovalPrompt { req, reply: tx })
+        .await
+        .is_err()
+    {
         return ApprovalDecision::Deny;
     }
     rx.await.unwrap_or(ApprovalDecision::Deny)
@@ -177,9 +187,18 @@ mod tests {
         a.mark_always(write_scope("write_file", Path::new("/p/src/main.rs")))
             .await;
 
-        assert!(a.is_always(&write_scope("write_file", Path::new("/p/src/other.rs"))).await);
-        assert!(a.is_always(&write_scope("write_file", Path::new("/p/src/ui/a.rs"))).await);
-        assert!(!a.is_always(&write_scope("write_file", Path::new("/p/Cargo.toml"))).await);
+        assert!(
+            a.is_always(&write_scope("write_file", Path::new("/p/src/other.rs")))
+                .await
+        );
+        assert!(
+            a.is_always(&write_scope("write_file", Path::new("/p/src/ui/a.rs")))
+                .await
+        );
+        assert!(
+            !a.is_always(&write_scope("write_file", Path::new("/p/Cargo.toml")))
+                .await
+        );
     }
 
     /// Agreeing to writes by one tool says nothing about another tool's writes.
@@ -188,7 +207,10 @@ mod tests {
         let a = SessionApprovals::new();
         a.mark_always(write_scope("write_file", Path::new("/p/src/main.rs")))
             .await;
-        assert!(!a.is_always(&write_scope("apply_patch", Path::new("/p/src/main.rs"))).await);
+        assert!(
+            !a.is_always(&write_scope("apply_patch", Path::new("/p/src/main.rs")))
+                .await
+        );
     }
 
     /// Reaching one host is not reaching every host.
@@ -197,7 +219,10 @@ mod tests {
         let a = SessionApprovals::new();
         a.mark_always(ApprovalScope::Host("docs.rs".into())).await;
         assert!(a.is_always(&ApprovalScope::Host("docs.rs".into())).await);
-        assert!(!a.is_always(&ApprovalScope::Host("169.254.169.254".into())).await);
+        assert!(
+            !a.is_always(&ApprovalScope::Host("169.254.169.254".into()))
+                .await
+        );
     }
 
     /// Nothing is agreed to before the user has agreed to anything.

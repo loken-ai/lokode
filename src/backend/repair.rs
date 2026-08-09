@@ -37,9 +37,13 @@ fn extract_balanced_object(s: &str) -> Option<&str> {
     for i in start..bytes.len() {
         let c = bytes[i];
         if in_str {
-            if esc { esc = false; }
-            else if c == b'\\' { esc = true; }
-            else if c == b'"' { in_str = false; }
+            if esc {
+                esc = false;
+            } else if c == b'\\' {
+                esc = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
             continue;
         }
         match c {
@@ -68,9 +72,13 @@ fn pythonise(s: &str) -> String {
         let c = bytes[i];
         if in_str {
             out.push(c as char);
-            if esc { esc = false; }
-            else if c == b'\\' { esc = true; }
-            else if c == b'"' { in_str = false; }
+            if esc {
+                esc = false;
+            } else if c == b'\\' {
+                esc = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
             i += 1;
             continue;
         }
@@ -81,7 +89,12 @@ fn pythonise(s: &str) -> String {
                 j += 1;
             }
             let word = &s[i..j];
-            let prev_alnum = !out.is_empty() && out.as_bytes().last().map(|b| b.is_ascii_alphanumeric() || *b == b'_').unwrap_or(false);
+            let prev_alnum = !out.is_empty()
+                && out
+                    .as_bytes()
+                    .last()
+                    .map(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                    .unwrap_or(false);
             let mapped = if prev_alnum {
                 None
             } else {
@@ -96,7 +109,9 @@ fn pythonise(s: &str) -> String {
             i = j;
             continue;
         }
-        if c == b'"' { in_str = true; }
+        if c == b'"' {
+            in_str = true;
+        }
         out.push(c as char);
         i += 1;
     }

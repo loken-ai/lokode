@@ -83,7 +83,10 @@ impl ToolCtx {
     /// reads a deliberate elision rather than a file that ends mid-line.
     pub fn clamp(&self, mut s: String) -> String {
         if s.len() > self.max_output_chars {
-            let cut = (0..=self.max_output_chars).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+            let cut = (0..=self.max_output_chars)
+                .rev()
+                .find(|&i| s.is_char_boundary(i))
+                .unwrap_or(0);
             s.truncate(cut);
             s.push_str("\n… (truncated to fit the context window)");
         }
@@ -99,10 +102,16 @@ pub struct ToolOutput {
 
 impl ToolOutput {
     pub fn ok(s: impl Into<String>) -> Self {
-        Self { content: s.into(), is_error: false }
+        Self {
+            content: s.into(),
+            is_error: false,
+        }
     }
     pub fn err(s: impl Into<String>) -> Self {
-        Self { content: s.into(), is_error: true }
+        Self {
+            content: s.into(),
+            is_error: true,
+        }
     }
 }
 
@@ -122,7 +131,9 @@ pub struct Registry {
 
 impl Registry {
     pub fn new() -> Self {
-        Self { tools: HashMap::new() }
+        Self {
+            tools: HashMap::new(),
+        }
     }
     pub fn register<T: Tool + 'static>(&mut self, tool: T) {
         self.tools.insert(tool.name(), Arc::new(tool));

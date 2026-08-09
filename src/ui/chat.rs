@@ -7,8 +7,15 @@ pub enum Entry {
     User(String),
     Assistant(String),
     AssistantStreaming(String),
-    ToolCall { name: String, args: String },
-    ToolResult { name: String, is_error: bool, body: String },
+    ToolCall {
+        name: String,
+        args: String,
+    },
+    ToolResult {
+        name: String,
+        is_error: bool,
+        body: String,
+    },
     Notice(String),
 }
 
@@ -19,12 +26,14 @@ impl Entry {
             Entry::Assistant(s) | Entry::AssistantStreaming(s) => {
                 prefix_block("assistant", Color::Green, s)
             }
-            Entry::ToolCall { name, args } => prefix_block(
-                &format!("→ {name}"),
-                Color::Yellow,
-                &truncate(args, 800),
-            ),
-            Entry::ToolResult { name, is_error, body } => {
+            Entry::ToolCall { name, args } => {
+                prefix_block(&format!("→ {name}"), Color::Yellow, &truncate(args, 800))
+            }
+            Entry::ToolResult {
+                name,
+                is_error,
+                body,
+            } => {
                 let label = if *is_error {
                     format!("← {name} [error]")
                 } else {
@@ -32,7 +41,11 @@ impl Entry {
                 };
                 prefix_block(
                     &label,
-                    if *is_error { Color::Red } else { Color::Magenta },
+                    if *is_error {
+                        Color::Red
+                    } else {
+                        Color::Magenta
+                    },
                     &truncate(body, 1600),
                 )
             }
@@ -55,7 +68,9 @@ fn prefix_block(label: &str, color: Color, body: &str) -> Vec<Line<'static>> {
 }
 
 fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n { return s.to_string(); }
+    if s.len() <= n {
+        return s.to_string();
+    }
     let mut t = s.chars().take(n).collect::<String>();
     t.push_str("\n… (truncated)");
     t

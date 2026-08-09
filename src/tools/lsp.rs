@@ -61,9 +61,7 @@ impl LangId {
         let (program, args): (&str, &[&str]) = match self {
             LangId::Rust => ("rust-analyzer", &[]),
             LangId::Python => ("pyright-langserver", &["--stdio"]),
-            LangId::TypeScript | LangId::JavaScript => {
-                ("typescript-language-server", &["--stdio"])
-            }
+            LangId::TypeScript | LangId::JavaScript => ("typescript-language-server", &["--stdio"]),
         };
         // An override for a server that is not on the path under its usual name, or is
         // there under it and does not work - a rustup shim for a component that was never
@@ -169,10 +167,16 @@ impl LspProcess {
             .request(Initialize::METHOD, serde_json::to_value(init)?)
             .await;
         if let Err(e) = init_result {
-            return Err(anyhow!("{program} did not initialise: {e}{}", proc.stderr_tail().await));
+            return Err(anyhow!(
+                "{program} did not initialise: {e}{}",
+                proc.stderr_tail().await
+            ));
         }
-        proc.notify(Initialized::METHOD, serde_json::to_value(InitializedParams {})?)
-            .await?;
+        proc.notify(
+            Initialized::METHOD,
+            serde_json::to_value(InitializedParams {})?,
+        )
+        .await?;
         Ok(proc)
     }
 
@@ -377,7 +381,10 @@ pub struct LspPool {
 
 impl LspPool {
     pub fn new(root: PathBuf) -> Arc<Self> {
-        Arc::new(Self { root, procs: Mutex::new(HashMap::new()) })
+        Arc::new(Self {
+            root,
+            procs: Mutex::new(HashMap::new()),
+        })
     }
     async fn get_or_spawn(&self, lang: LangId) -> Result<Arc<LspProcess>> {
         let key = lang.language_id();
@@ -406,11 +413,15 @@ pub struct LspDiagnostics {
 }
 
 #[derive(Deserialize)]
-struct DiagArgs { path: PathBuf }
+struct DiagArgs {
+    path: PathBuf,
+}
 
 #[async_trait]
 impl Tool for LspDiagnostics {
-    fn name(&self) -> &'static str { "lsp_diagnostics" }
+    fn name(&self) -> &'static str {
+        "lsp_diagnostics"
+    }
     fn description(&self) -> &'static str {
         "Return current LSP diagnostics (errors/warnings) for a source file."
     }
@@ -457,7 +468,13 @@ impl Tool for LspDiagnostics {
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        let snap = proc.diagnostics.lock().await.get(&uri).cloned().unwrap_or_default();
+        let snap = proc
+            .diagnostics
+            .lock()
+            .await
+            .get(&uri)
+            .cloned()
+            .unwrap_or_default();
         Ok(ToolOutput::ok(format_diags(&path, &snap)))
     }
 }
@@ -477,7 +494,9 @@ struct HoverArgs {
 
 #[async_trait]
 impl Tool for LspHover {
-    fn name(&self) -> &'static str { "lsp_hover" }
+    fn name(&self) -> &'static str {
+        "lsp_hover"
+    }
     fn description(&self) -> &'static str {
         "Get type/hover info at a 1-indexed (line, column) in a source file."
     }
@@ -525,7 +544,10 @@ impl Tool for LspHover {
             },
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
-        let reply = match proc.request(HoverRequest::METHOD, serde_json::to_value(params)?).await {
+        let reply = match proc
+            .request(HoverRequest::METHOD, serde_json::to_value(params)?)
+            .await
+        {
             Ok(r) => r,
             Err(e) => return Ok(ToolOutput::err(format!("hover failed: {e}"))),
         };
@@ -546,20 +568,35 @@ fn format_diags(path: &Path, diags: &[lsp_types::Diagnostic]) -> String {
     }
     let mut out = String::new();
     for d in diags {
-        let sev = d.severity.map(|s| format!("{:?}", s)).unwrap_or_else(|| "Info".into());
+        let sev = d
+            .severity
+            .map(|s| format!("{:?}", s))
+            .unwrap_or_else(|| "Info".into());
         let line = d.range.start.line + 1;
         let col = d.range.start.character + 1;
-        out.push_str(&format!("{sev}: {}:{line}:{col} {}\n", path.display(), d.message));
+        out.push_str(&format!(
+            "{sev}: {}:{line}:{col} {}\n",
+            path.display(),
+            d.message
+        ));
     }
     out
 }
 
 fn pretty_contents(c: &Value) -> String {
     // Hover contents can be a string, a {kind, value}, or an array.
-    if let Some(s) = c.as_str() { return s.to_string(); }
-    if let Some(v) = c.get("value").and_then(|v| v.as_str()) { return v.to_string(); }
+    if let Some(s) = c.as_str() {
+        return s.to_string();
+    }
+    if let Some(v) = c.get("value").and_then(|v| v.as_str()) {
+        return v.to_string();
+    }
     if let Some(arr) = c.as_array() {
-        return arr.iter().map(pretty_contents).collect::<Vec<_>>().join("\n");
+        return arr
+            .iter()
+            .map(pretty_contents)
+            .collect::<Vec<_>>()
+            .join("\n");
     }
     c.to_string()
 }

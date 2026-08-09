@@ -16,13 +16,28 @@ pub struct Message {
 
 impl Message {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into(), name: None, tool_call_id: None }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+            name: None,
+            tool_call_id: None,
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into(), name: None, tool_call_id: None }
+        Self {
+            role: "user".into(),
+            content: content.into(),
+            name: None,
+            tool_call_id: None,
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: content.into(), name: None, tool_call_id: None }
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+            name: None,
+            tool_call_id: None,
+        }
     }
     pub fn tool(content: impl Into<String>, id: impl Into<String>) -> Self {
         Self {

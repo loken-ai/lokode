@@ -37,9 +37,14 @@ pub fn resolve(root: &Path, candidate: &Path, must_exist: bool) -> Result<PathBu
     let resolved = if must_exist || absolute.exists() {
         absolute.canonicalize().map_err(|source| {
             if source.kind() == std::io::ErrorKind::NotFound {
-                PathError::NotFound { path: absolute.clone() }
+                PathError::NotFound {
+                    path: absolute.clone(),
+                }
             } else {
-                PathError::Io { path: absolute.clone(), source }
+                PathError::Io {
+                    path: absolute.clone(),
+                    source,
+                }
             }
         })?
     } else {
@@ -49,7 +54,10 @@ pub fn resolve(root: &Path, candidate: &Path, must_exist: bool) -> Result<PathBu
         // wherever the link points. Follow the link itself before trusting the name.
         let via_link = match absolute.symlink_metadata() {
             Ok(m) if m.file_type().is_symlink() => Some(std::fs::read_link(&absolute).map_err(
-                |source| PathError::Io { path: absolute.clone(), source },
+                |source| PathError::Io {
+                    path: absolute.clone(),
+                    source,
+                },
             )?),
             _ => None,
         };
@@ -64,14 +72,19 @@ pub fn resolve(root: &Path, candidate: &Path, must_exist: bool) -> Result<PathBu
         })?;
         let parent_canon = parent.canonicalize().map_err(|source| {
             if source.kind() == std::io::ErrorKind::NotFound {
-                PathError::NotFound { path: parent.to_path_buf() }
+                PathError::NotFound {
+                    path: parent.to_path_buf(),
+                }
             } else {
-                PathError::Io { path: parent.to_path_buf(), source }
+                PathError::Io {
+                    path: parent.to_path_buf(),
+                    source,
+                }
             }
         })?;
-        let name = absolute
-            .file_name()
-            .ok_or_else(|| PathError::NotFound { path: absolute.clone() })?;
+        let name = absolute.file_name().ok_or_else(|| PathError::NotFound {
+            path: absolute.clone(),
+        })?;
         parent_canon.join(name)
     };
 
@@ -111,7 +124,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let err = resolve(dir.path(), Path::new("../etc/passwd"), false).unwrap_err();
         // Either Outside (if the parent escape canonicalises) or NotFound — both acceptable rejections.
-        assert!(matches!(err, PathError::Outside { .. } | PathError::NotFound { .. }));
+        assert!(matches!(
+            err,
+            PathError::Outside { .. } | PathError::NotFound { .. }
+        ));
     }
 
     #[test]
@@ -158,17 +174,24 @@ mod escape_tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
         #[cfg(windows)]
         std::os::windows::fs::symlink_file(&target, &link).unwrap();
-        assert!(!link.exists(), "the link must dangle for this to be the case under test");
+        assert!(
+            !link.exists(),
+            "the link must dangle for this to be the case under test"
+        );
 
         let resolved = resolve(dir.path(), Path::new("link"), false);
         if let Ok(p) = &resolved {
             // Demonstrate the consequence rather than asserting on the path alone.
             fs::write(p, b"escaped").unwrap();
-            assert!(!target.exists(),
+            assert!(
+                !target.exists(),
                 "writing through the resolved path escaped the root: {} landed outside",
-                p.display());
+                p.display()
+            );
         }
-        assert!(matches!(resolved, Err(PathError::Outside { .. })),
-            "a dangling link out of the root must be refused, got {resolved:?}");
+        assert!(
+            matches!(resolved, Err(PathError::Outside { .. })),
+            "a dangling link out of the root must be refused, got {resolved:?}"
+        );
     }
 }

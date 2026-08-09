@@ -160,10 +160,18 @@ mod tests {
     #[tokio::test]
     async fn a_file_over_the_ceiling_is_refused_before_it_is_read() {
         let dir = tempdir().unwrap();
-        let p = write(dir.path(), "big", &vec![b'x'; (MAX_FILE_BYTES + 1) as usize]).await;
+        let p = write(
+            dir.path(),
+            "big",
+            &vec![b'x'; (MAX_FILE_BYTES + 1) as usize],
+        )
+        .await;
         let err = read_text(&p).await.unwrap_err();
         assert!(err.contains("over the"), "unexpected message: {err}");
-        assert!(err.contains("grep"), "the refusal should say what to do instead: {err}");
+        assert!(
+            err.contains("grep"),
+            "the refusal should say what to do instead: {err}"
+        );
     }
 
     #[tokio::test]
@@ -184,7 +192,10 @@ mod tests {
             read_numbered(&p, Some(2), Some(4)).await.unwrap(),
             "    2 | b\n    3 | c\n    4 | d"
         );
-        assert_eq!(read_numbered(&p, Some(5), Some(9)).await.unwrap(), "    5 | e");
+        assert_eq!(
+            read_numbered(&p, Some(5), Some(9)).await.unwrap(),
+            "    5 | e"
+        );
         assert_eq!(read_numbered(&p, Some(9), Some(9)).await.unwrap(), "");
     }
 

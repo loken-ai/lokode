@@ -10,9 +10,9 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::protocol::TurnEnvelope;
 use crate::agent::session::Session;
 use crate::backend::client::{BackendClient, StreamEvent};
-use crate::backend::wire::Usage;
 use crate::backend::repair::{self, MAX_REPAIR_ATTEMPTS};
 use crate::backend::schema::{build_turn_schema, tool_manifest};
+use crate::backend::wire::Usage;
 use crate::backend::wire::{ChatCompletionRequest, Message, ResponseFormat};
 use crate::tools::registry::{Registry, ToolCtx, ToolOutput};
 
@@ -219,8 +219,10 @@ impl Agent {
                     })
                     .await;
                 let prefix = if result.is_error { "[error] " } else { "" };
-                self.session
-                    .push(Message::tool(format!("{prefix}{}", result.content), tool_id));
+                self.session.push(Message::tool(
+                    format!("{prefix}{}", result.content),
+                    tool_id,
+                ));
             }
         }
 
@@ -300,7 +302,10 @@ impl Agent {
                     out.text.push_str(&p);
                     let _ = events.send(AgentEvent::AssistantDelta(p)).await;
                 }
-                StreamEvent::End { finish_reason, usage } => {
+                StreamEvent::End {
+                    finish_reason,
+                    usage,
+                } => {
                     out.finish_reason = finish_reason.or(out.finish_reason);
                     out.usage = usage.or(out.usage);
                 }

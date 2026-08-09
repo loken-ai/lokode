@@ -23,7 +23,12 @@ use crossterm::terminal::{
 /// own the job without coordinating.
 pub fn restore() {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture, Show);
+    let _ = execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        Show
+    );
 }
 
 /// Owns the terminal's raw mode and alternate screen for as long as it lives.

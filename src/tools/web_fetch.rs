@@ -30,7 +30,9 @@ struct Args {
 
 #[async_trait]
 impl Tool for WebFetch {
-    fn name(&self) -> &'static str { "web_fetch" }
+    fn name(&self) -> &'static str {
+        "web_fetch"
+    }
     fn description(&self) -> &'static str {
         "GET a URL and return the response body (text). Requires user approval (network egress)."
     }
@@ -77,9 +79,7 @@ impl Tool for WebFetch {
                 {
                     Approval::Proceed => {}
                     Approval::Denied => return Ok(ToolOutput::err("user denied")),
-                    Approval::Interrupted => {
-                        return Ok(ToolOutput::err("interrupted by user"))
-                    }
+                    Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
                 }
             }
 
@@ -110,7 +110,9 @@ impl Tool for WebFetch {
                     return Ok(ToolOutput::err("Location header is not valid text"));
                 };
                 let Ok(next) = url.join(location) else {
-                    return Ok(ToolOutput::err(format!("unusable redirect target: {location}")));
+                    return Ok(ToolOutput::err(format!(
+                        "unusable redirect target: {location}"
+                    )));
                 };
                 url = match check_public(next, &ctx.allow_hosts).await {
                     Ok(u) => u,
@@ -180,7 +182,10 @@ async fn parse_public(raw: &str, allow: &HashSet<String>) -> Result<Url, String>
 /// where the packets go.
 async fn check_public(url: Url, allow: &HashSet<String>) -> Result<Url, String> {
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(format!("only http(s) URLs are allowed, got {}", url.scheme()));
+        return Err(format!(
+            "only http(s) URLs are allowed, got {}",
+            url.scheme()
+        ));
     }
     let host = url
         .host_str()
@@ -301,7 +306,13 @@ mod tests {
 
     #[test]
     fn loopback_and_private_ranges_are_blocked() {
-        for addr in ["127.0.0.1", "10.1.2.3", "192.168.1.1", "172.16.0.1", "0.0.0.0"] {
+        for addr in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "192.168.1.1",
+            "172.16.0.1",
+            "0.0.0.0",
+        ] {
             assert!(is_blocked(v4(addr)), "{addr} should be refused");
         }
     }
@@ -342,7 +353,10 @@ mod tests {
     async fn non_http_schemes_are_refused() {
         let allow = HashSet::new();
         for raw in ["file:///etc/passwd", "ftp://example.com/x", "gopher://x/"] {
-            assert!(parse_public(raw, &allow).await.is_err(), "{raw} should be refused");
+            assert!(
+                parse_public(raw, &allow).await.is_err(),
+                "{raw} should be refused"
+            );
         }
     }
 
@@ -350,15 +364,22 @@ mod tests {
     #[tokio::test]
     async fn a_literal_loopback_url_is_refused() {
         let allow = HashSet::new();
-        let err = parse_public("http://127.0.0.1:8080/admin", &allow).await.unwrap_err();
-        assert!(err.contains("not a public address"), "unexpected message: {err}");
+        let err = parse_public("http://127.0.0.1:8080/admin", &allow)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("not a public address"),
+            "unexpected message: {err}"
+        );
     }
 
     /// The escape hatch has to actually open, or anyone with a LAN service is stuck.
     #[tokio::test]
     async fn an_allowed_host_bypasses_the_guard() {
         let allow: HashSet<String> = ["127.0.0.1".to_string()].into_iter().collect();
-        assert!(parse_public("http://127.0.0.1:8080/admin", &allow).await.is_ok());
+        assert!(parse_public("http://127.0.0.1:8080/admin", &allow)
+            .await
+            .is_ok());
     }
 
     /// Serve one response and hang up. Enough to be redirected by.
@@ -418,7 +439,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(out.is_error, "the redirect should have been refused: {}", out.content);
+        assert!(
+            out.is_error,
+            "the redirect should have been refused: {}",
+            out.content
+        );
         assert!(
             out.content.contains("refused redirect") && out.content.contains("169.254.169.254"),
             "unexpected message: {}",
@@ -443,7 +468,15 @@ mod tests {
             .unwrap();
 
         assert!(!out.is_error, "unexpected failure: {}", out.content);
-        assert!(out.content.contains("hello"), "body missing: {}", out.content);
-        assert!(!out.content.contains("<b>"), "tags should be stripped: {}", out.content);
+        assert!(
+            out.content.contains("hello"),
+            "body missing: {}",
+            out.content
+        );
+        assert!(
+            !out.content.contains("<b>"),
+            "tags should be stripped: {}",
+            out.content
+        );
     }
 }

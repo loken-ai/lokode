@@ -27,7 +27,9 @@ struct BashArgs {
 
 #[async_trait]
 impl Tool for Bash {
-    fn name(&self) -> &'static str { "bash" }
+    fn name(&self) -> &'static str {
+        "bash"
+    }
     fn description(&self) -> &'static str {
         "Run a shell command. Requires user approval. cwd must be inside project root."
     }
@@ -54,7 +56,8 @@ impl Tool for Bash {
             },
             None => ctx.root.clone(),
         };
-        let timeout = Duration::from_secs(a.timeout_s.unwrap_or(DEFAULT_TIMEOUT_S).min(MAX_TIMEOUT_S));
+        let timeout =
+            Duration::from_secs(a.timeout_s.unwrap_or(DEFAULT_TIMEOUT_S).min(MAX_TIMEOUT_S));
 
         match ctx
             .approve(ApprovalRequest {
@@ -100,4 +103,3 @@ impl Tool for Bash {
         Ok(ToolOutput::ok(report))
     }
 }
-

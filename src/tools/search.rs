@@ -9,7 +9,6 @@ use tokio::process::Command;
 use crate::sandbox::allowlist;
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
-
 pub struct Grep;
 
 #[derive(Deserialize)]
@@ -25,7 +24,9 @@ struct GrepArgs {
 
 #[async_trait]
 impl Tool for Grep {
-    fn name(&self) -> &'static str { "grep" }
+    fn name(&self) -> &'static str {
+        "grep"
+    }
     fn description(&self) -> &'static str {
         "Search files for a regex (or literal with fixed_string=true). Uses ripgrep if available."
     }

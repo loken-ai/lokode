@@ -56,7 +56,10 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         root: cfg.root.clone(),
         approval: approval_tx.clone(),
         session_approvals: session_approvals.clone(),
-        max_output_chars: crate::agent::session::tool_output_chars(cfg.context_tokens, cfg.max_answer_tokens),
+        max_output_chars: crate::agent::session::tool_output_chars(
+            cfg.context_tokens,
+            cfg.max_answer_tokens,
+        ),
         // Replaced with the turn's own token at the start of each turn; this stands in
         // for the window before the first one arrives.
         cancel: shutdown.child_token(),
@@ -131,7 +134,10 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     // Language servers are killed on drop either way; this gives them the chance to put
     // their own caches down cleanly first.
     let _ = tokio::time::timeout(SHUTDOWN_GRACE, lsp.shutdown()).await;
-    if tokio::time::timeout(SHUTDOWN_GRACE, agent_task).await.is_err() {
+    if tokio::time::timeout(SHUTDOWN_GRACE, agent_task)
+        .await
+        .is_err()
+    {
         eprintln!(
             "verve: the agent did not stop within {}s; exiting anyway",
             SHUTDOWN_GRACE.as_secs()
@@ -224,7 +230,8 @@ async fn run_ui(
             let scroll = state.scroll as usize;
             let end = total.saturating_sub(scroll);
             let start = end.saturating_sub(inner_h);
-            let visible: Vec<Line<'static>> = lines.into_iter().skip(start).take(end - start).collect();
+            let visible: Vec<Line<'static>> =
+                lines.into_iter().skip(start).take(end - start).collect();
             let chat = Paragraph::new(visible)
                 .block(chat_block)
                 .wrap(Wrap { trim: false });
@@ -358,11 +365,12 @@ async fn run_ui(
 }
 
 fn is_quit(k: &KeyEvent) -> bool {
-    if k.kind != KeyEventKind::Press { return false; }
+    if k.kind != KeyEventKind::Press {
+        return false;
+    }
     matches!(
         (k.code, k.modifiers),
-        (KeyCode::Char('c'), KeyModifiers::CONTROL)
-            | (KeyCode::Char('q'), KeyModifiers::CONTROL)
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), KeyModifiers::CONTROL)
     )
 }
 
@@ -372,7 +380,9 @@ fn is_quit(k: &KeyEvent) -> bool {
 /// the modal appears would approve a shell command they never read - the one outcome an
 /// approval flow exists to prevent. Approving is a letter you have to reach for.
 fn approval_key(k: &KeyEvent) -> Option<ApprovalDecision> {
-    if k.kind != KeyEventKind::Press { return None; }
+    if k.kind != KeyEventKind::Press {
+        return None;
+    }
     match k.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalDecision::Once),
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(ApprovalDecision::Deny),
@@ -403,15 +413,30 @@ mod tests {
     /// Declining must stay reachable by the two gestures people already use to back out.
     #[test]
     fn declining_is_reachable() {
-        assert_eq!(approval_key(&press(KeyCode::Esc)), Some(ApprovalDecision::Deny));
-        assert_eq!(approval_key(&press(KeyCode::Char('n'))), Some(ApprovalDecision::Deny));
+        assert_eq!(
+            approval_key(&press(KeyCode::Esc)),
+            Some(ApprovalDecision::Deny)
+        );
+        assert_eq!(
+            approval_key(&press(KeyCode::Char('n'))),
+            Some(ApprovalDecision::Deny)
+        );
     }
 
     #[test]
     fn approving_takes_a_letter() {
-        assert_eq!(approval_key(&press(KeyCode::Char('y'))), Some(ApprovalDecision::Once));
-        assert_eq!(approval_key(&press(KeyCode::Char('Y'))), Some(ApprovalDecision::Once));
-        assert_eq!(approval_key(&press(KeyCode::Char('a'))), Some(ApprovalDecision::Always));
+        assert_eq!(
+            approval_key(&press(KeyCode::Char('y'))),
+            Some(ApprovalDecision::Once)
+        );
+        assert_eq!(
+            approval_key(&press(KeyCode::Char('Y'))),
+            Some(ApprovalDecision::Once)
+        );
+        assert_eq!(
+            approval_key(&press(KeyCode::Char('a'))),
+            Some(ApprovalDecision::Always)
+        );
     }
 
     /// A key with no meaning at the modal must leave it up rather than pick for the user.
