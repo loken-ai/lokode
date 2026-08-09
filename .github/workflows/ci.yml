@@ -41,6 +41,13 @@ jobs:
       - name: Doc tests
         run: cargo test --doc
 
+      # A link to a type that has been renamed is a broken link, and nobody notices
+      # until someone reads the documentation.
+      - name: Docs
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   msrv:
     name: minimum supported Rust version
     runs-on: ubuntu-latest

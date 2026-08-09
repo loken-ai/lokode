@@ -4,13 +4,17 @@ use crate::backend::wire::{FunctionSpec, ToolSpec};
 use crate::tools::registry::Registry;
 
 /// Builds the per-turn JSON Schema enforced server-side by `llguidance`.
+///
 /// Shape:
-///   {
-///     "assistant_text": "string",   // free-form prose to the user
-///     "tool_calls": [                // 0..N tool calls executed in order
-///       { "name": "<tool>", "arguments": <tool-specific schema> }
-///     ]
-///   }
+///
+/// ```text
+/// {
+///   "assistant_text": "string",   // free-form prose to the user
+///   "tool_calls": [               // 0..N tool calls executed in order
+///     { "name": "<tool>", "arguments": <tool-specific schema> }
+///   ]
+/// }
+/// ```
 ///
 /// Per-tool argument schemas are unioned via `oneOf` keyed on `name`. The
 /// `additionalProperties: false` + `required` constraints make the

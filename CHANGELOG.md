@@ -2,6 +2,85 @@
 
 All notable changes to `verve`. The format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- A panic left the terminal in raw mode with no cursor, printing the message you needed to
+  read in a mode where it was unreadable. Raw mode and the alternate screen now belong to a
+  guard, and a panic hook restores before the default hook prints.
+- `Ctrl-C` did nothing at the approval prompt - the one screen it was most wanted on - because
+  the branch handling that screen answered the keystroke first. Quit is now tested before
+  anything else can swallow a key.
+- `Enter` approved. It is also the send key, so a prompt appearing mid-sentence could
+  authorise a command that had not been read. Accepting now takes a letter.
+- An `[A]lways` answer was recorded against the tool that asked, so agreeing to one `ls`
+  handed over the shell for the session and agreeing to one file being written handed over
+  every file. Agreements are now scoped to what the prompt showed, and the prompt says which.
+- `web_fetch` checked only the URL scheme, and the HTTP client followed up to ten redirects on
+  its own - so an approved public URL could answer 302 towards loopback or the cloud metadata
+  address. Hosts are resolved rather than trusted, every non-public range is refused, and
+  redirects are followed here so the check runs again on each hop.
+- Reads had no ceiling: whole files and whole response bodies were loaded before the clamp
+  that was meant to bound them. Size is now checked first, bodies stream against a limit, and
+  a file that is not text is refused rather than delivered as replacement characters.
+- Writes were not atomic despite a comment saying they were, and `apply_patch` applied in a
+  loop - so a failure on the third file left the first two changed. Files are replaced by
+  rename, and a patch is staged wholly before any of it is committed, with a rollback if the
+  commit fails part-way.
+- `apply_patch` resolved paths *after* the user approved the diff, so what was agreed to and
+  what happened could differ.
+- A file could not be created in a directory that did not exist yet: resolution required the
+  immediate parent, so the code that creates directories was only reachable when it had
+  nothing to do.
+- A response cut off by the token limit was indistinguishable from a model that cannot write
+  JSON. `finish_reason` is read, and a truncated answer says so.
+- The chars-per-token estimate had no feedback loop, and under-counting is the direction that
+  loses the system message. It is now measured against the server's own count.
+- Nothing was ever retried, and transport failures - a backend still starting up, the most
+  retryable thing there is - were treated as final. Failures describing the server's condition
+  are retried with a widening gap; failures describing the request are not.
+- A stalled stream held the turn for the client's full fifteen-minute timeout.
+- The language server was opened once per file and never told about changes, so from the
+  agent's first edit every diagnostic described code that no longer existed. Its stderr went
+  to `/dev/null`, so a server that refused to start reported nothing and looked like a file
+  with nothing wrong with it.
+- Quitting aborted the agent mid-write, which could truncate a file.
+- Results were returned against invented ids matching no call the model had made, which a
+  strict OpenAI-compatible server rejects.
+
+### Added
+
+- `Esc` interrupts a running turn. Subprocesses are killed rather than orphaned.
+- Native tool calling, with the JSON envelope as the fallback. `--tool-protocol auto` starts
+  native and drops to the envelope the first time a backend refuses the field, finishing the
+  turn either way; `native` and `envelope` pin one.
+- Session transcripts, written as they happen to `$XDG_DATA_HOME/verve/sessions`, with
+  `--resume <id>` and `--continue`. A resumed session keeps its id, appends to the file it
+  came from, and remembers its model.
+- Real logging. `tracing` was a dependency with no events and a subscriber pointed at the
+  screen the interface owns; there are now events at the points anyone would ask about, and
+  they go to a file.
+- Configuration from `~/.config/verve/config.toml` and `<root>/.verve.toml`, from `VERVE_*`
+  variables, and from flags, in that order of increasing precedence. `--show-config` says what
+  was read and what it resolved to.
+- Authentication: `VERVE_API_KEY`, an `api-key-env` naming a variable, or an `api-key` in a
+  file that only you can read. `--header name=value` for anything else. A key about to cross a
+  network unencrypted is warned about.
+- `--allow-host` for a service on your own network that `web_fetch` would otherwise refuse.
+- `VERVE_LSP_RUST` and its siblings, for a language server that is not on the path under the
+  usual name or is there and does not work.
+- CI running formatting, clippy as an error, the tests, an MSRV build and a dependency audit.
+- `SECURITY.md`, `CONTRIBUTING.md`, and an operational README.
+
+### Changed
+
+- Tests went from 21 to 143. Ten of the twelve tools now have one; the two LSP tools do not,
+  because testing them needs a language server.
+- `src/tools/tests.rs` was the `run_tests` tool rather than tests, and is now `run_tests.rs`.
+- Two dependencies were declared and never used: `schemars`, never imported at all, and
+  `reqwest`'s `blocking` and `multipart` features in an entirely async client.
+
 ## [0.1.0]
 
 ### Added
