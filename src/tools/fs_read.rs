@@ -8,7 +8,6 @@ use serde_json::{json, Value};
 use crate::sandbox::allowlist;
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
-const MAX_BYTES: usize = 96 * 1024;
 const MAX_LIST_ENTRIES: usize = 1024;
 const MAX_GLOB_HITS: usize = 512;
 
@@ -74,7 +73,7 @@ impl Tool for ReadFile {
                 .join("\n")
         };
 
-        Ok(ToolOutput::ok(truncate(body)))
+        Ok(ToolOutput::ok(ctx.clamp(body)))
     }
 }
 
@@ -192,10 +191,3 @@ impl Tool for Glob {
     }
 }
 
-fn truncate(mut s: String) -> String {
-    if s.len() > MAX_BYTES {
-        s.truncate(MAX_BYTES);
-        s.push_str("\n… (truncated)");
-    }
-    s
-}

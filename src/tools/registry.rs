@@ -13,6 +13,25 @@ pub struct ToolCtx {
     pub root: PathBuf,
     pub approval: ApprovalSender,
     pub session_approvals: Arc<SessionApprovals>,
+    /// Characters a single tool result may contribute to the conversation.
+    ///
+    /// Derived from the session's budget rather than chosen per tool: a result is only
+    /// ever large relative to the window it has to fit in, and a ceiling set without
+    /// reference to that window lets one file read exceed the entire conversation.
+    pub max_output_chars: usize,
+}
+
+impl ToolCtx {
+    /// Cut `s` to what one result may contribute, saying so in the text so the model
+    /// reads a deliberate elision rather than a file that ends mid-line.
+    pub fn clamp(&self, mut s: String) -> String {
+        if s.len() > self.max_output_chars {
+            let cut = (0..=self.max_output_chars).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+            s.truncate(cut);
+            s.push_str("\n… (truncated to fit the context window)");
+        }
+        s
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -90,6 +90,10 @@ async fn main() -> Result<()> {
         root: root.clone(),
         approval: approval_tx.clone(),
         session_approvals,
+        max_output_chars: verve::agent::session::tool_output_chars(
+            cli.context_tokens,
+            cli.max_answer_tokens,
+        ),
     };
 
     let mut agent = Agent {

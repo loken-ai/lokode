@@ -8,7 +8,6 @@ use crate::sandbox::approval::{self, ApprovalDecision, ApprovalRequest};
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
 const TIMEOUT_S: u64 = 600;
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 pub struct RunTests;
 
@@ -69,9 +68,9 @@ impl Tool for RunTests {
         };
 
         let mut report = format!("[{label}] exit: {}\n", output.status.code().unwrap_or(-1));
-        report.push_str(&truncate(String::from_utf8_lossy(&output.stdout).into()));
+        report.push_str(&ctx.clamp(String::from_utf8_lossy(&output.stdout).into()));
         report.push('\n');
-        report.push_str(&truncate(String::from_utf8_lossy(&output.stderr).into()));
+        report.push_str(&ctx.clamp(String::from_utf8_lossy(&output.stderr).into()));
         Ok(ToolOutput::ok(report))
     }
 }
@@ -92,10 +91,3 @@ fn detect_runner(root: &std::path::Path) -> Result<(&'static str, Vec<&'static s
     anyhow::bail!("no recognised test manifest at {}", root.display())
 }
 
-fn truncate(mut s: String) -> String {
-    if s.len() > MAX_OUTPUT_BYTES {
-        s.truncate(MAX_OUTPUT_BYTES);
-        s.push_str("\n… (truncated)");
-    }
-    s
-}

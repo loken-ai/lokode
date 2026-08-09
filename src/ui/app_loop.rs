@@ -40,6 +40,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         root: cfg.root.clone(),
         approval: approval_tx.clone(),
         session_approvals: session_approvals.clone(),
+        max_output_chars: crate::agent::session::tool_output_chars(cfg.context_tokens, cfg.max_answer_tokens),
     };
 
     let system = Agent::build_system_prompt(&registry);

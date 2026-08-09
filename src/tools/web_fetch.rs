@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 use crate::sandbox::approval::{self, ApprovalDecision, ApprovalRequest};
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
-const MAX_BODY_BYTES: usize = 96 * 1024;
 
 pub struct WebFetch;
 
@@ -68,12 +67,7 @@ impl Tool for WebFetch {
             Ok(s) => s,
             Err(e) => return Ok(ToolOutput::err(format!("read body failed: {e}"))),
         };
-        let stripped = strip_html(&text);
-        let mut body = stripped;
-        if body.len() > MAX_BODY_BYTES {
-            body.truncate(MAX_BODY_BYTES);
-            body.push_str("\n… (truncated)");
-        }
+        let body = ctx.clamp(strip_html(&text));
         Ok(ToolOutput::ok(format!("status: {status}\n\n{body}")))
     }
 }

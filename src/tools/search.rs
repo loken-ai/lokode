@@ -9,7 +9,6 @@ use tokio::process::Command;
 use crate::sandbox::allowlist;
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 pub struct Grep;
 
@@ -87,11 +86,7 @@ impl Tool for Grep {
             )));
         }
 
-        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-        if text.len() > MAX_OUTPUT_BYTES {
-            text.truncate(MAX_OUTPUT_BYTES);
-            text.push_str("\n… (truncated)");
-        }
+        let text = ctx.clamp(String::from_utf8_lossy(&output.stdout).into_owned());
         if text.is_empty() {
             Ok(ToolOutput::ok("(no matches)"))
         } else {

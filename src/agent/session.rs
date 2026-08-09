@@ -21,6 +21,16 @@ pub struct Session {
     budget_chars: usize,
 }
 
+/// What a single tool result may contribute to the conversation.
+///
+/// A quarter of the history's budget, so the several results of one step can coexist
+/// with the exchange that asked for them, instead of one of them displacing all of it.
+/// Derived here beside the history budget rather than chosen inside each tool: a result
+/// is only ever large relative to the window it has to fit in.
+pub fn tool_output_chars(context_tokens: usize, reserve_tokens: usize) -> usize {
+    context_tokens.saturating_sub(reserve_tokens) * CHARS_PER_TOKEN / 4
+}
+
 impl Session {
     /// `context_tokens` is the window the backend is expected to offer, and
     /// `reserve_tokens` what to leave free for the answer.
@@ -91,6 +101,15 @@ mod tests {
             "assistant" => Message::assistant(body),
             _ => Message::tool(body, "id"),
         }
+    }
+
+    /// One result must never be able to fill the window on its own, or compaction has
+    /// nothing left to drop and the server truncates - taking the preamble.
+    #[test]
+    fn a_single_tool_result_cannot_fill_the_budget() {
+        let (ctx_tok, reserve) = (8192, 4096);
+        let budget = (ctx_tok - reserve) * CHARS_PER_TOKEN;
+        assert!(tool_output_chars(ctx_tok, reserve) * 2 < budget);
     }
 
     /// A generous budget must leave the conversation exactly as it was.
