@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub backend_url: String,
     pub grammar_enabled: bool,
     pub max_steps: usize,
+    pub context_tokens: usize,
+    pub max_answer_tokens: usize,
 }
 
 pub async fn run(cfg: AppConfig) -> Result<()> {

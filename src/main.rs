@@ -27,6 +27,16 @@ struct Cli {
     /// Maximum agent loop iterations per user turn.
     #[arg(long, default_value = "16")]
     max_steps: usize,
+
+    /// Context window the backend offers for this model, in tokens. The history is
+    /// compacted client-side to fit it: a server that has to truncate keeps the tail,
+    /// which would drop the system preamble carrying the tool manifest.
+    #[arg(long, default_value = "8192")]
+    context_tokens: usize,
+
+    /// Tokens held back from the window for the answer.
+    #[arg(long, default_value = "4096")]
+    max_answer_tokens: usize,
 }
 
 #[tokio::main]
@@ -50,6 +60,8 @@ async fn main() -> Result<()> {
         backend_url: cli.backend_url,
         grammar_enabled: !cli.no_grammar,
         max_steps: cli.max_steps,
+        context_tokens: cli.context_tokens,
+        max_answer_tokens: cli.max_answer_tokens,
     };
 
     app::run(cfg).await

@@ -41,6 +41,14 @@ struct Cli {
     prompt: String,
     #[arg(long, default_value = "8")]
     max_steps: usize,
+
+    /// Context window the backend offers, in tokens.
+    #[arg(long, default_value = "8192")]
+    context_tokens: usize,
+
+    /// Tokens held back from the window for the answer.
+    #[arg(long, default_value = "4096")]
+    max_answer_tokens: usize,
     /// Approve mutating tools too (default: approve only read-only).
     #[arg(long)]
     approve_writes: bool,
@@ -87,11 +95,12 @@ async fn main() -> Result<()> {
     let mut agent = Agent {
         backend: BackendClient::new(cli.backend_url),
         registry: registry.clone(),
-        session: Session::new(Agent::build_system_prompt(&registry)),
+        session: Session::new(Agent::build_system_prompt(&registry), cli.context_tokens, cli.max_answer_tokens),
         cfg: AgentConfig {
             model: cli.model,
             grammar_enabled: !cli.no_grammar,
             max_steps: cli.max_steps,
+            max_answer_tokens: cli.max_answer_tokens,
         },
         ctx,
     };

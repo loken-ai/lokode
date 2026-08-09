@@ -43,13 +43,14 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     };
 
     let system = Agent::build_system_prompt(&registry);
-    let session = Session::new(system);
+    let session = Session::new(system, cfg.context_tokens, cfg.max_answer_tokens);
     let session_id = session.id.clone();
 
     let agent_cfg = AgentConfig {
         model: cfg.model.clone(),
         grammar_enabled: cfg.grammar_enabled,
         max_steps: cfg.max_steps,
+        max_answer_tokens: cfg.max_answer_tokens,
     };
 
     let mut agent = Agent {

@@ -29,6 +29,7 @@ pub struct AgentConfig {
     pub model: String,
     pub grammar_enabled: bool,
     pub max_steps: usize,
+    pub max_answer_tokens: usize,
 }
 
 pub struct Agent {
@@ -65,6 +66,17 @@ impl Agent {
         let validator = Validator::new(&turn_schema).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         for step in 0..self.cfg.max_steps {
+            // Before every call, not once per turn: a single tool result can be larger
+            // than everything said so far, so the history can outgrow the window in the
+            // middle of a turn as easily as between two.
+            let dropped = self.session.compact();
+            if dropped > 0 {
+                let _ = events
+                    .send(AgentEvent::Notice(format!(
+                        "context full: {dropped} earlier message(s) elided to keep the tool manifest in view"
+                    )))
+                    .await;
+            }
             let raw = self.stream_one(&turn_schema, &events).await?;
             let envelope = match self.parse_with_repair(&raw, &turn_schema, &validator).await {
                 Ok(v) => v,
@@ -152,7 +164,7 @@ impl Agent {
             stream: Some(true),
             temperature: Some(0.2),
             top_p: None,
-            max_tokens: Some(4096),
+            max_tokens: Some(self.cfg.max_answer_tokens as u32),
             seed: None,
             response_format,
             user: Some(self.session.id.clone()),
