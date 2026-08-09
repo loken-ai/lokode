@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use similar::TextDiff;
 
 use crate::sandbox::allowlist;
-use crate::sandbox::approval::{self, ApprovalDecision, ApprovalRequest};
+use crate::sandbox::approval::{ApprovalDecision, ApprovalRequest};
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
 const MAX_PREVIEW: usize = 16 * 1024;
@@ -52,15 +52,16 @@ impl Tool for WriteFile {
         let diff = unified_diff(&before, &a.content, &target.display().to_string());
 
         if !ctx.session_approvals.is_always(self.name()).await {
-            let decision = approval::ask(
-                &ctx.approval,
-                ApprovalRequest {
+            let Some(decision) = ctx
+                .ask(ApprovalRequest {
                     tool: self.name().into(),
                     summary: format!("write_file {}  ({} → {} bytes)", target.display(), before.len(), a.content.len()),
                     diff_preview: Some(diff.clone()),
-                },
-            )
-            .await;
+                })
+                .await
+            else {
+                return Ok(ToolOutput::err("interrupted by user"));
+            };
             match decision {
                 ApprovalDecision::Deny => return Ok(ToolOutput::err("user denied")),
                 ApprovalDecision::Always => ctx.session_approvals.mark_always(self.name()).await,
@@ -140,15 +141,16 @@ impl Tool for EditFile {
         let diff = unified_diff(&before, &after, &target.display().to_string());
 
         if !ctx.session_approvals.is_always(self.name()).await {
-            let decision = approval::ask(
-                &ctx.approval,
-                ApprovalRequest {
+            let Some(decision) = ctx
+                .ask(ApprovalRequest {
                     tool: self.name().into(),
                     summary: format!("edit_file {}", target.display()),
                     diff_preview: Some(diff.clone()),
-                },
-            )
-            .await;
+                })
+                .await
+            else {
+                return Ok(ToolOutput::err("interrupted by user"));
+            };
             match decision {
                 ApprovalDecision::Deny => return Ok(ToolOutput::err("user denied")),
                 ApprovalDecision::Always => ctx.session_approvals.mark_always(self.name()).await,
@@ -202,15 +204,16 @@ impl Tool for ApplyPatch {
         }
 
         if !ctx.session_approvals.is_always(self.name()).await {
-            let decision = approval::ask(
-                &ctx.approval,
-                ApprovalRequest {
+            let Some(decision) = ctx
+                .ask(ApprovalRequest {
                     tool: self.name().into(),
                     summary: format!("apply_patch ({} hunked files)", patches.len()),
                     diff_preview: Some(preview(&a.unified_diff)),
-                },
-            )
-            .await;
+                })
+                .await
+            else {
+                return Ok(ToolOutput::err("interrupted by user"));
+            };
             match decision {
                 ApprovalDecision::Deny => return Ok(ToolOutput::err("user denied")),
                 ApprovalDecision::Always => ctx.session_approvals.mark_always(self.name()).await,

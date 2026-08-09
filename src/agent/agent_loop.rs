@@ -5,6 +5,7 @@ use futures::StreamExt;
 use jsonschema::Validator;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::agent::protocol::TurnEnvelope;
 use crate::agent::session::Session;
@@ -24,6 +25,14 @@ pub enum AgentEvent {
     Notice(String),
     TurnDone,
 }
+
+/// Left in the transcript when a turn ends without the model having answered.
+///
+/// The turn's user message is already in the history, and `Session::compact` drops whole
+/// steps by looking for user-message boundaries. Leaving a user message with no reply
+/// behind it puts two `user` roles in a row and moves a boundary the compactor reasons
+/// about, so an abandoned turn is closed off rather than left open.
+const TURN_ABANDONED: &str = "[this turn ended without an answer]";
 
 pub struct AgentConfig {
     pub model: String,
@@ -54,18 +63,29 @@ impl Agent {
     }
 
     /// Run one user turn end-to-end. Loops model→tools→model until the
-    /// model emits zero tool_calls or `max_steps` is reached.
+    /// model emits zero tool_calls, `max_steps` is reached, or `cancel` fires.
+    ///
+    /// `cancel` is created by the UI before the input is handed over, so the side that
+    /// has to react to a keystroke already holds the handle it needs. It is stored on the
+    /// tool context for the length of the turn, which is how a tool waiting on a
+    /// subprocess learns that the user has stopped caring about the answer.
     pub async fn run_user_turn(
         &mut self,
         user_input: String,
+        cancel: CancellationToken,
         events: mpsc::Sender<AgentEvent>,
     ) -> Result<()> {
+        self.ctx.cancel = cancel.clone();
         self.session.push(Message::user(user_input));
 
         let turn_schema = build_turn_schema(&self.registry);
         let validator = Validator::new(&turn_schema).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         for step in 0..self.cfg.max_steps {
+            if cancel.is_cancelled() {
+                self.abandon(&events, "interrupted").await;
+                return Ok(());
+            }
             // Before every call, not once per turn: a single tool result can be larger
             // than everything said so far, so the history can outgrow the window in the
             // middle of a turn as easily as between two.
@@ -77,9 +97,29 @@ impl Agent {
                     )))
                     .await;
             }
-            let raw = self.stream_one(&turn_schema, &events).await?;
-            let envelope = match self.parse_with_repair(&raw, &turn_schema, &validator).await {
+            let raw = match self.stream_one(&turn_schema, &cancel, &events).await {
+                Ok(raw) => raw,
+                Err(_) if cancel.is_cancelled() => {
+                    self.abandon(&events, "interrupted").await;
+                    return Ok(());
+                }
+                Err(e) => {
+                    let _ = events
+                        .send(AgentEvent::Notice(format!("backend error: {e:#}")))
+                        .await;
+                    self.abandon(&events, "stopped on a backend error").await;
+                    return Ok(());
+                }
+            };
+            let envelope = match self
+                .parse_with_repair(&raw, &turn_schema, &validator, &cancel)
+                .await
+            {
                 Ok(v) => v,
+                Err(_) if cancel.is_cancelled() => {
+                    self.abandon(&events, "interrupted").await;
+                    return Ok(());
+                }
                 Err(e) => {
                     let _ = events
                         .send(AgentEvent::Notice(format!(
@@ -116,6 +156,17 @@ impl Agent {
             }
 
             for tc in envelope.tool_calls {
+                // Every call the model just made needs a result, even the ones that will
+                // never run: the assistant turn listing them is already in the history,
+                // and a call with no answer behind it describes an action whose outcome
+                // the model cannot see. Say it was interrupted and move on.
+                if cancel.is_cancelled() {
+                    self.session.push(Message::tool(
+                        "[error] interrupted by user".to_string(),
+                        uuid::Uuid::new_v4().to_string(),
+                    ));
+                    continue;
+                }
                 let args_pretty = serde_json::to_string_pretty(&tc.arguments).unwrap_or_default();
                 let _ = events
                     .send(AgentEvent::ToolCall {
@@ -147,9 +198,21 @@ impl Agent {
         Ok(())
     }
 
+    /// Close an unanswered turn.
+    ///
+    /// The user message is already in the history; without a reply behind it the next
+    /// turn puts two `user` roles in a row, which is not a shape the compactor's
+    /// boundary search expects.
+    async fn abandon(&mut self, events: &mpsc::Sender<AgentEvent>, why: &str) {
+        self.session.push(Message::assistant(TURN_ABANDONED));
+        let _ = events.send(AgentEvent::Notice(why.to_string())).await;
+        let _ = events.send(AgentEvent::TurnDone).await;
+    }
+
     async fn stream_one(
         &self,
         schema: &Value,
+        cancel: &CancellationToken,
         events: &mpsc::Sender<AgentEvent>,
     ) -> Result<String> {
         let response_format = if self.cfg.grammar_enabled {
@@ -170,9 +233,21 @@ impl Agent {
             user: Some(self.session.id.clone()),
         };
 
-        let mut stream = self.backend.stream(req).await?;
+        let mut stream = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(anyhow::anyhow!("interrupted")),
+            r = self.backend.stream(req) => r?,
+        };
         let mut accum = String::new();
-        while let Some(piece) = stream.next().await {
+        loop {
+            let piece = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(anyhow::anyhow!("interrupted")),
+                p = stream.next() => match p {
+                    Some(p) => p,
+                    None => break,
+                },
+            };
             match piece {
                 Ok(p) => {
                     accum.push_str(&p);
@@ -189,6 +264,7 @@ impl Agent {
         raw: &str,
         schema: &Value,
         validator: &Validator,
+        cancel: &CancellationToken,
     ) -> Result<TurnEnvelope> {
         // Layer 2: tolerant parse + schema validate.
         let mut last_err: anyhow::Error;
@@ -231,7 +307,11 @@ impl Agent {
                 response_format: Some(ResponseFormat::json_schema("turn", schema.clone())),
                 user: Some(format!("{}-repair", self.session.id)),
             };
-            current = self.backend.complete(repair_req).await?;
+            current = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(anyhow::anyhow!("interrupted")),
+                r = self.backend.complete(repair_req) => r?,
+            };
         }
         unreachable!()
     }

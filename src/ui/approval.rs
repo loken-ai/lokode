@@ -45,7 +45,9 @@ impl<'a> ApprovalView<'a> {
             Span::styled("[N]o", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
             Span::styled("[A]lways", Style::default().fg(Color::Cyan)),
-            Span::raw(" (this session)"),
+            Span::raw(" (this session)  "),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw(" declines"),
         ]))
         .alignment(Alignment::Center);
         f.render_widget(footer, chunks[2]);

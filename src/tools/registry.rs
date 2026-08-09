@@ -5,8 +5,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
-use crate::sandbox::approval::{ApprovalSender, SessionApprovals};
+use crate::sandbox::approval::{
+    self, ApprovalDecision, ApprovalRequest, ApprovalSender, SessionApprovals,
+};
 
 #[derive(Clone)]
 pub struct ToolCtx {
@@ -19,9 +22,28 @@ pub struct ToolCtx {
     /// ever large relative to the window it has to fit in, and a ceiling set without
     /// reference to that window lets one file read exceed the entire conversation.
     pub max_output_chars: usize,
+    /// Cancelled when the user abandons the turn this tool call belongs to.
+    ///
+    /// A tool that can wait - on a subprocess, on a socket - must race its work against
+    /// this, or `Esc` only takes effect once the thing the user wanted to stop has
+    /// finished on its own.
+    pub cancel: CancellationToken,
 }
 
 impl ToolCtx {
+    /// Put a request to the user, unless the turn is abandoned while it is on screen.
+    ///
+    /// `None` means the turn was cancelled, which is not the same answer as `Deny`: the
+    /// user refused nothing, they stopped waiting. Callers report it as an interruption
+    /// so the model is not told it was denied something it never got asked about.
+    pub async fn ask(&self, req: ApprovalRequest) -> Option<ApprovalDecision> {
+        tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => None,
+            d = approval::ask(&self.approval, req) => Some(d),
+        }
+    }
+
     /// Cut `s` to what one result may contribute, saying so in the text so the model
     /// reads a deliberate elision rather than a file that ends mid-line.
     pub fn clamp(&self, mut s: String) -> String {

@@ -2,14 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers,
-};
-use crossterm::execute;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -18,6 +11,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tui_textarea::TextArea;
 
 use crate::agent::agent_loop::{Agent, AgentConfig, AgentEvent};
@@ -30,17 +24,41 @@ use crate::tools::registry::{Registry, ToolCtx};
 use crate::ui::approval::ApprovalView;
 use crate::ui::chat::Entry;
 use crate::ui::status::Status;
+use crate::ui::term;
+
+/// How long to let the agent finish what it is doing after being asked to stop.
+///
+/// It is asked, not killed: aborting the task can drop it inside a filesystem write and
+/// leave a file half-written. The grace period bounds how long a wedged tool can delay
+/// the exit before the process leaves anyway.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+
+/// One user turn handed to the agent, with the handle that abandons it.
+///
+/// The token is minted by the UI rather than the agent, because the side that has to
+/// react to `Esc` is the side that must already be holding it.
+struct TurnRequest {
+    text: String,
+    cancel: CancellationToken,
+}
 
 pub async fn run(cfg: AppConfig) -> Result<()> {
     let registry = Arc::new(build_registry(cfg.root.clone()));
     let (approval_tx, mut approval_rx) = approval::channel();
     let session_approvals = Arc::new(SessionApprovals::new());
 
+    // Cancelled when the application is going down. Every turn's token is a child of it,
+    // so quitting also stops whatever the agent is in the middle of.
+    let shutdown = CancellationToken::new();
+
     let ctx = ToolCtx {
         root: cfg.root.clone(),
         approval: approval_tx.clone(),
         session_approvals: session_approvals.clone(),
         max_output_chars: crate::agent::session::tool_output_chars(cfg.context_tokens, cfg.max_answer_tokens),
+        // Replaced with the turn's own token at the start of each turn; this stands in
+        // for the window before the first one arrives.
+        cancel: shutdown.child_token(),
     };
 
     let system = Agent::build_system_prompt(&registry);
@@ -65,12 +83,15 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     // Channels:
     //   input_tx → agent task ── pushes "user said X"
     //   agent_evt_tx → UI     ── streaming text + tool events
-    let (input_tx, mut input_rx) = mpsc::channel::<String>(4);
+    let (input_tx, mut input_rx) = mpsc::channel::<TurnRequest>(4);
     let (agent_evt_tx, mut agent_evt_rx) = mpsc::channel::<AgentEvent>(128);
     let agent_evt_tx_for_loop = agent_evt_tx.clone();
     let agent_task = tokio::spawn(async move {
-        while let Some(text) = input_rx.recv().await {
-            if let Err(e) = agent.run_user_turn(text, agent_evt_tx_for_loop.clone()).await {
+        while let Some(TurnRequest { text, cancel }) = input_rx.recv().await {
+            if let Err(e) = agent
+                .run_user_turn(text, cancel, agent_evt_tx_for_loop.clone())
+                .await
+            {
                 let _ = agent_evt_tx_for_loop
                     .send(AgentEvent::Notice(format!("agent error: {e:#}")))
                     .await;
@@ -79,26 +100,37 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         }
     });
 
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut term = Terminal::new(backend)?;
+    // The hook goes in before the terminal is taken, so the window in which a panic could
+    // escape uncovered never opens.
+    term::install_panic_hook();
+    let guard = term::TerminalGuard::new()?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
 
     let result = run_ui(
-        &mut term,
+        &mut terminal,
         &cfg,
         session_id,
+        &shutdown,
         input_tx,
         &mut agent_evt_rx,
         &mut approval_rx,
     )
     .await;
 
-    disable_raw_mode()?;
-    execute!(term.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
-    term.show_cursor()?;
-    agent_task.abort();
+    // Hand the screen back before anything else can print to it.
+    drop(guard);
+
+    // Ask the agent to stop rather than aborting it: the task could be inside a
+    // filesystem write, and dropping it there leaves a truncated file behind. Dropping
+    // `input_tx` above closed the channel, so the agent's own loop ends once the turn in
+    // flight notices the cancellation.
+    shutdown.cancel();
+    if tokio::time::timeout(SHUTDOWN_GRACE, agent_task).await.is_err() {
+        eprintln!(
+            "verve: the agent did not stop within {}s; exiting anyway",
+            SHUTDOWN_GRACE.as_secs()
+        );
+    }
     result
 }
 
@@ -137,19 +169,23 @@ struct UiState {
     pending_approval: Option<ApprovalPrompt>,
     busy: bool,
     step: usize,
+    /// Abandons the turn in flight. `None` between turns.
+    turn_cancel: Option<CancellationToken>,
 }
 
 async fn run_ui(
     term: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     cfg: &AppConfig,
     session_id: String,
-    input_tx: mpsc::Sender<String>,
+    shutdown: &CancellationToken,
+    input_tx: mpsc::Sender<TurnRequest>,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
 ) -> Result<()> {
     let mut state = UiState::default();
     state.entries.push(Entry::Notice(format!(
-        "Welcome. Type your request. Ctrl-C or Ctrl-Q to quit. Backend: {}",
+        "Welcome. Enter sends, Shift-Enter is a newline, Esc interrupts a running turn, \
+         PageUp/PageDown scroll, Ctrl-C or Ctrl-Q quits. Backend: {}",
         cfg.backend_url
     )));
 
@@ -247,6 +283,11 @@ async fn run_ui(
                     AgentEvent::TurnDone => {
                         state.busy = false;
                         state.step = 0;
+                        state.turn_cancel = None;
+                        // A turn only ends while a prompt is up if it was abandoned: the
+                        // tool that asked has already given up waiting, so the modal is
+                        // asking about something that will not happen either way.
+                        state.pending_approval = None;
                     }
                 }
             }
@@ -254,6 +295,14 @@ async fn run_ui(
             maybe_evt = events.next() => {
                 let Some(Ok(evt)) = maybe_evt else { continue };
                 if let Event::Key(key) = evt {
+                    // Quit is tested before anything else can swallow the key. It used to
+                    // sit after the approval branch, which returned early - so the one
+                    // screen the user most wants to escape from was the one screen where
+                    // Ctrl-C did nothing.
+                    if is_quit(&key) {
+                        return Ok(());
+                    }
+
                     if state.pending_approval.is_some() {
                         if let Some(decision) = approval_key(&key) {
                             if let Some(prompt) = state.pending_approval.take() {
@@ -263,11 +312,15 @@ async fn run_ui(
                         continue;
                     }
 
-                    if is_quit(&key) {
-                        return Ok(());
-                    }
                     if key.kind == KeyEventKind::Press {
                         match key.code {
+                            KeyCode::Esc if state.busy => {
+                                if let Some(cancel) = state.turn_cancel.take() {
+                                    cancel.cancel();
+                                    state.entries.push(Entry::Notice("interrupting…".into()));
+                                }
+                                continue;
+                            }
                             KeyCode::PageUp   => { state.scroll = state.scroll.saturating_add(5); continue; }
                             KeyCode::PageDown => { state.scroll = state.scroll.saturating_sub(5); continue; }
                             KeyCode::Enter if !key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -279,7 +332,11 @@ async fn run_ui(
                                 input.set_block(Block::default().borders(Borders::ALL).title(" input "));
                                 state.busy = true;
                                 state.step = 0;
-                                let _ = input_tx.send(text).await;
+                                // A child of the shutdown token, so quitting cancels the
+                                // turn in flight as well as this one's own Esc.
+                                let cancel = shutdown.child_token();
+                                state.turn_cancel = Some(cancel.clone());
+                                let _ = input_tx.send(TurnRequest { text, cancel }).await;
                                 continue;
                             }
                             _ => {}
@@ -303,12 +360,68 @@ fn is_quit(k: &KeyEvent) -> bool {
     )
 }
 
+/// Which decision a keystroke stands for at the approval modal.
+///
+/// `Enter` is deliberately absent. It is also the send key, so a user mid-sentence when
+/// the modal appears would approve a shell command they never read - the one outcome an
+/// approval flow exists to prevent. Approving is a letter you have to reach for.
 fn approval_key(k: &KeyEvent) -> Option<ApprovalDecision> {
     if k.kind != KeyEventKind::Press { return None; }
     match k.code {
-        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(ApprovalDecision::Once),
-        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc   => Some(ApprovalDecision::Deny),
-        KeyCode::Char('a') | KeyCode::Char('A')                  => Some(ApprovalDecision::Always),
+        KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalDecision::Once),
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(ApprovalDecision::Deny),
+        KeyCode::Char('a') | KeyCode::Char('A') => Some(ApprovalDecision::Always),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    /// Enter is the send key. If it also approves, a user who is mid-sentence when a
+    /// prompt appears authorises a shell command they never read.
+    #[test]
+    fn enter_does_not_approve() {
+        assert_eq!(approval_key(&press(KeyCode::Enter)), None);
+    }
+
+    /// Declining must stay reachable by the two gestures people already use to back out.
+    #[test]
+    fn declining_is_reachable() {
+        assert_eq!(approval_key(&press(KeyCode::Esc)), Some(ApprovalDecision::Deny));
+        assert_eq!(approval_key(&press(KeyCode::Char('n'))), Some(ApprovalDecision::Deny));
+    }
+
+    #[test]
+    fn approving_takes_a_letter() {
+        assert_eq!(approval_key(&press(KeyCode::Char('y'))), Some(ApprovalDecision::Once));
+        assert_eq!(approval_key(&press(KeyCode::Char('Y'))), Some(ApprovalDecision::Once));
+        assert_eq!(approval_key(&press(KeyCode::Char('a'))), Some(ApprovalDecision::Always));
+    }
+
+    /// A key with no meaning at the modal must leave it up rather than pick for the user.
+    #[test]
+    fn an_unrelated_key_decides_nothing() {
+        assert_eq!(approval_key(&press(KeyCode::Char('k'))), None);
+        assert_eq!(approval_key(&press(KeyCode::Tab)), None);
+    }
+
+    /// Quit is consulted before the approval branch, so these must be recognised as quit
+    /// even though the modal would otherwise read them as "not a decision".
+    #[test]
+    fn quit_is_recognised() {
+        assert!(is_quit(&ctrl('c')));
+        assert!(is_quit(&ctrl('q')));
+        assert!(!is_quit(&press(KeyCode::Char('c'))));
+        assert_eq!(approval_key(&ctrl('c')), None);
     }
 }

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 use crate::sandbox::allowlist;
-use crate::sandbox::approval::{self, ApprovalDecision, ApprovalRequest};
+use crate::sandbox::approval::{ApprovalDecision, ApprovalRequest};
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
 const DEFAULT_TIMEOUT_S: u64 = 60;
@@ -57,15 +57,16 @@ impl Tool for Bash {
         let timeout = Duration::from_secs(a.timeout_s.unwrap_or(DEFAULT_TIMEOUT_S).min(MAX_TIMEOUT_S));
 
         if !ctx.session_approvals.is_always(self.name()).await {
-            let decision = approval::ask(
-                &ctx.approval,
-                ApprovalRequest {
+            let Some(decision) = ctx
+                .ask(ApprovalRequest {
                     tool: self.name().into(),
                     summary: format!("$ {}  (cwd: {})", a.cmd, cwd.display()),
                     diff_preview: None,
-                },
-            )
-            .await;
+                })
+                .await
+            else {
+                return Ok(ToolOutput::err("interrupted by user"));
+            };
             match decision {
                 ApprovalDecision::Deny => return Ok(ToolOutput::err("user denied")),
                 ApprovalDecision::Always => ctx.session_approvals.mark_always(self.name()).await,
@@ -74,13 +75,23 @@ impl Tool for Bash {
         }
 
         let mut cmd = Command::new("/bin/sh");
+        // Without this, abandoning the turn leaves the command running: the future is
+        // dropped, nobody is left to read its output, and a build carries on burning the
+        // machine the user just told us to stop using.
+        cmd.kill_on_drop(true);
         cmd.arg("-lc").arg(&a.cmd).current_dir(&cwd);
 
         let fut = cmd.output();
-        let output = match tokio::time::timeout(timeout, fut).await {
-            Ok(Ok(o)) => o,
-            Ok(Err(e)) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
-            Err(_) => return Ok(ToolOutput::err(format!("timed out after {}s", timeout.as_secs()))),
+        let output = tokio::select! {
+            biased;
+            _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
+            r = tokio::time::timeout(timeout, fut) => match r {
+                Ok(Ok(o)) => o,
+                Ok(Err(e)) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
+                Err(_) => {
+                    return Ok(ToolOutput::err(format!("timed out after {}s", timeout.as_secs())))
+                }
+            },
         };
 
         let mut report = String::new();

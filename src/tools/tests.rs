@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::process::Command;
 
-use crate::sandbox::approval::{self, ApprovalDecision, ApprovalRequest};
+use crate::sandbox::approval::{ApprovalDecision, ApprovalRequest};
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
 const TIMEOUT_S: u64 = 600;
@@ -42,15 +42,16 @@ impl Tool for RunTests {
         }
 
         if !ctx.session_approvals.is_always(self.name()).await {
-            let decision = approval::ask(
-                &ctx.approval,
-                ApprovalRequest {
+            let Some(decision) = ctx
+                .ask(ApprovalRequest {
                     tool: self.name().into(),
                     summary: format!("run_tests [{label}]: {program} {}", argv.join(" ")),
                     diff_preview: None,
-                },
-            )
-            .await;
+                })
+                .await
+            else {
+                return Ok(ToolOutput::err("interrupted by user"));
+            };
             match decision {
                 ApprovalDecision::Deny => return Ok(ToolOutput::err("user denied")),
                 ApprovalDecision::Always => ctx.session_approvals.mark_always(self.name()).await,
@@ -59,12 +60,19 @@ impl Tool for RunTests {
         }
 
         let mut cmd = Command::new(program);
+        // A test suite is the longest thing this agent starts; abandoning the turn has to
+        // take the suite with it rather than leave it running unattended.
+        cmd.kill_on_drop(true);
         cmd.args(&argv).current_dir(&ctx.root);
         let fut = cmd.output();
-        let output = match tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_S), fut).await {
-            Ok(Ok(o)) => o,
-            Ok(Err(e)) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
-            Err(_) => return Ok(ToolOutput::err(format!("timed out after {TIMEOUT_S}s"))),
+        let output = tokio::select! {
+            biased;
+            _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
+            r = tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_S), fut) => match r {
+                Ok(Ok(o)) => o,
+                Ok(Err(e)) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
+                Err(_) => return Ok(ToolOutput::err(format!("timed out after {TIMEOUT_S}s"))),
+            },
         };
 
         let mut report = format!("[{label}] exit: {}\n", output.status.code().unwrap_or(-1));

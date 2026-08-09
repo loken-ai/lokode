@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::sandbox::approval::{self, ApprovalDecision, ApprovalRequest};
+use crate::sandbox::approval::{ApprovalDecision, ApprovalRequest};
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
 
@@ -38,15 +38,16 @@ impl Tool for WebFetch {
         }
 
         if !ctx.session_approvals.is_always(self.name()).await {
-            let decision = approval::ask(
-                &ctx.approval,
-                ApprovalRequest {
+            let Some(decision) = ctx
+                .ask(ApprovalRequest {
                     tool: self.name().into(),
                     summary: format!("GET {}", a.url),
                     diff_preview: None,
-                },
-            )
-            .await;
+                })
+                .await
+            else {
+                return Ok(ToolOutput::err("interrupted by user"));
+            };
             match decision {
                 ApprovalDecision::Deny => return Ok(ToolOutput::err("user denied")),
                 ApprovalDecision::Always => ctx.session_approvals.mark_always(self.name()).await,
@@ -58,14 +59,22 @@ impl Tool for WebFetch {
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("verve/0.1")
             .build()?;
-        let resp = match client.get(&a.url).send().await {
-            Ok(r) => r,
-            Err(e) => return Ok(ToolOutput::err(format!("request failed: {e}"))),
+        let resp = tokio::select! {
+            biased;
+            _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
+            r = client.get(&a.url).send() => match r {
+                Ok(r) => r,
+                Err(e) => return Ok(ToolOutput::err(format!("request failed: {e}"))),
+            },
         };
         let status = resp.status();
-        let text = match resp.text().await {
-            Ok(s) => s,
-            Err(e) => return Ok(ToolOutput::err(format!("read body failed: {e}"))),
+        let text = tokio::select! {
+            biased;
+            _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
+            r = resp.text() => match r {
+                Ok(s) => s,
+                Err(e) => return Ok(ToolOutput::err(format!("read body failed: {e}"))),
+            },
         };
         let body = ctx.clamp(strip_html(&text));
         Ok(ToolOutput::ok(format!("status: {status}\n\n{body}")))

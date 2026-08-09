@@ -13,6 +13,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Parser;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use verve::agent::agent_loop::{Agent, AgentConfig, AgentEvent};
 use verve::agent::session::Session;
@@ -69,6 +70,8 @@ async fn main() -> Result<()> {
 
     let (approval_tx, mut approval_rx) = approval::channel();
     let session_approvals = Arc::new(SessionApprovals::new());
+    // Nothing cancels this run, but the turn still needs a token to carry.
+    let cancel = CancellationToken::new();
 
     let mut reg = Registry::new();
     reg.register(ReadFile);
@@ -94,6 +97,7 @@ async fn main() -> Result<()> {
             cli.context_tokens,
             cli.max_answer_tokens,
         ),
+        cancel: cancel.clone(),
     };
 
     let mut agent = Agent {
@@ -131,7 +135,7 @@ async fn main() -> Result<()> {
 
     let (evt_tx, mut evt_rx) = mpsc::channel::<AgentEvent>(128);
     let driver = tokio::spawn(async move {
-        agent.run_user_turn(cli.prompt, evt_tx).await
+        agent.run_user_turn(cli.prompt, cancel, evt_tx).await
     });
 
     let mut streaming = String::new();
