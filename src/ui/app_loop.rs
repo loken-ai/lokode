@@ -15,9 +15,10 @@ use tokio_util::sync::CancellationToken;
 use tui_textarea::TextArea;
 
 use crate::agent::agent_loop::{Agent, AgentConfig, AgentEvent};
+use crate::agent::protocol::ToolProtocol;
 use crate::agent::session::Session;
 use crate::agent::transcript::{self, Record, Transcript};
-use crate::app::{AppConfig, Resume};
+use crate::app::{AppConfig, ProtocolChoice, Resume};
 use crate::backend::client::BackendClient;
 use crate::sandbox::approval::{self, ApprovalDecision, ApprovalPrompt, SessionApprovals};
 use crate::tools::lsp::LspPool;
@@ -79,7 +80,13 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         None => anyhow::bail!("--model is required unless resuming a session that recorded one"),
     };
 
-    let system = Agent::build_system_prompt(&registry);
+    // `auto` starts native and drops to the envelope the first time a backend refuses it,
+    // which is a decision the agent makes once and then keeps.
+    let protocol = match cfg.tool_protocol {
+        ProtocolChoice::Envelope => ToolProtocol::Envelope,
+        ProtocolChoice::Auto | ProtocolChoice::Native => ToolProtocol::Native,
+    };
+    let system = Agent::build_system_prompt(&registry, protocol);
     let mut session = Session::new(system, cfg.context_tokens, cfg.max_answer_tokens);
     let restored = earlier.as_ref().map(|e| e.messages.len()).unwrap_or(0);
     let mut recorder: Option<tokio::task::JoinHandle<()>> = None;
@@ -122,6 +129,8 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         grammar_enabled: cfg.grammar_enabled,
         max_steps: cfg.max_steps,
         max_answer_tokens: cfg.max_answer_tokens,
+        protocol,
+        allow_fallback: cfg.tool_protocol == ProtocolChoice::Auto,
     };
 
     let mut agent = Agent {
@@ -162,6 +171,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         &mut terminal,
         &cfg,
         &model,
+        protocol,
         session_id,
         restored,
         &shutdown,
@@ -274,6 +284,7 @@ async fn run_ui(
     term: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     cfg: &AppConfig,
     model: &str,
+    protocol: ToolProtocol,
     session_id: String,
     restored: usize,
     shutdown: &CancellationToken,
@@ -284,8 +295,10 @@ async fn run_ui(
     let mut state = UiState::default();
     state.entries.push(Entry::Notice(format!(
         "Welcome. Enter sends, Shift-Enter is a newline, Esc interrupts a running turn, \
-         PageUp/PageDown scroll, Ctrl-C or Ctrl-Q quits. Backend: {}",
-        cfg.backend_url
+         PageUp/PageDown scroll, Ctrl-C or Ctrl-Q quits.\n\
+         Backend: {} · tool calls: {}",
+        cfg.backend_url,
+        protocol.label()
     )));
     if restored > 0 {
         state.entries.push(Entry::Notice(format!(

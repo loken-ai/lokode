@@ -63,6 +63,14 @@ struct Cli {
     /// Resume the most recent session recorded for this root.
     #[arg(long = "continue", conflicts_with = "resume")]
     continue_last: bool,
+
+    /// How to ask the model for tool calls.
+    ///
+    /// `auto` uses the server's own tool-calling and falls back to the JSON envelope if it
+    /// is refused. Pin `envelope` for a backend that accepts the `tools` field and then
+    /// ignores it, which cannot be told apart from a model choosing not to call anything.
+    #[arg(long, value_enum, default_value = "auto")]
+    tool_protocol: app::ProtocolChoice,
 }
 
 fn main() -> Result<()> {
@@ -105,6 +113,7 @@ async fn run(cli: Cli) -> Result<()> {
         allow_hosts: cli.allow_hosts.into_iter().collect(),
         transcripts: !cli.no_transcript,
         resume,
+        tool_protocol: cli.tool_protocol,
     };
 
     app::run(cfg).await

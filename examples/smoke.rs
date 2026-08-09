@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use verve::agent::agent_loop::{Agent, AgentConfig, AgentEvent};
+use verve::agent::protocol::ToolProtocol;
 use verve::agent::session::Session;
 use verve::backend::client::BackendClient;
 use verve::sandbox::approval::{self, ApprovalDecision, SessionApprovals};
@@ -56,6 +57,9 @@ struct Cli {
     /// Disable Layer 1 grammar to exercise the Layer 2/3 repair pipeline.
     #[arg(long)]
     no_grammar: bool,
+    /// Use the server's own tool-calling instead of the JSON envelope.
+    #[arg(long)]
+    native_tools: bool,
 }
 
 #[tokio::main]
@@ -102,11 +106,17 @@ async fn main() -> Result<()> {
         allow_hosts: Arc::new(Default::default()),
     };
 
+    let protocol = if cli.native_tools {
+        ToolProtocol::Native
+    } else {
+        ToolProtocol::Envelope
+    };
+
     let mut agent = Agent {
         backend: BackendClient::new(cli.backend_url),
         registry: registry.clone(),
         session: Session::new(
-            Agent::build_system_prompt(&registry),
+            Agent::build_system_prompt(&registry, protocol),
             cli.context_tokens,
             cli.max_answer_tokens,
         ),
@@ -115,6 +125,8 @@ async fn main() -> Result<()> {
             grammar_enabled: !cli.no_grammar,
             max_steps: cli.max_steps,
             max_answer_tokens: cli.max_answer_tokens,
+            protocol,
+            allow_fallback: false,
         },
         ctx,
     };

@@ -12,6 +12,51 @@ pub struct Message {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Calls an assistant turn made, in the native protocol.
+    ///
+    /// Sent back verbatim on the next request: a `role: "tool"` message is only meaningful
+    /// against the call it answers, and a server that checks will reject one whose
+    /// `tool_call_id` matches nothing it was shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+/// One call, as the wire carries it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type", default = "function_kind")]
+    pub kind: String,
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    pub name: String,
+    /// The arguments object, as a string of JSON.
+    ///
+    /// A string, not an object - that is what the format says, and it is why a model can
+    /// get the JSON wrong here in exactly the ways the repair pass already knows about.
+    pub arguments: String,
+}
+
+fn function_kind() -> String {
+    "function".into()
+}
+
+/// A tool offered to the model in the native protocol.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolSpec {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: FunctionSpec,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionSpec {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
 }
 
 impl Message {
@@ -21,6 +66,7 @@ impl Message {
             content: content.into(),
             name: None,
             tool_call_id: None,
+            tool_calls: None,
         }
     }
     pub fn user(content: impl Into<String>) -> Self {
@@ -29,6 +75,7 @@ impl Message {
             content: content.into(),
             name: None,
             tool_call_id: None,
+            tool_calls: None,
         }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
@@ -37,6 +84,17 @@ impl Message {
             content: content.into(),
             name: None,
             tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+    /// An assistant turn that asked for tools to be run.
+    pub fn assistant_calling(content: impl Into<String>, calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(calls),
         }
     }
     pub fn tool(content: impl Into<String>, id: impl Into<String>) -> Self {
@@ -45,6 +103,7 @@ impl Message {
             content: content.into(),
             name: None,
             tool_call_id: Some(id.into()),
+            tool_calls: None,
         }
     }
 }
@@ -96,6 +155,12 @@ pub struct ChatCompletionRequest {
     /// worth having where they are on offer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,
+    /// Tools offered in the native protocol. Absent in the envelope protocol, where the
+    /// tools are described in the system prompt and constrained by `response_format`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ToolSpec>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -137,4 +202,28 @@ pub struct Usage {
 pub struct ChunkDelta {
     #[serde(default)]
     pub content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<ToolCallDelta>>,
+}
+
+/// A fragment of a tool call.
+///
+/// The name arrives once and the arguments arrive a few characters at a time, so the
+/// pieces have to be reassembled by `index` before any of it means anything.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolCallDelta {
+    #[serde(default)]
+    pub index: usize,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub function: Option<FunctionDelta>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FunctionDelta {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub arguments: Option<String>,
 }

@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 
+use crate::backend::wire::{FunctionSpec, ToolSpec};
 use crate::tools::registry::Registry;
 
 /// Builds the per-turn JSON Schema enforced server-side by `llguidance`.
@@ -48,6 +49,27 @@ pub fn build_turn_schema(reg: &Registry) -> Value {
         "required": ["assistant_text", "tool_calls"],
         "additionalProperties": false
     })
+}
+
+/// The registry as the native protocol wants to see it.
+///
+/// The same per-tool schemas the envelope grammar is built from, carried in the field the
+/// server understands instead of described in the preamble. Sorted, because a stable
+/// order is a stable prompt prefix, and the server reuses its KV cache on one.
+pub fn tool_specs(reg: &Registry) -> Vec<ToolSpec> {
+    let mut tools: Vec<_> = reg.iter().collect();
+    tools.sort_by_key(|(k, _)| **k);
+    tools
+        .into_iter()
+        .map(|(_, tool)| ToolSpec {
+            kind: "function".into(),
+            function: FunctionSpec {
+                name: tool.name().into(),
+                description: tool.description().into(),
+                parameters: tool.args_schema(),
+            },
+        })
+        .collect()
 }
 
 /// Description block prepended to the system prompt so the model knows

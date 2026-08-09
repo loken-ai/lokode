@@ -105,6 +105,21 @@ impl Session {
         self.transcript.as_ref()
     }
 
+    /// Replace the preamble in place.
+    ///
+    /// Used when the protocol changes mid-session: the system message states the contract
+    /// the model is being held to, so it has to change with it. Rewritten rather than
+    /// appended, because two contradictory contracts is worse than either.
+    pub fn set_system_prompt(&mut self, prompt: String) {
+        if let Some(first) = self.history.first_mut() {
+            if first.role == "system" {
+                first.content = prompt;
+                return;
+            }
+        }
+        self.history.insert(0, Message::system(prompt));
+    }
+
     pub fn push(&mut self, m: Message) {
         if let Some(t) = &self.transcript {
             t.append(Record::Message(m.clone()));

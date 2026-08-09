@@ -28,6 +28,19 @@ pub struct AppConfig {
     /// Whether to record this session to disk.
     pub transcripts: bool,
     pub resume: Option<Resume>,
+    pub tool_protocol: ProtocolChoice,
+}
+
+/// How tools should be asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ProtocolChoice {
+    /// Try the server's own tool-calling, and drop to the envelope if it refuses.
+    Auto,
+    /// Insist on the server's tool-calling.
+    Native,
+    /// A single JSON object per turn, constrained by a generated grammar. Needs nothing
+    /// from the server beyond a completion.
+    Envelope,
 }
 
 pub async fn run(cfg: AppConfig) -> Result<()> {

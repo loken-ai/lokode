@@ -6,17 +6,29 @@ use anyhow::{anyhow, Context, Result};
 use eventsource_stream::Eventsource;
 use futures::stream::{Stream, StreamExt};
 
-use crate::backend::wire::{ChatChunk, ChatCompletionRequest, StreamOptions, Usage};
+use crate::backend::wire::{ChatChunk, ChatCompletionRequest, StreamOptions, ToolCallDelta, Usage};
 
 /// What a streaming response hands back as it arrives.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     Delta(String),
+    /// A fragment of a native tool call, to be reassembled by index.
+    Call(ToolCallDelta),
     /// The end of generation, carrying what the server was willing to say about it.
     End {
         finish_reason: Option<String>,
         usage: Option<Usage>,
     },
+}
+
+/// Raised when a server will not take something the request asked for.
+///
+/// Distinguished from an ordinary refusal so the caller can drop the feature and try
+/// again rather than give up on the turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unsupported {
+    Usage,
+    NativeTools,
 }
 
 pub type ChunkStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
@@ -132,7 +144,7 @@ impl BackendClient {
                 Ok(resp) => break resp,
                 // A server that does not know the field says so with a 4xx. Give up the
                 // token counts rather than the request.
-                Err(e) if asked_for_usage && mentions_stream_options(&e) => {
+                Err(e) if asked_for_usage && mentions(&e, &["stream_options", "include_usage"]) => {
                     tracing::warn!(
                         why = %e,
                         "backend will not take stream_options; giving up token counts for this session"
@@ -140,49 +152,33 @@ impl BackendClient {
                     self.usage_supported.store(false, Ordering::Relaxed);
                     continue;
                 }
+                // Not something to work around here: the caller has to change protocol,
+                // which means changing the system prompt and how the answer is read.
+                Err(e) if req.tools.is_some() && mentions(&e, &["tools", "tool_choice"]) => {
+                    tracing::warn!(why = %e, "backend will not take native tool calls");
+                    return Err(e.context(UNSUPPORTED_NATIVE_TOOLS));
+                }
                 Err(e) => return Err(e),
             }
         };
 
         let sse = resp.bytes_stream().eventsource();
-        let mapped = sse.filter_map(|ev| async move {
-            match ev {
-                Err(e) => Some(Err(anyhow!("sse: {e}"))),
-                Ok(event) => {
-                    if event.data.trim() == "[DONE]" {
-                        return None;
-                    }
-                    match serde_json::from_str::<ChatChunk>(&event.data) {
-                        Ok(c) => {
-                            let mut piece = String::new();
-                            let mut finish_reason = None;
-                            for choice in c.choices {
-                                if let Some(s) = choice.delta.content {
-                                    piece.push_str(&s);
-                                }
-                                if choice.finish_reason.is_some() {
-                                    finish_reason = choice.finish_reason;
-                                }
-                            }
-                            // The usage chunk carries no content and the chunk that ends
-                            // generation may carry both, so an end is reported whenever
-                            // either arrives and the deltas are kept separate.
-                            if finish_reason.is_some() || c.usage.is_some() {
-                                return Some(Ok(StreamEvent::End {
-                                    finish_reason,
-                                    usage: c.usage,
-                                }));
-                            }
-                            if piece.is_empty() {
-                                None
-                            } else {
-                                Some(Ok(StreamEvent::Delta(piece)))
-                            }
-                        }
-                        Err(e) => Some(Err(anyhow!("decode chunk: {e}: raw={}", event.data))),
-                    }
+        // One chunk can carry several things at once - a piece of prose, fragments of more
+        // than one tool call, and the reason generation ended - so a chunk becomes a list
+        // of events rather than one.
+        let mapped = sse.flat_map(|ev| {
+            let events: Vec<Result<StreamEvent>> = match ev {
+                Err(e) => vec![Err(anyhow!("sse: {e}"))],
+                Ok(event) if event.data.trim() == "[DONE]" => {
+                    let _ = event;
+                    Vec::new()
                 }
-            }
+                Ok(event) => match serde_json::from_str::<ChatChunk>(&event.data) {
+                    Ok(c) => events_of(c).into_iter().map(Ok).collect(),
+                    Err(e) => vec![Err(anyhow!("decode chunk: {e}: raw={}", event.data))],
+                },
+            };
+            futures::stream::iter(events)
         });
 
         Ok(Box::pin(mapped))
@@ -217,6 +213,37 @@ impl BackendClient {
         }
         unreachable!("the loop returns on its last attempt")
     }
+}
+
+/// Everything one chunk has to say.
+fn events_of(c: ChatChunk) -> Vec<StreamEvent> {
+    let mut out = Vec::new();
+    let mut text = String::new();
+    let mut finish_reason = None;
+
+    for choice in c.choices {
+        if let Some(s) = choice.delta.content {
+            text.push_str(&s);
+        }
+        for call in choice.delta.tool_calls.into_iter().flatten() {
+            out.push(StreamEvent::Call(call));
+        }
+        if choice.finish_reason.is_some() {
+            finish_reason = choice.finish_reason;
+        }
+    }
+    if !text.is_empty() {
+        out.insert(0, StreamEvent::Delta(text));
+    }
+    // The usage report arrives on a chunk of its own, after the one that ends generation,
+    // so an end is reported whenever either shows up.
+    if finish_reason.is_some() || c.usage.is_some() {
+        out.push(StreamEvent::End {
+            finish_reason,
+            usage: c.usage,
+        });
+    }
+    out
 }
 
 /// Whether a failure is worth another attempt.
@@ -254,9 +281,17 @@ fn classify(status: reqwest::StatusCode, body: &str) -> Retry {
     }
 }
 
-fn mentions_stream_options(e: &anyhow::Error) -> bool {
+/// Marker put on the error when a backend rejects native tool calls, so the agent can
+/// recognise it after the error has travelled and drop to the envelope protocol.
+pub const UNSUPPORTED_NATIVE_TOOLS: &str = "backend does not support native tool calls";
+
+/// Whether a failure names one of the fields we could stop sending.
+///
+/// Matched on the text because that is all a rejected request gives back - the reason is
+/// prose in a body, and every implementation words it differently.
+fn mentions(e: &anyhow::Error, needles: &[&str]) -> bool {
     let text = format!("{e:#}");
-    text.contains("stream_options") || text.contains("include_usage")
+    needles.iter().any(|n| text.contains(n))
 }
 
 #[cfg(test)]
@@ -300,9 +335,9 @@ mod tests {
     fn a_complaint_about_stream_options_is_recognised() {
         let e = anyhow!("backend 400 Bad Request: unknown field `stream_options`")
             .context("POST http://x/v1/chat/completions");
-        assert!(mentions_stream_options(&e));
+        assert!(mentions(&e, &["stream_options", "include_usage"]));
 
         let unrelated = anyhow!("backend 400 Bad Request: model not found");
-        assert!(!mentions_stream_options(&unrelated));
+        assert!(!mentions(&unrelated, &["stream_options", "include_usage"]));
     }
 }

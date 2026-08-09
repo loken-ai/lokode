@@ -7,13 +7,16 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::protocol::TurnEnvelope;
+use crate::agent::protocol::{
+    CallAccumulator, ModelTurn, ResolvedCall, ToolProtocol, TurnEnvelope,
+};
 use crate::agent::session::Session;
-use crate::backend::client::{BackendClient, StreamEvent};
+use crate::backend::client::{BackendClient, StreamEvent, UNSUPPORTED_NATIVE_TOOLS};
 use crate::backend::repair::{self, MAX_REPAIR_ATTEMPTS};
-use crate::backend::schema::{build_turn_schema, tool_manifest};
-use crate::backend::wire::Usage;
-use crate::backend::wire::{ChatCompletionRequest, Message, ResponseFormat};
+use crate::backend::schema::{build_turn_schema, tool_manifest, tool_specs};
+use crate::backend::wire::{
+    ChatCompletionRequest, FunctionCall, Message, ResponseFormat, ToolCall, Usage,
+};
 use crate::tools::registry::{Registry, ToolCtx, ToolOutput};
 
 /// Events the agent loop emits so the UI can render progress.
@@ -42,6 +45,8 @@ const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 #[derive(Default)]
 struct Completion {
     text: String,
+    /// Native tool-call fragments, still to be reassembled.
+    calls: CallAccumulator,
     /// `"length"` means the answer was cut off rather than finished.
     finish_reason: Option<String>,
     usage: Option<Usage>,
@@ -52,6 +57,14 @@ pub struct AgentConfig {
     pub grammar_enabled: bool,
     pub max_steps: usize,
     pub max_answer_tokens: usize,
+    /// How to ask for tools. Changed at most once per session, when a backend turns out
+    /// not to support the native protocol.
+    pub protocol: ToolProtocol,
+    /// Whether a refusal of native tool calls may drop the session to the envelope.
+    ///
+    /// False when the user pinned a protocol: asking for one and silently getting the
+    /// other is worse than being told the backend cannot do what was asked.
+    pub allow_fallback: bool,
 }
 
 pub struct Agent {
@@ -63,16 +76,40 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn build_system_prompt(reg: &Registry) -> String {
-        format!(
-            "You are a local-first code agent driving a TUI on the user's machine.\n\
-             Respond with a single JSON object matching the schema:\n\
-               {{ \"assistant_text\": \"<prose to user>\", \"tool_calls\": [ {{ \"name\": <tool>, \"arguments\": {{...}} }} ] }}\n\
-             Emit zero tool_calls when the task is finished or when you only need to talk.\n\
-             Tool results will be returned to you as role=tool messages on the next turn.\n\n\
-             {}",
-            tool_manifest(reg)
-        )
+    /// The preamble, which states the contract the chosen protocol actually enforces.
+    ///
+    /// In the native protocol the tools travel in their own field and the server states
+    /// the calling convention itself, so repeating a JSON schema here would describe a
+    /// shape the model is not being asked for.
+    pub fn build_system_prompt(reg: &Registry, protocol: ToolProtocol) -> String {
+        match protocol {
+            ToolProtocol::Native => format!(
+                "You are a local-first code agent driving a TUI on the user's machine.\n\
+                 Call the tools you have been given to inspect and change the project.\n\
+                 Stop calling tools when the task is finished or when you only need to talk.\n\n\
+                 {}",
+                tool_manifest(reg)
+            ),
+            ToolProtocol::Envelope => format!(
+                "You are a local-first code agent driving a TUI on the user's machine.\n\
+                 Respond with a single JSON object matching the schema:\n\
+                   {{ \"assistant_text\": \"<prose to user>\", \"tool_calls\": [ {{ \"name\": <tool>, \"arguments\": {{...}} }} ] }}\n\
+                 Emit zero tool_calls when the task is finished or when you only need to talk.\n\
+                 Tool results will be returned to you as role=tool messages on the next turn.\n\n\
+                 {}",
+                tool_manifest(reg)
+            ),
+        }
+    }
+
+    /// Swap protocol and rewrite the preamble to match.
+    ///
+    /// The system message states the contract, so changing how tools are asked for
+    /// without changing it would leave the model reading instructions for the other one.
+    fn fall_back_to_envelope(&mut self) {
+        self.cfg.protocol = ToolProtocol::Envelope;
+        let preamble = Self::build_system_prompt(&self.registry, ToolProtocol::Envelope);
+        self.session.set_system_prompt(preamble);
     }
 
     /// Run one user turn end-to-end. Loops model→tools→model until the
@@ -122,7 +159,28 @@ impl Agent {
                     .await;
             }
             let sent_chars = self.session.size_chars();
-            let completion = match self.stream_one(&turn_schema, &cancel, &events).await {
+            let mut attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+
+            // A backend that will not take native tool calls says so by refusing the
+            // request. Nothing has been said to the user yet, so the same step can be run
+            // again under the protocol that does not need the server's cooperation.
+            if let Err(e) = &attempt {
+                if self.cfg.allow_fallback
+                    && self.cfg.protocol == ToolProtocol::Native
+                    && format!("{e:#}").contains(UNSUPPORTED_NATIVE_TOOLS)
+                {
+                    tracing::warn!("falling back to the envelope protocol for this session");
+                    self.fall_back_to_envelope();
+                    let _ = events
+                        .send(AgentEvent::Notice(
+                            "backend does not do native tool calls; using the JSON envelope".into(),
+                        ))
+                        .await;
+                    attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+                }
+            }
+
+            let completion = match attempt {
                 Ok(c) => c,
                 Err(_) if cancel.is_cancelled() => {
                     self.abandon(&events, "interrupted").await;
@@ -168,9 +226,9 @@ impl Agent {
                     .await;
             }
 
-            let raw = completion.text;
-            let envelope = match self
-                .parse_with_repair(&raw, &turn_schema, &validator, &cancel)
+            let raw = completion.text.clone();
+            let turn = match self
+                .read_turn(completion, &turn_schema, &validator, &cancel)
                 .await
             {
                 Ok(v) => v,
@@ -191,59 +249,47 @@ impl Agent {
                 }
             };
 
-            // Echo assistant_text to the UI
-            if !envelope.assistant_text.is_empty() {
+            if !turn.text.is_empty() {
                 let _ = events
-                    .send(AgentEvent::AssistantText(envelope.assistant_text.clone()))
+                    .send(AgentEvent::AssistantText(turn.text.clone()))
                     .await;
             }
 
-            // Persist the JSON envelope in history (the model expects to see its own prior tool_calls).
-            let assistant_serialised = serde_json::to_string(&serde_json::json!({
-                "assistant_text": envelope.assistant_text,
-                "tool_calls": envelope.tool_calls.iter().map(|tc| serde_json::json!({
-                    "name": tc.name,
-                    "arguments": tc.arguments,
-                })).collect::<Vec<_>>(),
-            }))?;
-            self.session.push(Message::assistant(assistant_serialised));
+            self.record_assistant_turn(&turn)?;
 
-            if envelope.tool_calls.is_empty() {
+            if turn.calls.is_empty() {
                 let _ = events.send(AgentEvent::TurnDone).await;
                 return Ok(());
             }
 
-            for tc in envelope.tool_calls {
+            for call in turn.calls {
                 // Every call the model just made needs a result, even the ones that will
                 // never run: the assistant turn listing them is already in the history,
                 // and a call with no answer behind it describes an action whose outcome
                 // the model cannot see. Say it was interrupted and move on.
                 if cancel.is_cancelled() {
-                    self.session.push(Message::tool(
-                        "[error] interrupted by user".to_string(),
-                        uuid::Uuid::new_v4().to_string(),
-                    ));
+                    self.session
+                        .push(Message::tool("[error] interrupted by user", call.id));
                     continue;
                 }
-                let args_pretty = serde_json::to_string_pretty(&tc.arguments).unwrap_or_default();
+                let args_pretty = serde_json::to_string_pretty(&call.arguments).unwrap_or_default();
                 let _ = events
                     .send(AgentEvent::ToolCall {
-                        name: tc.name.clone(),
+                        name: call.name.clone(),
                         args_pretty,
                     })
                     .await;
-                let tool_id = uuid::Uuid::new_v4().to_string();
-                let result = self.dispatch_tool(&tc.name, tc.arguments).await;
+                let result = self.dispatch_tool(&call.name, call.arguments).await;
                 let _ = events
                     .send(AgentEvent::ToolResult {
-                        name: tc.name.clone(),
+                        name: call.name.clone(),
                         output: result.clone(),
                     })
                     .await;
                 let prefix = if result.is_error { "[error] " } else { "" };
                 self.session.push(Message::tool(
                     format!("{prefix}{}", result.content),
-                    tool_id,
+                    call.id,
                 ));
             }
         }
@@ -269,16 +315,113 @@ impl Agent {
         let _ = events.send(AgentEvent::TurnDone).await;
     }
 
+    /// Turn a completion into the one shape the loop reads, whichever protocol produced it.
+    async fn read_turn(
+        &mut self,
+        completion: Completion,
+        schema: &Value,
+        validator: &Validator,
+        cancel: &CancellationToken,
+    ) -> Result<ModelTurn> {
+        match self.cfg.protocol {
+            ToolProtocol::Native => {
+                let mut calls = Vec::new();
+                for (id, name, arguments) in completion.calls.finish() {
+                    // The arguments come over as a string of JSON the model wrote, so they
+                    // are wrong in the same ways the envelope's are, and earn the same
+                    // tolerant parse. What is not repaired here is the name: a call to a
+                    // tool that does not exist is refused by `dispatch_tool`, which tells
+                    // the model so and lets it try again.
+                    let arguments = repair::tolerant_parse(&arguments).unwrap_or(Value::Null);
+                    calls.push(ResolvedCall {
+                        // A server that omits the id leaves us to invent one; it will only
+                        // ever be matched against the result we return for it.
+                        id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                        name,
+                        arguments,
+                    });
+                }
+                Ok(ModelTurn {
+                    text: completion.text,
+                    calls,
+                })
+            }
+            ToolProtocol::Envelope => {
+                let envelope = self
+                    .parse_with_repair(&completion.text, schema, validator, cancel)
+                    .await?;
+                Ok(ModelTurn {
+                    text: envelope.assistant_text,
+                    calls: envelope
+                        .tool_calls
+                        .into_iter()
+                        .map(|tc| ResolvedCall {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            name: tc.name,
+                            arguments: tc.arguments,
+                        })
+                        .collect(),
+                })
+            }
+        }
+    }
+
+    /// Put the assistant's turn into the history in the form the protocol expects to see
+    /// it again.
+    ///
+    /// The model is shown its own previous turn on the next request, so it has to be
+    /// recorded the way that protocol reads: `tool_calls` on the message natively, and the
+    /// serialised envelope otherwise. Recording it in the other one's shape is how a model
+    /// ends up unable to see what it just asked for.
+    fn record_assistant_turn(&mut self, turn: &ModelTurn) -> Result<()> {
+        match self.cfg.protocol {
+            ToolProtocol::Native if !turn.calls.is_empty() => {
+                let calls = turn
+                    .calls
+                    .iter()
+                    .map(|c| ToolCall {
+                        id: c.id.clone(),
+                        kind: "function".into(),
+                        function: FunctionCall {
+                            name: c.name.clone(),
+                            arguments: serde_json::to_string(&c.arguments)
+                                .unwrap_or_else(|_| "{}".into()),
+                        },
+                    })
+                    .collect();
+                self.session
+                    .push(Message::assistant_calling(turn.text.clone(), calls));
+            }
+            ToolProtocol::Native => {
+                self.session.push(Message::assistant(turn.text.clone()));
+            }
+            ToolProtocol::Envelope => {
+                let serialised = serde_json::to_string(&serde_json::json!({
+                    "assistant_text": turn.text,
+                    "tool_calls": turn.calls.iter().map(|c| serde_json::json!({
+                        "name": c.name,
+                        "arguments": c.arguments,
+                    })).collect::<Vec<_>>(),
+                }))?;
+                self.session.push(Message::assistant(serialised));
+            }
+        }
+        Ok(())
+    }
+
     async fn stream_one(
         &self,
         schema: &Value,
         cancel: &CancellationToken,
         events: &mpsc::Sender<AgentEvent>,
     ) -> Result<Completion> {
-        let response_format = if self.cfg.grammar_enabled {
-            Some(ResponseFormat::json_schema("turn", schema.clone()))
-        } else {
-            None
+        let native = self.cfg.protocol == ToolProtocol::Native;
+        // The grammar constrains the envelope. Under the native protocol there is no
+        // envelope to constrain, and forcing this schema would demand an object the model
+        // is not being asked to produce.
+        let response_format = match (native, self.cfg.grammar_enabled) {
+            (false, true) => Some(ResponseFormat::json_schema("turn", schema.clone())),
+            _ => None,
         };
 
         let req = ChatCompletionRequest {
@@ -292,6 +435,8 @@ impl Agent {
             response_format,
             user: Some(self.session.id.clone()),
             stream_options: None,
+            tools: native.then(|| tool_specs(&self.registry)),
+            tool_choice: native.then(|| "auto".to_string()),
         };
 
         let mut stream = tokio::select! {
@@ -324,6 +469,7 @@ impl Agent {
                     out.text.push_str(&p);
                     let _ = events.send(AgentEvent::AssistantDelta(p)).await;
                 }
+                StreamEvent::Call(delta) => out.calls.push(delta),
                 StreamEvent::End {
                     finish_reason,
                     usage,
@@ -390,6 +536,10 @@ impl Agent {
                 response_format: Some(ResponseFormat::json_schema("turn", schema.clone())),
                 user: Some(format!("{}-repair", self.session.id)),
                 stream_options: None,
+                // The repair round-trip asks for one thing: valid JSON. Offering tools
+                // here would invite the model to do something else instead.
+                tools: None,
+                tool_choice: None,
             };
             current = tokio::select! {
                 biased;
@@ -418,5 +568,281 @@ impl Agent {
             "tool finished"
         );
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::fs_read::ListDir;
+    use crate::tools::harness::{Answer, Harness};
+    use std::sync::{Arc as StdArc, Mutex};
+
+    /// A backend that answers a queue of canned responses, and remembers what it was sent.
+    ///
+    /// Enough of a server to drive the loop through a real request, a real stream and a
+    /// real second step - which is where the protocols actually differ.
+    struct FakeBackend {
+        url: String,
+        seen: StdArc<Mutex<Vec<serde_json::Value>>>,
+    }
+
+    async fn fake_backend(responses: Vec<String>) -> FakeBackend {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen: StdArc<Mutex<Vec<serde_json::Value>>> = StdArc::new(Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+
+        tokio::spawn(async move {
+            let mut queue = responses.into_iter();
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                // Read until the body has arrived; the request declares its length.
+                loop {
+                    let Ok(n) = sock.read(&mut chunk).await else {
+                        break;
+                    };
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    let text = String::from_utf8_lossy(&buf).into_owned();
+                    let Some(head_end) = text.find("\r\n\r\n") else {
+                        continue;
+                    };
+                    let len: usize = text
+                        .lines()
+                        .find_map(|l| {
+                            l.strip_prefix("content-length: ")
+                                .or_else(|| l.strip_prefix("Content-Length: "))
+                        })
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    if buf.len() >= head_end + 4 + len {
+                        if let Ok(v) = serde_json::from_str(&text[head_end + 4..]) {
+                            recorder.lock().unwrap().push(v);
+                        }
+                        break;
+                    }
+                }
+                let response = queue.next().unwrap_or_else(|| {
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".into()
+                });
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+                let _ = sock.shutdown().await;
+            }
+        });
+
+        FakeBackend {
+            url: format!("http://127.0.0.1:{port}"),
+            seen,
+        }
+    }
+
+    fn sse(events: &[&str]) -> String {
+        let body: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+        let body = format!("{body}data: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn rejects_tools() -> String {
+        let body =
+            r#"{"error":{"message":"unknown field `tools`","type":"invalid_request_error"}}"#;
+        format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn agent_for(h: &Harness, backend: &FakeBackend, protocol: ToolProtocol) -> Agent {
+        let mut reg = Registry::new();
+        reg.register(ListDir);
+        let registry = Arc::new(reg);
+        Agent {
+            backend: BackendClient::new(backend.url.clone()),
+            session: Session::new(Agent::build_system_prompt(&registry, protocol), 8192, 4096),
+            registry,
+            cfg: AgentConfig {
+                model: "test".into(),
+                grammar_enabled: true,
+                max_steps: 4,
+                max_answer_tokens: 256,
+                protocol,
+                allow_fallback: true,
+            },
+            ctx: h.ctx.clone(),
+        }
+    }
+
+    async fn drive(agent: &mut Agent, prompt: &str) -> Vec<AgentEvent> {
+        let (tx, mut rx) = mpsc::channel(64);
+        agent
+            .run_user_turn(prompt.into(), CancellationToken::new(), tx)
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            out.push(e);
+        }
+        out
+    }
+
+    /// The native path end to end: a streamed call is reassembled, dispatched, and
+    /// answered against the id the server issued.
+    #[tokio::test]
+    async fn a_native_call_is_run_and_answered_against_its_own_id() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"list_dir","arguments":"{\"path\""}}]}}]}"#,
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":": \".\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"there is one file"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "what is here").await;
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ToolCall { name, .. } if name == "list_dir")),
+            "the streamed call was never dispatched: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::ToolResult { output, .. } if output.content.contains("a.txt"))),
+            "the tool did not actually run: {events:?}"
+        );
+
+        // The assistant turn carries the call, and the result answers that id - the thing
+        // a strict server checks and the old code could never satisfy.
+        let assistant = agent
+            .session
+            .history
+            .iter()
+            .find(|m| m.role == "assistant" && m.tool_calls.is_some())
+            .expect("no assistant turn carried tool_calls");
+        let calls = assistant.tool_calls.as_ref().unwrap();
+        assert_eq!(calls[0].id, "call_abc");
+        assert_eq!(calls[0].function.name, "list_dir");
+
+        let answer = agent
+            .session
+            .history
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("no tool result recorded");
+        assert_eq!(answer.tool_call_id.as_deref(), Some("call_abc"));
+    }
+
+    /// The tools have to actually reach the server, or the model is being asked to call
+    /// things it has not been told about.
+    #[tokio::test]
+    async fn the_native_request_carries_the_tools() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![sse(&[
+            r#"{"choices":[{"delta":{"content":"nothing to do"},"finish_reason":"stop"}]}"#,
+        ])])
+        .await;
+
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        drive(&mut agent, "hello").await;
+
+        let seen = backend.seen.lock().unwrap();
+        let req = seen.first().expect("no request reached the backend");
+        assert_eq!(req["tools"][0]["function"]["name"], "list_dir");
+        assert_eq!(req["tool_choice"], "auto");
+        assert!(
+            req["response_format"].is_null(),
+            "the envelope grammar was imposed on a native request: {req}"
+        );
+    }
+
+    /// A backend that refuses the field must not cost the user their turn.
+    #[tokio::test]
+    async fn a_backend_that_refuses_tools_falls_back_and_finishes_the_turn() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![
+            rejects_tools(),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"{\"assistant_text\":\"done\",\"tool_calls\":[]}"},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "hello").await;
+
+        assert_eq!(
+            agent.cfg.protocol,
+            ToolProtocol::Envelope,
+            "no fallback happened"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::AssistantText(t) if t == "done")),
+            "the turn did not complete after falling back: {events:?}"
+        );
+
+        // The preamble has to change with the protocol, or the model is reading the
+        // contract for the other one.
+        assert!(
+            agent.session.history[0].content.contains("assistant_text"),
+            "the system message still describes the native protocol"
+        );
+
+        let seen = backend.seen.lock().unwrap();
+        assert!(
+            seen[0]["tools"].is_array(),
+            "the first attempt was not native"
+        );
+        assert!(seen[1]["tools"].is_null(), "the retry was still native");
+    }
+
+    /// The envelope path must keep working exactly as it did.
+    #[tokio::test]
+    async fn the_envelope_protocol_still_drives_a_turn() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"{\"assistant_text\":\"looking\",\"tool_calls\":[{\"name\":\"list_dir\",\"arguments\":{\"path\":\".\"}}]}"},"finish_reason":"stop"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"{\"assistant_text\":\"done\",\"tool_calls\":[]}"},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Envelope);
+        let events = drive(&mut agent, "what is here").await;
+
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::ToolResult { output, .. } if output.content.contains("a.txt"))),
+            "{events:?}"
+        );
+        let seen = backend.seen.lock().unwrap();
+        assert!(
+            seen[0]["tools"].is_null(),
+            "the envelope request offered tools"
+        );
+        assert!(
+            !seen[0]["response_format"].is_null(),
+            "the grammar was not applied"
+        );
     }
 }
