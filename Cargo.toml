@@ -49,8 +49,9 @@ jsonschema = { version = "0.30", default-features = false }
 similar = "2"
 diffy = "0.4"
 
-# Filesystem traversal that honours ignore files
+# Filesystem traversal that honours ignore files, and the search that falls back on it
 ignore = "0.4"
+regex = "1"
 
 uuid = { version = "1", features = ["v4"] }
 

@@ -49,9 +49,10 @@ cargo install --path .     # or: cargo build --release  → target/release/verve
 
 Needs Rust 1.82 or later, and a Unix-like system - the shell tool runs `/bin/sh`.
 
-Two things it uses if they are present, and says so if they are not:
+One thing it uses if it is there, and one it needs:
 
-- **ripgrep** (`rg`) for the `grep` tool.
+- **ripgrep** (`rg`) makes `grep` faster and is not required - without it the same search
+  runs on the built-in walker, honouring the same ignore files.
 - **A language server** for `lsp_diagnostics` and `lsp_hover`: `rust-analyzer`,
   `pyright-langserver`, or `typescript-language-server`. If one is on your `PATH` under the
   usual name but does not work - a `rustup` shim for a component that was never installed

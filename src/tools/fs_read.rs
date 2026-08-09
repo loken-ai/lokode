@@ -117,7 +117,10 @@ impl Tool for ListDir {
             entries.push(format!("{kind}  {size:>10}  {name}"));
         }
         entries.sort();
-        Ok(ToolOutput::ok(entries.join("\n")))
+        // Clamped like every other result. A directory of ten thousand files is rarer than
+        // a large file, but the ceiling exists because one result must not be able to
+        // displace the conversation, and that is true here too.
+        Ok(ToolOutput::ok(ctx.clamp(entries.join("\n"))))
     }
 }
 
@@ -179,7 +182,7 @@ impl Tool for Glob {
         })
         .await??;
 
-        Ok(ToolOutput::ok(hits.join("\n")))
+        Ok(ToolOutput::ok(ctx.clamp(hits.join("\n"))))
     }
 }
 

@@ -260,19 +260,39 @@ fn is_blocked_v6(v6: Ipv6Addr) -> bool {
         || (first & 0xffc0) == 0xfe80
 }
 
-/// Strip naive HTML tags and collapse whitespace. Not a full DOM parser
-/// — sufficient for "let the model read this page".
+/// Reduce a page to the text a model can read.
+///
+/// Not a DOM parser, and not trying to be. What it does do is drop the contents of `script`
+/// and `style` rather than only their tags - a page's JavaScript is many times the size of
+/// its prose and none of it is what was asked for - and turn the handful of entities that
+/// otherwise arrive as `&amp;` in the middle of a sentence.
 fn strip_html(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut in_tag = false;
-    for c in input.chars() {
+    let mut rest = input;
+
+    while !rest.is_empty() {
+        // Skip an element whose contents are code rather than text.
+        if let Some(end) = skip_element(rest, "script").or_else(|| skip_element(rest, "style")) {
+            rest = &rest[end..];
+            continue;
+        }
+        let mut chars = rest.char_indices();
+        let Some((_, c)) = chars.next() else { break };
         match c {
             '<' => in_tag = true,
-            '>' => in_tag = false,
+            // A tag is a boundary between words. Without this, `<h1>Title</h1><p>Some` came
+            // out as `TitleSome` - the collapse below turns the run of spaces back into one.
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
             _ if !in_tag => out.push(c),
             _ => {}
         }
+        rest = &rest[c.len_utf8()..];
     }
+    let out = decode_entities(&out);
     // Collapse runs of whitespace
     let mut collapsed = String::with_capacity(out.len());
     let mut prev_space = false;
@@ -287,7 +307,52 @@ fn strip_html(input: &str) -> String {
             prev_space = false;
         }
     }
-    collapsed
+    // The tags at each end of a document leave a space behind them.
+    collapsed.trim().to_string()
+}
+
+/// How far to skip if `rest` opens `tag`, or `None` if it does not.
+fn skip_element(rest: &str, tag: &str) -> Option<usize> {
+    let open = format!("<{tag}");
+    if !rest.len().ge(&open.len()) || !rest[..open.len()].eq_ignore_ascii_case(&open) {
+        return None;
+    }
+    // The character after the name must end it, or `<scripts>` would match `<script`.
+    let after = rest[open.len()..].chars().next();
+    if !matches!(after, Some(c) if c == '>' || c.is_whitespace()) {
+        return None;
+    }
+    let close = format!("</{tag}");
+    let lowered = rest.to_ascii_lowercase();
+    match lowered[open.len()..].find(&close) {
+        // Past the closing tag's own `>`, or to the end of it if there is none.
+        Some(at) => {
+            let from = open.len() + at;
+            Some(
+                lowered[from..]
+                    .find('>')
+                    .map(|g| from + g + 1)
+                    .unwrap_or(rest.len()),
+            )
+        }
+        // An unclosed script runs to the end of the document, and so does this.
+        None => Some(rest.len()),
+    }
+}
+
+/// Turn the entities that actually show up in prose.
+fn decode_entities(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        // Last, or it would turn the ampersand of another entity before that entity is read.
+        .replace("&amp;", "&")
 }
 
 #[cfg(test)]
@@ -477,6 +542,66 @@ mod tests {
             !out.content.contains("<b>"),
             "tags should be stripped: {}",
             out.content
+        );
+    }
+}
+
+#[cfg(test)]
+mod html_tests {
+    use super::*;
+
+    /// A page's JavaScript is many times the size of its prose and none of it is what was
+    /// asked for. Stripping only the tags left every line of it in the answer.
+    #[test]
+    fn a_script_body_is_dropped_not_just_its_tags() {
+        let html = "<p>before</p><script>var x = 1; alert('noise');</script><p>after</p>";
+        let text = strip_html(html);
+        assert!(text.contains("before"), "{text}");
+        assert!(text.contains("after"), "{text}");
+        assert!(!text.contains("alert"), "the script body survived: {text}");
+    }
+
+    #[test]
+    fn a_style_body_is_dropped_too() {
+        let text = strip_html("<style>.a{color:red}</style>hello");
+        assert!(text.contains("hello"), "{text}");
+        assert!(!text.contains("color"), "{text}");
+    }
+
+    /// An element whose name merely starts with `script` is a different element.
+    #[test]
+    fn a_similarly_named_element_is_not_mistaken_for_one() {
+        let text = strip_html("<scripting>kept</scripting>");
+        assert!(text.contains("kept"), "{text}");
+    }
+
+    /// An unclosed script runs to the end of the document, and so must the skip - otherwise
+    /// the rest of the page is code presented as prose.
+    #[test]
+    fn an_unclosed_script_swallows_the_rest() {
+        let text = strip_html("<p>before</p><script>var x = 1;");
+        assert!(text.contains("before"), "{text}");
+        assert!(!text.contains("var x"), "{text}");
+    }
+
+    #[test]
+    fn the_entities_that_appear_in_prose_are_turned() {
+        assert_eq!(strip_html("a &amp; b"), "a & b");
+        assert_eq!(strip_html("&lt;tag&gt;"), "<tag>");
+        assert_eq!(strip_html("it&#39;s"), "it's");
+    }
+
+    /// `&amp;lt;` is an escaped `&lt;`, not a `<`. Turning `&amp;` first would make it one.
+    #[test]
+    fn a_doubly_escaped_entity_is_only_decoded_once() {
+        assert_eq!(strip_html("&amp;lt;"), "&lt;");
+    }
+
+    #[test]
+    fn ordinary_text_survives_unchanged() {
+        assert_eq!(
+            strip_html("<h1>Title</h1><p>Some words.</p>"),
+            "Title Some words."
         );
     }
 }

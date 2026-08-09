@@ -93,6 +93,15 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
+- `grep` no longer requires ripgrep. It is still used when present, and without it the same
+  search runs on the walker `glob` already uses, honouring the same ignore files - it was an
+  undocumented hard requirement, and a machine without it had no search at all.
+- `web_fetch` drops the contents of `script` and `style` rather than only their tags, turns
+  the entities that appear in prose, and puts a word boundary where a tag was - adjacent
+  blocks used to run together as `TitleSome words`.
+- `list_dir` and `glob` clamp their output like every other tool. They were the two that did
+  not, which is the case the ceiling exists for.
+
 - Read-only tool calls in one turn run together. Three file reads in a turn used to be three
   round trips one after another, for no reason - none of them can see what the others did. A
   call that changes something is a boundary on both sides.
