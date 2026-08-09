@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 use crate::sandbox::allowlist;
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
+use crate::tools::text;
 
 const MAX_LIST_ENTRIES: usize = 1024;
 const MAX_GLOB_HITS: usize = 512;
@@ -50,27 +51,9 @@ impl Tool for ReadFile {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(e.to_string())),
         };
-        let raw = match tokio::fs::read(&resolved).await {
+        let body = match text::read_numbered(&resolved, a.start_line, a.end_line).await {
             Ok(b) => b,
-            Err(e) => return Ok(ToolOutput::err(format!("read failed: {e}"))),
-        };
-        let text = String::from_utf8_lossy(&raw).into_owned();
-
-        let body = if a.start_line.is_some() || a.end_line.is_some() {
-            let start = a.start_line.unwrap_or(1).saturating_sub(1);
-            let end = a.end_line.unwrap_or(usize::MAX);
-            text.lines()
-                .enumerate()
-                .filter(|(i, _)| *i >= start && *i < end)
-                .map(|(i, l)| format!("{:>5} | {l}", i + 1))
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            text.lines()
-                .enumerate()
-                .map(|(i, l)| format!("{:>5} | {l}", i + 1))
-                .collect::<Vec<_>>()
-                .join("\n")
+            Err(e) => return Ok(ToolOutput::err(e)),
         };
 
         Ok(ToolOutput::ok(ctx.clamp(body)))

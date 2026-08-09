@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::process::Command;
 
-use crate::sandbox::approval::{ApprovalDecision, ApprovalRequest};
+use crate::sandbox::approval::{Approval, ApprovalRequest, ApprovalScope};
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
 const TIMEOUT_S: u64 = 600;
@@ -41,22 +41,20 @@ impl Tool for RunTests {
             argv.push(t.clone());
         }
 
-        if !ctx.session_approvals.is_always(self.name()).await {
-            let Some(decision) = ctx
-                .ask(ApprovalRequest {
-                    tool: self.name().into(),
-                    summary: format!("run_tests [{label}]: {program} {}", argv.join(" ")),
-                    diff_preview: None,
-                })
-                .await
-            else {
-                return Ok(ToolOutput::err("interrupted by user"));
-            };
-            match decision {
-                ApprovalDecision::Deny => return Ok(ToolOutput::err("user denied")),
-                ApprovalDecision::Always => ctx.session_approvals.mark_always(self.name()).await,
-                ApprovalDecision::Once => {}
-            }
+        match ctx
+            .approve(ApprovalRequest {
+                tool: self.name().into(),
+                summary: format!("run_tests [{label}]: {program} {}", argv.join(" ")),
+                diff_preview: None,
+                // The command is derived from the manifest, not chosen by the model, so
+                // the whole surface of this tool is the one action just shown.
+                scope: ApprovalScope::Tool(self.name().into()),
+            })
+            .await
+        {
+            Approval::Proceed => {}
+            Approval::Denied => return Ok(ToolOutput::err("user denied")),
+            Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
         let mut cmd = Command::new(program);

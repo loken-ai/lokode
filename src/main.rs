@@ -37,6 +37,13 @@ struct Cli {
     /// Tokens held back from the window for the answer.
     #[arg(long, default_value = "4096")]
     max_answer_tokens: usize,
+
+    /// Let `web_fetch` reach this host even though it resolves to a private address.
+    ///
+    /// Egress is otherwise confined to public addresses, so that an approved public URL
+    /// cannot redirect onto loopback or a cloud metadata endpoint. Repeat for each host.
+    #[arg(long = "allow-host", value_name = "HOST")]
+    allow_hosts: Vec<String>,
 }
 
 #[tokio::main]
@@ -62,6 +69,7 @@ async fn main() -> Result<()> {
         max_steps: cli.max_steps,
         context_tokens: cli.context_tokens,
         max_answer_tokens: cli.max_answer_tokens,
+        allow_hosts: cli.allow_hosts.into_iter().collect(),
     };
 
     app::run(cfg).await

@@ -39,16 +39,25 @@ impl<'a> ApprovalView<'a> {
             .wrap(Wrap { trim: false });
         f.render_widget(preview, chunks[1]);
 
-        let footer = Paragraph::new(Line::from(vec![
-            Span::styled("[Y]es", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("  "),
-            Span::styled("[N]o", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            Span::raw("  "),
-            Span::styled("[A]lways", Style::default().fg(Color::Cyan)),
-            Span::raw(" (this session)  "),
-            Span::styled("Esc", Style::default().fg(Color::Red)),
-            Span::raw(" declines"),
-        ]))
+        // What `Always` covers is spelled out rather than left to the word: it used to
+        // mean the whole tool, and a user pressing it while looking at one harmless
+        // command had no way to know that.
+        let footer = Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("[Y]es", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw("  "),
+                Span::styled("[N]o", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::raw("  "),
+                Span::styled("[A]lways", Style::default().fg(Color::Cyan)),
+                Span::raw("  "),
+                Span::styled("Esc", Style::default().fg(Color::Red)),
+                Span::raw(" declines"),
+            ]),
+            Line::from(Span::styled(
+                format!("Always covers {} for this session", self.req.scope.describe()),
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
         .alignment(Alignment::Center);
         f.render_widget(footer, chunks[2]);
     }

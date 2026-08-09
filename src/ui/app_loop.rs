@@ -59,6 +59,8 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         // Replaced with the turn's own token at the start of each turn; this stands in
         // for the window before the first one arrives.
         cancel: shutdown.child_token(),
+        http: crate::tools::registry::tool_http_client()?,
+        allow_hosts: Arc::new(cfg.allow_hosts.clone()),
     };
 
     let system = Agent::build_system_prompt(&registry);

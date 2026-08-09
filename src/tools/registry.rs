@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -8,7 +9,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::sandbox::approval::{
-    self, ApprovalDecision, ApprovalRequest, ApprovalSender, SessionApprovals,
+    self, Approval, ApprovalDecision, ApprovalRequest, ApprovalSender, SessionApprovals,
 };
 
 #[derive(Clone)]
@@ -28,19 +29,53 @@ pub struct ToolCtx {
     /// this, or `Esc` only takes effect once the thing the user wanted to stop has
     /// finished on its own.
     pub cancel: CancellationToken,
+    /// Shared HTTP client, so a connection pool survives between calls.
+    pub http: reqwest::Client,
+    /// Hosts the user has declared reachable despite resolving to a private address.
+    ///
+    /// Without this the address guard would make a locally-served doc site unreachable,
+    /// which is a normal thing to want from a tool that runs on your own machine.
+    pub allow_hosts: Arc<HashSet<String>>,
+}
+
+/// The HTTP client the tools share.
+///
+/// Redirects are turned off on purpose. `web_fetch` follows them itself so that the
+/// address guard runs again on every hop; leaving the client to follow them would let an
+/// approved public URL bounce to loopback with nobody looking.
+pub fn tool_http_client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(concat!("verve/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?)
 }
 
 impl ToolCtx {
-    /// Put a request to the user, unless the turn is abandoned while it is on screen.
+    /// Settle whether this action may go ahead.
     ///
-    /// `None` means the turn was cancelled, which is not the same answer as `Deny`: the
-    /// user refused nothing, they stopped waiting. Callers report it as an interruption
-    /// so the model is not told it was denied something it never got asked about.
-    pub async fn ask(&self, req: ApprovalRequest) -> Option<ApprovalDecision> {
-        tokio::select! {
+    /// Everything a gated tool has to do about approval: skip the question if its scope
+    /// was already agreed to, put it to the user otherwise, record an `Always`, and
+    /// notice if the turn is abandoned while the prompt is on screen. Tools that wrote
+    /// this out longhand each held their own copy of the rule about what `Always` means,
+    /// which is how it came to mean the whole tool.
+    pub async fn approve(&self, req: ApprovalRequest) -> Approval {
+        if self.session_approvals.is_always(&req.scope).await {
+            return Approval::Proceed;
+        }
+        let scope = req.scope.clone();
+        let decision = tokio::select! {
             biased;
-            _ = self.cancel.cancelled() => None,
-            d = approval::ask(&self.approval, req) => Some(d),
+            _ = self.cancel.cancelled() => return Approval::Interrupted,
+            d = approval::ask(&self.approval, req) => d,
+        };
+        match decision {
+            ApprovalDecision::Deny => Approval::Denied,
+            ApprovalDecision::Once => Approval::Proceed,
+            ApprovalDecision::Always => {
+                self.session_approvals.mark_always(scope).await;
+                Approval::Proceed
+            }
         }
     }
 

@@ -98,6 +98,8 @@ async fn main() -> Result<()> {
             cli.max_answer_tokens,
         ),
         cancel: cancel.clone(),
+        http: verve::tools::registry::tool_http_client()?,
+        allow_hosts: Arc::new(Default::default()),
     };
 
     let mut agent = Agent {
