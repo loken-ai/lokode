@@ -55,6 +55,11 @@ regex = "1"
 
 uuid = { version = "1", features = ["v4"] }
 
+# Landlock, to make the root a boundary for the shell too. Linux only, and the syscalls are
+# made directly so that what runs between fork and exec is exactly two of them.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 # Language server client: types only, the stdio JSON-RPC client is in-crate.
 # Pinned to 0.94, which still re-exports `Url`; 0.95 swapped it for `Uri`.
 lsp-types = "0.94"

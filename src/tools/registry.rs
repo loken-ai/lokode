@@ -36,6 +36,9 @@ pub struct ToolCtx {
     /// Without this the address guard would make a locally-served doc site unreachable,
     /// which is a normal thing to want from a tool that runs on your own machine.
     pub allow_hosts: Arc<HashSet<String>>,
+    /// Directories an approved shell command may write to, or `None` to leave it
+    /// unconfined - which is what it has always been.
+    pub shell_writable: Option<Arc<Vec<PathBuf>>>,
 }
 
 /// The HTTP client the tools share.

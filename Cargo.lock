@@ -2686,6 +2686,7 @@ dependencies = [
  "ignore",
  "json5",
  "jsonschema",
+ "libc",
  "lsp-types",
  "ratatui",
  "regex",

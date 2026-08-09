@@ -38,8 +38,9 @@ caps how far it will go on a single turn before handing control back.
   exception for a service on your own network.
 
 Read [SECURITY.md](SECURITY.md) before pointing this at anything you care about. In
-particular, an approved `bash` command is not confined by the root: the sandbox covers the
-tools that take paths, and a shell does not.
+particular, an approved `bash` command is not confined by the root by default: the sandbox
+covers the tools that take paths, and a shell does not. On Linux, `--confine-shell` makes
+everything outside the project read-only for it.
 
 ## Install
 

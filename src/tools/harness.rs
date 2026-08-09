@@ -69,6 +69,7 @@ impl Harness {
             cancel: CancellationToken::new(),
             http: crate::tools::registry::tool_http_client().expect("http client"),
             allow_hosts: Arc::new(Default::default()),
+            shell_writable: None,
         };
 
         Self {

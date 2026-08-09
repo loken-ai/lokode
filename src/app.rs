@@ -36,6 +36,9 @@ pub struct AppConfig {
     pub warnings: Vec<String>,
     /// Tool servers to start, by name.
     pub mcp_servers: BTreeMap<String, crate::config::McpServer>,
+    /// Directories an approved shell command may write to, or `None` to leave it
+    /// unconfined.
+    pub shell_writable: Option<Vec<PathBuf>>,
 }
 
 /// How tools should be asked for.

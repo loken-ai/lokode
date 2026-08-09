@@ -69,6 +69,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         cancel: shutdown.child_token(),
         http: crate::tools::registry::tool_http_client()?,
         allow_hosts: Arc::new(cfg.allow_hosts.clone()),
+        shell_writable: cfg.shell_writable.clone().map(Arc::new),
     };
 
     let earlier = open_session(cfg)?;

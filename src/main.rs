@@ -89,6 +89,13 @@ struct Cli {
     #[arg(long, value_enum)]
     tool_protocol: Option<app::ProtocolChoice>,
 
+    /// Make everything outside the project read-only for an approved shell command.
+    ///
+    /// Linux only. It can make a build fail where a cache lives outside the project, so
+    /// name those directories with `[shell] writable` in the configuration.
+    #[arg(long)]
+    confine_shell: bool,
+
     /// Print where settings were read from, and what they resolved to, then exit.
     #[arg(long)]
     show_config: bool,
@@ -166,6 +173,7 @@ struct Resolved {
 }
 
 fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved> {
+    let root_for_shell = root.clone();
     let mut sources = Vec::new();
     if let Some(p) = config::user_config_path() {
         if p.exists() {
@@ -256,6 +264,14 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             tool_protocol,
             warnings,
             mcp_servers: file.mcp.servers.clone(),
+            // The project itself is always writable; the rest is what was named.
+            shell_writable: (cli.confine_shell || file.shell.confine_writes.unwrap_or(false)).then(
+                || {
+                    let mut dirs = vec![root_for_shell.clone()];
+                    dirs.extend(file.shell.writable.iter().cloned());
+                    dirs
+                },
+            ),
         },
     })
 }
@@ -292,6 +308,19 @@ fn print_config(cfg: &Resolved) {
     println!("  context-tokens     {}", a.context_tokens);
     println!("  max-answer-tokens  {}", a.max_answer_tokens);
     println!("  transcripts        {}", a.transcripts);
+    println!(
+        "  shell writes       {}",
+        match &a.shell_writable {
+            None => "unconfined".to_string(),
+            Some(dirs) => format!(
+                "confined to {}",
+                dirs.iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    );
     let hosts: Vec<_> = a.allow_hosts.iter().cloned().collect();
     println!("  allow-hosts        {}", hosts.join(", "));
     // Names only. The whole point of the file-permission check is that these do not get

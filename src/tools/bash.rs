@@ -76,12 +76,39 @@ impl Tool for Bash {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
+        // Built before the fork: creating the ruleset allocates and opens files, and doing
+        // that between fork and exec can deadlock. What the child runs is two syscalls.
+        let ruleset = match &ctx.shell_writable {
+            None => None,
+            Some(writable) => match crate::sandbox::confine::ruleset(writable) {
+                Ok(fd) => Some(fd),
+                Err(e) => {
+                    // Confinement was asked for and cannot be given. Running the command
+                    // anyway would be doing the opposite of what was asked.
+                    return Ok(ToolOutput::err(format!(
+                        "shell confinement was requested and could not be applied: {e}"
+                    )));
+                }
+            },
+        };
+
         let mut cmd = Command::new("/bin/sh");
         // Without this, abandoning the turn leaves the command running: the future is
         // dropped, nobody is left to read its output, and a build carries on burning the
         // machine the user just told us to stop using.
         cmd.kill_on_drop(true);
         cmd.arg("-lc").arg(&a.cmd).current_dir(&cwd);
+
+        if let Some(fd) = &ruleset {
+            use std::os::fd::AsRawFd;
+            let raw = fd.as_raw_fd();
+            // SAFETY: `restrict_after_fork` makes two syscalls and nothing else - no
+            // allocation, no locks - which is what a post-fork hook may do. `raw` stays
+            // open because `ruleset` outlives the spawn below.
+            unsafe {
+                cmd.pre_exec(move || crate::sandbox::confine::restrict_after_fork(raw));
+            }
+        }
 
         let fut = cmd.output();
         let output = tokio::select! {

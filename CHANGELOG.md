@@ -93,6 +93,11 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
+- `bash` can be confined. `--confine-shell`, or `[shell] confine-writes`, makes everything
+  outside the project read-only for an approved command and everything it starts. Linux
+  only, and off by default, because it can make a build whose cache lives elsewhere fail in
+  a way that looks like a bug in the build - name those directories with `[shell] writable`.
+
 - `grep` no longer requires ripgrep. It is still used when present, and without it the same
   search runs on the walker `glob` already uses, honouring the same ignore files - it was an
   undocumented hard requirement, and a machine without it had no search at all.
@@ -120,7 +125,7 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 - Two dependencies were declared and never used: `schemars`, never imported at all, and
   `reqwest`'s `blocking` and `multipart` features in an entirely async client.
 
-## [0.1.0]
+## [0.1.0] - 2026-08-09
 
 ### Added
 

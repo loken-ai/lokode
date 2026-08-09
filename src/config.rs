@@ -44,6 +44,25 @@ pub struct FileConfig {
     /// Tool servers to start, by name. The name prefixes their tools.
     #[serde(default)]
     pub mcp: McpSection,
+    #[serde(default)]
+    pub shell: ShellSection,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ShellSection {
+    /// Make everything outside the project read-only for an approved command.
+    ///
+    /// Off by default: it can make a build fail in a way that looks like a bug in the
+    /// build, and breaking someone's work to add a protection they did not ask for is the
+    /// wrong trade. On, it is the difference between `rm -rf ~` working and not.
+    pub confine_writes: Option<bool>,
+    /// Directories a confined command may still write to, on top of the project.
+    ///
+    /// A build wants its caches - `~/.cargo`, `~/.npm`, a temporary directory - and without
+    /// them confinement is strict enough that nobody leaves it on.
+    #[serde(default)]
+    pub writable: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -180,6 +199,14 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
         session: SessionSection {
             transcripts: over.session.transcripts.or(base.session.transcripts),
             log_file: over.session.log_file.or(base.session.log_file),
+        },
+        shell: ShellSection {
+            confine_writes: over.shell.confine_writes.or(base.shell.confine_writes),
+            writable: {
+                let mut w = base.shell.writable;
+                w.extend(over.shell.writable);
+                w
+            },
         },
         mcp: McpSection {
             servers: {

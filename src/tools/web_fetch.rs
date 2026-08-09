@@ -481,6 +481,7 @@ mod tests {
             cancel: tokio_util::sync::CancellationToken::new(),
             http: crate::tools::registry::tool_http_client().unwrap(),
             allow_hosts: Arc::new(allow.iter().map(|s| s.to_string()).collect()),
+            shell_writable: None,
         }
     }
 

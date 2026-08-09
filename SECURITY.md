@@ -39,11 +39,20 @@ leaves the old contents or the new ones. A multi-file patch is applied wholly or
 
 ## What is not enforced
 
-**`bash` is not confined by the root.** An approved command runs `/bin/sh -lc <string>` with
-your privileges and your environment. Only its working directory is checked. `cd ~ && cat
-.ssh/id_rsa` is one tool call, and `-l` sources your login profile. The path sandbox describes
-the tools that take paths; it says nothing about a shell. Approving a command is approving
-everything that command can do.
+**`bash` is not confined by the root, unless you ask.** An approved command runs
+`/bin/sh -lc <string>` with your privileges and your environment. Only its working directory
+is checked. `cd ~ && cat .ssh/id_rsa` is one tool call, and `-l` sources your login profile.
+The path sandbox describes the tools that take paths; it says nothing about a shell.
+Approving a command is approving everything that command can do.
+
+On Linux, `--confine-shell` (or `[shell] confine-writes`) uses Landlock to make everything
+outside the project read-only for the command and for everything it starts, which a child
+cannot undo. Read what this does and does not do: `rm -rf ~` stops working and
+`cat ~/.ssh/id_rsa` does not. Reading is deliberately left alone, because confining it too
+would stop every build tool from reaching a toolchain or a cache, and a protection that makes
+the shell useless is one nobody leaves on. It is off by default for the same reason - a build
+whose cache lives outside the project will fail with it on, so name those directories under
+`[shell] writable`.
 
 **`run_tests` runs the project's own code.** `cargo test` builds `build.rs`, `npm test` runs
 lifecycle scripts, `pytest` imports `conftest.py`. Approving it on a repository you have not
@@ -81,6 +90,8 @@ them.
 
 - Point `--root` at one project, not at your home directory.
 - Decline `[A]lways` for `bash` unless you know what the session is going to do.
+- On Linux, turn on `--confine-shell`, and add the caches your builds need to
+  `[shell] writable`.
 - Prefer a container or a VM for a repository you have not read.
 - Keep an API key in the environment rather than in a config file. If you do put one in a
   file, verve refuses to use it unless the file is private to you.
