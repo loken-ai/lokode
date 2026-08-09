@@ -93,9 +93,19 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
+- Read-only tool calls in one turn run together. Three file reads in a turn used to be three
+  round trips one after another, for no reason - none of them can see what the others did. A
+  call that changes something is a boundary on both sides.
+- Compaction trims well past the budget instead of to it. The cost of compacting is not the
+  copying: the server keeps a prefix cache, dropping from the front changes the prefix at the
+  second message, and so the whole prompt is processed again. Trimming to just under the line
+  meant the next step crossed it and paid that again. Several steps now fit between
+  compactions.
+- The interface redraws on events rather than on a timer that woke it twelve times a second.
+
 - Tool names are borrowed rather than `&'static str`, so a tool can be named by something
   that was not known at compile time.
-- Tests went from 21 to 176. Ten of the twelve tools now have one; the two LSP tools do not,
+- Tests went from 21 to 183. Ten of the twelve tools now have one; the two LSP tools do not,
   because testing them needs a language server.
 - `src/tools/tests.rs` was the `run_tests` tool rather than tests, and is now `run_tests.rs`.
 - Two dependencies were declared and never used: `schemars`, never imported at all, and

@@ -42,6 +42,39 @@ const TURN_ABANDONED: &str = "[this turn ended without an answer]";
 /// How long to wait between two pieces of a streaming answer before giving up on it.
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// Split a turn's calls into runs that may go at once.
+///
+/// A read-only call cannot see what another one did, so several of them are independent and
+/// the order they finish in does not matter. A mutating call is a boundary on both sides:
+/// what it changes is what a later call would read, and the checkpoint taken after it has to
+/// describe that call alone.
+///
+/// A call to a tool that does not exist is its own run, because the answer is a refusal and
+/// grouping it with anything would only obscure which call was refused.
+fn runs(registry: &Registry, calls: Vec<ResolvedCall>) -> Vec<Vec<ResolvedCall>> {
+    let mut out: Vec<Vec<ResolvedCall>> = Vec::new();
+    for call in calls {
+        let parallel = registry
+            .get(&call.name)
+            .map(|t| !t.mutates())
+            .unwrap_or(false);
+        match out.last_mut() {
+            Some(last) if parallel && !last.is_empty() && last_is_parallel(registry, last) => {
+                last.push(call)
+            }
+            _ => out.push(vec![call]),
+        }
+    }
+    out
+}
+
+fn last_is_parallel(registry: &Registry, run: &[ResolvedCall]) -> bool {
+    run.last()
+        .and_then(|c| registry.get(&c.name))
+        .map(|t| !t.mutates())
+        .unwrap_or(false)
+}
+
 /// One model response, with whatever the server said about how it ended.
 #[derive(Default)]
 struct Completion {
@@ -269,47 +302,69 @@ impl Agent {
                 return Ok(());
             }
 
-            for call in turn.calls {
-                // Every call the model just made needs a result, even the ones that will
-                // never run: the assistant turn listing them is already in the history,
-                // and a call with no answer behind it describes an action whose outcome
-                // the model cannot see. Say it was interrupted and move on.
+            // Read-only calls in a run go together. A turn that asks to read three files
+            // waits for three round trips otherwise, one after another, for no reason -
+            // none of them can see what the others did. A mutating call ends the run: what
+            // it changes is what the next call would read, and a checkpoint has to sit
+            // between them to mean anything.
+            for run in runs(&self.registry, turn.calls) {
                 if cancel.is_cancelled() {
-                    self.session
-                        .push(Message::tool("[error] interrupted by user", call.id));
+                    // Every call the model just made needs a result, even the ones that
+                    // will never run: the assistant turn listing them is already in the
+                    // history, and a call with no answer behind it describes an action
+                    // whose outcome the model cannot see.
+                    for call in run {
+                        self.session
+                            .push(Message::tool("[error] interrupted by user", call.id));
+                    }
                     continue;
                 }
-                let args_pretty = serde_json::to_string_pretty(&call.arguments).unwrap_or_default();
-                let _ = events
-                    .send(AgentEvent::ToolCall {
-                        name: call.name.clone(),
-                        args_pretty,
-                    })
-                    .await;
-                let mutating = self
-                    .registry
-                    .get(&call.name)
-                    .map(|t| t.mutates())
-                    .unwrap_or(false);
-                let result = self.dispatch_tool(&call.name, call.arguments).await;
-                let _ = events
-                    .send(AgentEvent::ToolResult {
-                        name: call.name.clone(),
-                        output: result.clone(),
-                    })
-                    .await;
-                let prefix = if result.is_error { "[error] " } else { "" };
-                self.session.push(Message::tool(
-                    format!("{prefix}{}", result.content),
-                    call.id,
-                ));
 
-                // After the call rather than before it: the state to return to is the one
-                // that preceded this turn, and that was recorded when the turn before it
-                // ended. Recording here also means a tool that changed nothing leaves
-                // nothing behind.
-                if mutating && !result.is_error {
-                    self.record_change(&call.name, &events).await;
+                // Announced before any of them starts, in the order the model asked, so
+                // the screen reads as a list of what is happening rather than as whatever
+                // finished first.
+                for call in &run {
+                    let args_pretty =
+                        serde_json::to_string_pretty(&call.arguments).unwrap_or_default();
+                    let _ = events
+                        .send(AgentEvent::ToolCall {
+                            name: call.name.clone(),
+                            args_pretty,
+                        })
+                        .await;
+                }
+
+                let results = futures::future::join_all(
+                    run.iter()
+                        .map(|call| self.dispatch_tool(&call.name, call.arguments.clone())),
+                )
+                .await;
+
+                for (call, result) in run.into_iter().zip(results) {
+                    let _ = events
+                        .send(AgentEvent::ToolResult {
+                            name: call.name.clone(),
+                            output: result.clone(),
+                        })
+                        .await;
+                    let prefix = if result.is_error { "[error] " } else { "" };
+                    self.session.push(Message::tool(
+                        format!("{prefix}{}", result.content),
+                        call.id,
+                    ));
+
+                    // After the call rather than before it: the state to return to is the
+                    // one that preceded this turn, and that was recorded when the turn
+                    // before it ended. Recording here also means a tool that changed
+                    // nothing leaves nothing behind.
+                    let mutating = self
+                        .registry
+                        .get(&call.name)
+                        .map(|t| t.mutates())
+                        .unwrap_or(false);
+                    if mutating && !result.is_error {
+                        self.record_change(&call.name, &events).await;
+                    }
                 }
             }
         }
@@ -706,6 +761,21 @@ mod tests {
     fn agent_for(h: &Harness, backend: &FakeBackend, protocol: ToolProtocol) -> Agent {
         let mut reg = Registry::new();
         reg.register(ListDir);
+        agent_with(h, backend, protocol, reg)
+    }
+
+    /// The same, with every built-in tool, for cases that need one to actually do something.
+    fn agent_with_all_tools(h: &Harness, backend: &FakeBackend, protocol: ToolProtocol) -> Agent {
+        let reg = crate::boot::build_registry(h.root.clone()).0;
+        agent_with(h, backend, protocol, reg)
+    }
+
+    fn agent_with(
+        h: &Harness,
+        backend: &FakeBackend,
+        protocol: ToolProtocol,
+        reg: Registry,
+    ) -> Agent {
         let registry = Arc::new(reg);
         Agent {
             backend: BackendClient::new(backend.url.clone()),
@@ -855,6 +925,130 @@ mod tests {
             "the first attempt was not native"
         );
         assert!(seen[1]["tools"].is_null(), "the retry was still native");
+    }
+
+    fn call(name: &str) -> ResolvedCall {
+        ResolvedCall {
+            id: name.into(),
+            name: name.into(),
+            arguments: serde_json::json!({}),
+        }
+    }
+
+    fn registry_of_all_tools() -> Registry {
+        crate::boot::build_registry(std::env::temp_dir()).0
+    }
+
+    fn shape(runs: &[Vec<ResolvedCall>]) -> Vec<Vec<&str>> {
+        runs.iter()
+            .map(|r| r.iter().map(|c| c.name.as_str()).collect())
+            .collect()
+    }
+
+    /// Reads that cannot see each other go together.
+    #[test]
+    fn independent_reads_form_one_run() {
+        let reg = registry_of_all_tools();
+        let grouped = runs(
+            &reg,
+            vec![call("read_file"), call("grep"), call("list_dir")],
+        );
+        assert_eq!(shape(&grouped), vec![vec!["read_file", "grep", "list_dir"]]);
+    }
+
+    /// A write is a boundary on both sides: what it changes is what the next read would
+    /// see, and the checkpoint after it has to describe that call alone.
+    #[test]
+    fn a_write_stands_alone_between_the_reads_around_it() {
+        let reg = registry_of_all_tools();
+        let grouped = runs(
+            &reg,
+            vec![
+                call("read_file"),
+                call("grep"),
+                call("write_file"),
+                call("read_file"),
+                call("glob"),
+            ],
+        );
+        assert_eq!(
+            shape(&grouped),
+            vec![
+                vec!["read_file", "grep"],
+                vec!["write_file"],
+                vec!["read_file", "glob"],
+            ]
+        );
+    }
+
+    /// Two writes must not be grouped, or one checkpoint would cover both.
+    #[test]
+    fn writes_are_never_grouped() {
+        let reg = registry_of_all_tools();
+        let grouped = runs(
+            &reg,
+            vec![call("write_file"), call("edit_file"), call("bash")],
+        );
+        assert_eq!(
+            shape(&grouped),
+            vec![vec!["write_file"], vec!["edit_file"], vec!["bash"]]
+        );
+    }
+
+    /// A tool that does not exist is answered with a refusal, and grouping it would only
+    /// obscure which call was refused.
+    #[test]
+    fn an_unknown_tool_stands_alone() {
+        let reg = registry_of_all_tools();
+        let grouped = runs(
+            &reg,
+            vec![call("read_file"), call("no_such_tool"), call("grep")],
+        );
+        assert_eq!(
+            shape(&grouped),
+            vec![vec!["read_file"], vec!["no_such_tool"], vec!["grep"]]
+        );
+    }
+
+    /// Reads that run together still answer in the order they were asked, whatever order
+    /// they finish in - a result is matched to its call by position and by id.
+    #[tokio::test]
+    async fn parallel_reads_answer_in_the_order_they_were_asked() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "AAA");
+        h.write("b.txt", "BBB");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}},{"index":1,"id":"c2","function":{"name":"read_file","arguments":"{\"path\":\"b.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"read both"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        drive(&mut agent, "read them").await;
+
+        let answers: Vec<_> = agent
+            .session
+            .history
+            .iter()
+            .filter(|m| m.role == "tool")
+            .map(|m| {
+                (
+                    m.tool_call_id.clone().unwrap_or_default(),
+                    m.content.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(answers.len(), 2, "{answers:?}");
+        assert_eq!(answers[0].0, "c1");
+        assert!(answers[0].1.contains("AAA"), "{answers:?}");
+        assert_eq!(answers[1].0, "c2");
+        assert!(answers[1].1.contains("BBB"), "{answers:?}");
     }
 
     /// The envelope path must keep working exactly as it did.

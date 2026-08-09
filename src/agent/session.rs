@@ -26,6 +26,14 @@ const SAFETY: f64 = 0.9;
 const MIN_RATIO: f64 = 1.5;
 const MAX_RATIO: f64 = 8.0;
 
+/// How far below the budget a compaction trims.
+///
+/// The cost of compacting is not the copying - it is that the server's prefix cache is
+/// invalidated and the whole prompt has to be processed again. Trimming to just under the
+/// line means the next step crosses it and pays that cost again immediately; trimming well
+/// under it means several steps fit before the next one.
+const COMPACT_TO: f64 = 0.6;
+
 /// How much of a new observation to believe.
 ///
 /// Each request's ratio varies with what happens to be in the history, so corrections are
@@ -171,8 +179,8 @@ impl Session {
         })
     }
 
-    /// Drop the oldest steps until the history fits the budget, and report how many
-    /// messages went.
+    /// Drop the oldest steps until the history is comfortably inside the budget, and
+    /// report how many messages went.
     ///
     /// Two invariants make this safe to do behind the model's back. The system message
     /// stays: it carries the tool manifest and the response contract, and a server that
@@ -180,14 +188,24 @@ impl Session {
     /// what removes the preamble. And a step is dropped whole - an assistant turn
     /// together with the tool results it produced - because a tool result whose call is
     /// gone describes an action the model cannot see itself having taken.
+    ///
+    /// It trims well past the line rather than to it, which is about the
+    /// server's cache and not about memory here. The server keeps a prefix cache keyed on
+    /// the conversation, and dropping anything from the front changes the prefix at the
+    /// second message - so every compaction throws that cache away and the whole prompt is
+    /// processed again. Trimming only just enough means the next step overflows again and
+    /// pays it again. Trimming well past the line means it happens rarely, which is the
+    /// only lever available from this side: an overflowing conversation cannot be made
+    /// cheap, but it can be made infrequent.
     pub fn compact(&mut self) -> usize {
         if self.budget_chars == 0 || self.size_chars() <= self.budget_chars {
             return 0;
         }
+        let target = (self.budget_chars as f64 * COMPACT_TO) as usize;
         let mut dropped = 0;
         // Everything from index 1 on is fair game; stop while a user turn remains, so
         // the conversation the model reads still opens on somebody asking for something.
-        while self.size_chars() > self.budget_chars {
+        while self.size_chars() > target {
             let Some(next) = self.next_user_boundary() else {
                 break;
             };
@@ -362,6 +380,57 @@ mod tests {
         );
         assert_eq!(s.history.iter().filter(|m| m.content == ELISION).count(), 1);
         assert!(s.history.len() < 21);
+    }
+
+    /// The point of trimming past the line rather than up to it. Compacting invalidates the
+    /// server's prefix cache, so what matters is how often it happens, not how little it
+    /// removes each time.
+    #[test]
+    fn compacting_is_rare_rather_than_minimal() {
+        // A conversation that keeps growing past a fixed budget.
+        fn compactions(budget_tokens: usize) -> usize {
+            let mut s = Session::new("sys".into(), budget_tokens, 0);
+            let mut events = 0;
+            for _ in 0..200 {
+                s.push(msg("user", 100));
+                s.push(msg("assistant", 100));
+                if s.compact() > 0 {
+                    events += 1;
+                }
+            }
+            events
+        }
+
+        const STEPS: usize = 200;
+        let events = compactions(500);
+        assert!(
+            events > 0,
+            "the conversation never overflowed; the test proves nothing"
+        );
+        // Trimming to exactly the budget makes the next step cross it again, so it compacts
+        // on roughly every step once it is full. Several steps between compactions is the
+        // whole of the improvement, and it is what this asserts.
+        assert!(
+            events * 3 < STEPS,
+            "compacted {events} times in {STEPS} steps - fewer than three steps between, so \
+             the server's prefix cache is being thrown away almost every step"
+        );
+    }
+
+    /// Trimming further must not eat the exchange the model needs most.
+    #[test]
+    fn trimming_past_the_line_still_keeps_the_latest_turn() {
+        let mut s = Session::new("sys".into(), 400, 0);
+        for i in 0..20 {
+            s.push(msg("user", 100));
+            s.push(Message::assistant(format!("answer {i}")));
+        }
+        s.compact();
+        assert!(
+            s.history.iter().any(|m| m.content == "answer 19"),
+            "the most recent answer was trimmed away"
+        );
+        assert_eq!(s.history[0].role, "system");
     }
 
     /// The last exchange is what the model needs most; compaction must not eat into it
