@@ -93,6 +93,15 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 ### Changed
 
+- The backend is behind a `Provider` trait, with the OpenAI-compatible format as one
+  implementation and the Anthropic Messages API as another. `[backend] kind` selects one;
+  `auto` reads it off the URL. What a provider can do is declared rather than guessed - the
+  grammar in particular is now sent only where it can be enforced, instead of to servers that
+  accept the field and ignore it.
+- A reasoning model's scratchpad is separated from its answer, in all four spellings it
+  arrives in: inline `<think>` tags, a `reasoning` field, a `reasoning_content` field, and
+  Anthropic's thinking blocks. It is shown apart and never enters the conversation.
+
 - `bash` can be confined. `--confine-shell`, or `[shell] confine-writes`, makes everything
   outside the project read-only for an approved command and everything it starts. Linux
   only, and off by default, because it can make a build whose cache lives elsewhere fail in
@@ -119,7 +128,7 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 - Tool names are borrowed rather than `&'static str`, so a tool can be named by something
   that was not known at compile time.
-- Tests went from 21 to 200. All twelve tools have them now; the LSP pair talk to a stub
+- Tests went from 21 to 222. All twelve tools have them now; the LSP pair talk to a stub
   language server, which is what finally tests that an edited file is re-sent. Ten of the twelve tools now have one; the two LSP tools do not,
   because testing them needs a language server.
 - `src/tools/tests.rs` was the `run_tests` tool rather than tests, and is now `run_tests.rs`.

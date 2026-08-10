@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub model: Option<String>,
     pub root: PathBuf,
     pub backend_url: String,
+    /// Which API the backend speaks, already settled against the URL.
+    pub backend_kind: crate::config::BackendKind,
     /// Sent with every backend request, including any `Authorization` resolved from the
     /// environment or a config file.
     pub headers: Vec<(String, String)>,

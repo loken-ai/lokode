@@ -141,10 +141,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     };
 
     let agent = Agent {
-        backend: Arc::new(BackendClient::with_headers(
-            cfg.backend_url.clone(),
-            &cfg.headers,
-        )),
+        backend: provider_for(cfg)?,
         registry,
         session,
         cfg: AgentConfig {
@@ -174,6 +171,39 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         checkpoint_error,
         mcp,
     })
+}
+
+/// Build the client for whichever API the backend speaks.
+///
+/// The credential is resolved the same way for both - environment, then a named variable,
+/// then a private file - and only where it is put on the wire differs: `Authorization:
+/// Bearer` for the OpenAI-compatible family, `x-api-key` for Anthropic. Converting a
+/// working configuration between them is a header change, not a value change.
+fn provider_for(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Provider>> {
+    match cfg.backend_kind {
+        crate::config::BackendKind::Anthropic => {
+            let key = cfg
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+                .map(|(_, v)| v.trim_start_matches("Bearer ").to_string())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "the Anthropic API needs a key: set VERVE_API_KEY, or name a variable \
+                         with `api-key-env` in the configuration"
+                    )
+                })?;
+            Ok(Arc::new(crate::backend::anthropic::AnthropicProvider::new(
+                cfg.backend_url.clone(),
+                &key,
+            )?))
+        }
+        // `auto` is settled against the URL before it reaches here.
+        _ => Ok(Arc::new(BackendClient::with_headers(
+            cfg.backend_url.clone(),
+            &cfg.headers,
+        ))),
+    }
 }
 
 /// The twelve tools, and the language-server pool two of them share.

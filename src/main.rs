@@ -96,6 +96,10 @@ struct Cli {
     #[arg(long)]
     confine_shell: bool,
 
+    /// Which API the backend speaks. Read off the URL when not given.
+    #[arg(long, value_enum)]
+    backend_kind: Option<config::BackendKind>,
+
     /// Print where settings were read from, and what they resolved to, then exit.
     #[arg(long)]
     show_config: bool,
@@ -208,6 +212,14 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
         },
     };
 
+    // Settled before the URL is moved into the config, and settled once: `auto` reads the
+    // kind off the URL, so a later reader sees a decision rather than a question.
+    let backend_kind = cli
+        .backend_kind
+        .or(file.backend.kind)
+        .unwrap_or_default()
+        .resolve(&backend_url);
+
     let resume = match (&cli.resume, cli.continue_last) {
         (Some(id), _) => Some(app::Resume::Id(id.clone())),
         (None, true) => Some(app::Resume::Latest),
@@ -262,6 +274,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             transcripts,
             resume,
             tool_protocol,
+            backend_kind,
             warnings,
             mcp_servers: file.mcp.servers.clone(),
             // The project itself is always writable; the rest is what was named.
@@ -302,6 +315,7 @@ fn print_config(cfg: &Resolved) {
     );
     println!("  root               {}", a.root.display());
     println!("  backend-url        {}", a.backend_url);
+    println!("  backend-kind       {}", a.backend_kind.label());
     println!("  tool-protocol      {:?}", a.tool_protocol);
     println!("  grammar            {}", a.grammar_enabled);
     println!("  max-steps          {}", a.max_steps);

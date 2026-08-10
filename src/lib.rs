@@ -14,8 +14,9 @@
 //! # The parts
 //!
 //! - [`agent`] - the loop, the conversation and what it is written to.
-//! - [`backend`] - an OpenAI-compatible client, the wire types, and the repair pass for the
-//!   JSON a model gets slightly wrong.
+//! - [`backend`] - the providers, the wire types, and the repair pass for the JSON a model
+//!   gets slightly wrong. [`backend::provider::Provider`] is the seam: everything about
+//!   whose API is answering lives behind it.
 //! - [`tools`] - the twelve things the agent can do, and the registry they are named in.
 //! - [`sandbox`] - what the agent may touch, and what the user has agreed to.
 //! - [`config`] - settings, from a flag, the environment, a project file or a user file.

@@ -65,6 +65,36 @@ pub struct ShellSection {
     pub writable: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum BackendKind {
+    #[default]
+    Auto,
+    /// The format almost every server speaks: LLMuse, ollama, vLLM, llama.cpp, OpenAI.
+    Openai,
+    /// The Anthropic Messages API.
+    Anthropic,
+}
+
+impl BackendKind {
+    /// Settle `auto` against the URL it will be talking to.
+    pub fn resolve(self, url: &str) -> Self {
+        match self {
+            BackendKind::Auto if url.contains("api.anthropic.com") => BackendKind::Anthropic,
+            BackendKind::Auto => BackendKind::Openai,
+            explicit => explicit,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BackendKind::Auto => "auto",
+            BackendKind::Openai => "openai",
+            BackendKind::Anthropic => "anthropic",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct McpSection {
@@ -92,6 +122,12 @@ fn yes() -> bool {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct BackendSection {
+    /// Which API the backend speaks.
+    ///
+    /// `auto` reads it off the URL, which is right for every case anyone actually has:
+    /// api.anthropic.com is Anthropic, everything else is OpenAI-compatible. Name one
+    /// explicitly to reach an Anthropic-compatible proxy on your own host.
+    pub kind: Option<BackendKind>,
     pub url: Option<String>,
     /// A key written in the file itself.
     ///
@@ -170,6 +206,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
         model: over.model.or(base.model),
         tool_protocol: over.tool_protocol.or(base.tool_protocol),
         backend: BackendSection {
+            kind: over.backend.kind.or(base.backend.kind),
             url: over.backend.url.or(base.backend.url),
             api_key: over.backend.api_key.or(base.backend.api_key),
             api_key_env: over.backend.api_key_env.or(base.backend.api_key_env),

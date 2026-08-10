@@ -7,8 +7,10 @@ no request leaving the box, no editor to adopt.
 verve --model qwen3-coder:latest --root .
 ```
 
-It speaks the OpenAI-compatible API, so it works against [LLMuse](https://github.com/loken-ai/loken)
-or anything else that serves one - the default backend is `http://127.0.0.1:11435`.
+It speaks the OpenAI-compatible API, so it works against [LLMuse](https://github.com/loken-ai/loken),
+ollama, vLLM, llama.cpp or anything else that serves one - the default backend is
+`http://127.0.0.1:11435`. It also speaks the Anthropic Messages API, for the days you want a
+model that is not on your machine.
 
 ## What it does
 
@@ -148,6 +150,7 @@ tool-protocol = "auto"          # auto | native | envelope
 
 [backend]
 url = "http://127.0.0.1:11435"
+kind = "auto"                   # auto | openai | anthropic
 api-key-env = "MY_BACKEND_KEY"  # name a variable; do not write the key here
 headers = { "X-Team" = "verve" }
 
@@ -193,6 +196,25 @@ treated as able to change the project, and the schema a server advertises is che
 it is allowed to shape the grammar the model is held to - a schema this code cannot compile
 would not break one tool, it would break the turn. A tool that fails that check is refused by
 name and said so, and a server that will not start takes only itself down.
+
+## Which API
+
+`kind = "auto"` reads it off the URL and is right for every ordinary case: `api.anthropic.com`
+is the Messages API, everything else is OpenAI-compatible. Name one explicitly to reach a
+proxy that speaks Anthropic's format on your own host.
+
+The credential is resolved the same way either way — the environment, then a named variable,
+then a file only you can read. Only where it goes on the wire differs: `Authorization: Bearer`
+for the OpenAI family, `x-api-key` for Anthropic. Converting a working configuration between
+them is a header change, not a value change, and verve makes it for you.
+
+What differs beyond that is absorbed at the boundary. Anthropic's system prompt is a top-level
+field rather than a message, its tool results are blocks inside a user turn rather than their
+own role, and its stream speaks a different alphabet. None of that reaches the loop, the
+transcript or the screen. Reasoning is the same story from the other direction: `<think>` tags
+inline, a `reasoning` field, a `reasoning_content` field and Anthropic's thinking blocks are
+four spellings of one thing, and verve shows all four the same way — set apart, and never fed
+back to the model.
 
 ## How tools are called
 
