@@ -11,12 +11,11 @@ use crate::agent::protocol::{
     CallAccumulator, ModelTurn, ResolvedCall, ToolProtocol, TurnEnvelope,
 };
 use crate::agent::session::Session;
-use crate::backend::client::{BackendClient, StreamEvent, UNSUPPORTED_NATIVE_TOOLS};
+use crate::backend::client::{ChunkStream, StreamEvent, UNSUPPORTED_NATIVE_TOOLS};
+use crate::backend::provider::{Provider, TurnRequest};
 use crate::backend::repair::{self, MAX_REPAIR_ATTEMPTS};
 use crate::backend::schema::{build_turn_schema, tool_manifest, tool_specs};
-use crate::backend::wire::{
-    ChatCompletionRequest, FunctionCall, Message, ResponseFormat, ToolCall, Usage,
-};
+use crate::backend::wire::{FunctionCall, Message, ToolCall, Usage};
 use crate::checkpoint::{Checkpoints, Snapshot};
 use crate::tools::registry::{Registry, ToolCtx, ToolOutput};
 
@@ -110,7 +109,8 @@ pub struct AgentConfig {
 }
 
 pub struct Agent {
-    pub backend: BackendClient,
+    /// Whoever answers. The loop knows nothing about which API it is.
+    pub backend: Arc<dyn Provider>,
     pub registry: Arc<Registry>,
     pub session: Session,
     pub cfg: AgentConfig,
@@ -524,27 +524,28 @@ impl Agent {
         // The grammar constrains the envelope. Under the native protocol there is no
         // envelope to constrain, and forcing this schema would demand an object the model
         // is not being asked to produce.
-        let response_format = match (native, self.cfg.grammar_enabled) {
-            (false, true) => Some(ResponseFormat::json_schema("turn", schema.clone())),
+        // Asked for only when the provider can actually hold the model to it. A server
+        // that cannot enforce a schema is not sent one: the request would be accepted and
+        // the constraint quietly not applied, which is worse than not asking.
+        let grammar = match (
+            native,
+            self.cfg.grammar_enabled && self.backend.capabilities().grammar,
+        ) {
+            (false, true) => Some(schema.clone()),
             _ => None,
         };
 
-        let req = ChatCompletionRequest {
+        let req = TurnRequest {
             model: self.cfg.model.clone(),
             messages: self.session.history.clone(),
-            stream: Some(true),
-            temperature: Some(0.2),
-            top_p: None,
-            max_tokens: Some(self.cfg.max_answer_tokens as u32),
-            seed: None,
-            response_format,
-            user: Some(self.session.id.clone()),
-            stream_options: None,
             tools: native.then(|| tool_specs(&self.registry)),
-            tool_choice: native.then(|| "auto".to_string()),
+            grammar,
+            max_tokens: self.cfg.max_answer_tokens as u32,
+            temperature: 0.2,
+            user: Some(self.session.id.clone()),
         };
 
-        let mut stream = tokio::select! {
+        let mut stream: ChunkStream = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(anyhow::anyhow!("interrupted")),
             r = self.backend.stream(req) => r?,
@@ -633,24 +634,19 @@ impl Agent {
                 "asking the model to repair its own output"
             );
             let prompt = repair::repair_prompt(&last_err.to_string(), &current);
-            let repair_req = ChatCompletionRequest {
+            let repair_req = TurnRequest {
                 model: self.cfg.model.clone(),
                 messages: vec![
                     Message::system("You are a strict JSON formatter. Output a single JSON object only — no prose, no fences."),
                     Message::user(prompt),
                 ],
-                stream: Some(false),
-                temperature: Some(0.0),
-                top_p: None,
-                max_tokens: Some(4096),
-                seed: Some(0),
-                response_format: Some(ResponseFormat::json_schema("turn", schema.clone())),
-                user: Some(format!("{}-repair", self.session.id)),
-                stream_options: None,
                 // The repair round-trip asks for one thing: valid JSON. Offering tools
                 // here would invite the model to do something else instead.
                 tools: None,
-                tool_choice: None,
+                grammar: self.backend.capabilities().grammar.then(|| schema.clone()),
+                max_tokens: 4096,
+                temperature: 0.0,
+                user: Some(format!("{}-repair", self.session.id)),
             };
             current = tokio::select! {
                 biased;
@@ -792,7 +788,9 @@ mod tests {
     ) -> Agent {
         let registry = Arc::new(reg);
         Agent {
-            backend: BackendClient::new(backend.url.clone()),
+            backend: Arc::new(crate::backend::client::BackendClient::new(
+                backend.url.clone(),
+            )),
             session: Session::new(Agent::build_system_prompt(&registry, protocol), 8192, 4096),
             registry,
             cfg: AgentConfig {

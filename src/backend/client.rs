@@ -6,7 +6,9 @@ use anyhow::{anyhow, Context, Result};
 use eventsource_stream::Eventsource;
 use futures::stream::{Stream, StreamExt};
 
-use crate::backend::wire::{ChatChunk, ChatCompletionRequest, StreamOptions, ToolCallDelta, Usage};
+use crate::backend::wire::{
+    ChatChunk, ChatCompletionRequest, ResponseFormat, StreamOptions, ToolCallDelta, Usage,
+};
 
 /// What a streaming response hands back as it arrives.
 #[derive(Debug, Clone)]
@@ -97,7 +99,7 @@ impl BackendClient {
 
     /// Non-streaming chat completion: returns the assistant content as
     /// a single string. Convenience for repair round-trips.
-    pub async fn complete(&self, mut req: ChatCompletionRequest) -> Result<String> {
+    async fn complete_request(&self, mut req: ChatCompletionRequest) -> Result<String> {
         req.stream = Some(false);
         req.stream_options = None;
         let url = self.url();
@@ -137,7 +139,7 @@ impl BackendClient {
     /// Retries cover establishing the response only. Once bytes are flowing the answer is
     /// partly on screen and partly in the transcript, and starting again would duplicate
     /// what the user has already read.
-    pub async fn stream(&self, mut req: ChatCompletionRequest) -> Result<ChunkStream> {
+    async fn stream_request(&self, mut req: ChatCompletionRequest) -> Result<ChunkStream> {
         req.stream = Some(true);
         let url = self.url();
 
@@ -354,6 +356,60 @@ pub const UNSUPPORTED_NATIVE_TOOLS: &str = "backend does not support native tool
 fn mentions(e: &anyhow::Error, needles: &[&str]) -> bool {
     let text = format!("{e:#}");
     needles.iter().any(|n| text.contains(n))
+}
+
+/// The OpenAI-compatible wire format, which is what almost every server speaks.
+///
+/// LLMuse, ollama, vLLM, llama.cpp, LM Studio, OpenAI itself and the hosted services that
+/// copied it all land here. What differs between them is dialect - which optional fields
+/// they accept - and that is what its capabilities carry, not a separate implementation
+/// each.
+///
+/// See [`crate::backend::provider::Capabilities`] for what it declares it can do.
+#[async_trait::async_trait]
+impl crate::backend::provider::Provider for BackendClient {
+    fn label(&self) -> &str {
+        "openai-compatible"
+    }
+
+    fn capabilities(&self) -> crate::backend::provider::Capabilities {
+        crate::backend::provider::Capabilities {
+            native_tools: true,
+            grammar: true,
+            // Learned rather than declared: the client stops asking for usage once a
+            // server has rejected the field, so this reports what is actually happening.
+            usage_in_stream: self.usage_supported.load(Ordering::Relaxed),
+        }
+    }
+
+    async fn complete(&self, req: crate::backend::provider::TurnRequest) -> Result<String> {
+        self.complete_request(self.render(req)).await
+    }
+
+    async fn stream(&self, req: crate::backend::provider::TurnRequest) -> Result<ChunkStream> {
+        self.stream_request(self.render(req)).await
+    }
+}
+
+impl BackendClient {
+    /// Turn a neutral request into this dialect's body.
+    fn render(&self, req: crate::backend::provider::TurnRequest) -> ChatCompletionRequest {
+        let native = req.tools.is_some();
+        ChatCompletionRequest {
+            model: req.model,
+            messages: req.messages,
+            stream: Some(true),
+            temperature: Some(req.temperature),
+            top_p: None,
+            max_tokens: Some(req.max_tokens),
+            seed: None,
+            response_format: req.grammar.map(|s| ResponseFormat::json_schema("turn", s)),
+            user: req.user,
+            stream_options: None,
+            tools: req.tools,
+            tool_choice: native.then(|| "auto".to_string()),
+        }
+    }
 }
 
 #[cfg(test)]

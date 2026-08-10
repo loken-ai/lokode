@@ -141,7 +141,10 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     };
 
     let agent = Agent {
-        backend: BackendClient::with_headers(cfg.backend_url.clone(), &cfg.headers),
+        backend: Arc::new(BackendClient::with_headers(
+            cfg.backend_url.clone(),
+            &cfg.headers,
+        )),
         registry,
         session,
         cfg: AgentConfig {
