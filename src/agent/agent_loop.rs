@@ -25,8 +25,16 @@ use crate::tools::registry::{Registry, ToolCtx, ToolOutput};
 pub enum AgentEvent {
     AssistantDelta(String),
     AssistantText(String),
-    ToolCall { name: String, args_pretty: String },
-    ToolResult { name: String, output: ToolOutput },
+    /// The model's scratchpad. Shown, never recorded, never sent back.
+    Reasoning(String),
+    ToolCall {
+        name: String,
+        args_pretty: String,
+    },
+    ToolResult {
+        name: String,
+        output: ToolOutput,
+    },
     Notice(String),
     TurnDone,
 }
@@ -565,6 +573,12 @@ impl Agent {
                 StreamEvent::Delta(p) => {
                     out.text.push_str(&p);
                     let _ = events.send(AgentEvent::AssistantDelta(p)).await;
+                }
+                // Shown as it arrives and then dropped. It is deliberately not appended to
+                // `out.text`: the scratchpad is not the answer, and replaying it into the
+                // history would teach the next turn that it was.
+                StreamEvent::Reasoning(p) => {
+                    let _ = events.send(AgentEvent::Reasoning(p)).await;
                 }
                 StreamEvent::Call(delta) => out.calls.push(delta),
                 StreamEvent::End {

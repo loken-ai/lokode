@@ -172,6 +172,14 @@ impl UiState {
         self.scroll = (self.scroll as usize).saturating_sub(by) as u16;
     }
 
+    /// Accumulate a piece of the model's scratchpad into one entry.
+    fn push_reasoning(&mut self, chunk: &str) {
+        match self.entries.last_mut() {
+            Some(Entry::Reasoning(s)) => s.push_str(chunk),
+            _ => self.entries.push(Entry::Reasoning(chunk.to_string())),
+        }
+    }
+
     fn remember(&mut self, text: &str) {
         // Repeating the last line adds nothing to walk through.
         if self.history.last().map(String::as_str) != Some(text) {
@@ -343,6 +351,7 @@ async fn run_ui(
 
             Some(evt) = agent_evt_rx.recv() => {
                 match evt {
+                    AgentEvent::Reasoning(p) => state.push_reasoning(&p),
                     AgentEvent::AssistantDelta(chunk) => {
                         match state.entries.last_mut() {
                             Some(Entry::AssistantStreaming(s)) => s.push_str(&chunk),

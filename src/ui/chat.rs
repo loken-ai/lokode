@@ -17,6 +17,11 @@ pub enum Entry {
         body: String,
     },
     Notice(String),
+    /// The model's scratchpad, accumulated while it streams.
+    ///
+    /// Shown dimmed and set apart, because it is the one thing in the pane the user must
+    /// not mistake for the answer.
+    Reasoning(String),
 }
 
 impl Entry {
@@ -61,6 +66,19 @@ impl Entry {
             }
             // `/diff` answers through a notice, and a wall of uncoloured diff is the thing
             // it is least useful as.
+            Entry::Reasoning(s) => {
+                let mut lines = block("thinking", Color::DarkGray, s, Body::Plain);
+                // Dim the body as well as the label: the header alone is not enough to
+                // stop a wall of scratchpad reading as the answer.
+                for line in lines.iter_mut().skip(1) {
+                    for span in line.spans.iter_mut() {
+                        if span.style.fg.is_none() {
+                            span.style = span.style.fg(Color::DarkGray);
+                        }
+                    }
+                }
+                lines
+            }
             Entry::Notice(s) => block(
                 "·",
                 Color::DarkGray,

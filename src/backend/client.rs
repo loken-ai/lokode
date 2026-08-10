@@ -12,6 +12,11 @@ use crate::backend::wire::{ChatChunk, ChatCompletionRequest, StreamOptions, Tool
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     Delta(String),
+    /// A piece of the model's scratchpad, however the server chose to mark it.
+    ///
+    /// Shown and then dropped: it never enters the conversation, because it is not what
+    /// the model said - it is what it was working through on the way to saying it.
+    Reasoning(String),
     /// A fragment of a native tool call, to be reassembled by index.
     Call(ToolCallDelta),
     /// The end of generation, carrying what the server was willing to say about it.
@@ -189,11 +194,17 @@ impl BackendClient {
             }
         };
 
+        // One splitter per response: the tags it tracks can straddle chunk boundaries, so
+        // the state has to outlive a single chunk and must not outlive the stream.
         let sse = resp.bytes_stream().eventsource();
         // One chunk can carry several things at once - a piece of prose, fragments of more
         // than one tool call, and the reason generation ended - so a chunk becomes a list
         // of events rather than one.
-        let mapped = sse.flat_map(|ev| {
+        // One splitter per response, moved into the closure: the tags it tracks can
+        // straddle chunk boundaries, so the state must outlive a single chunk - and must
+        // not outlive the stream, or one response's half-open tag would corrupt the next.
+        let mut think = crate::backend::reasoning::ThinkSplitter::default();
+        let mapped = sse.flat_map(move |ev| {
             let events: Vec<Result<StreamEvent>> = match ev {
                 Err(e) => vec![Err(anyhow!("sse: {e}"))],
                 Ok(event) if event.data.trim() == "[DONE]" => {
@@ -201,7 +212,7 @@ impl BackendClient {
                     Vec::new()
                 }
                 Ok(event) => match serde_json::from_str::<ChatChunk>(&event.data) {
-                    Ok(c) => events_of(c).into_iter().map(Ok).collect(),
+                    Ok(c) => events_of(c, &mut think).into_iter().map(Ok).collect(),
                     Err(e) => vec![Err(anyhow!("decode chunk: {e}: raw={}", event.data))],
                 },
             };
@@ -243,14 +254,26 @@ impl BackendClient {
 }
 
 /// Everything one chunk has to say.
-fn events_of(c: ChatChunk) -> Vec<StreamEvent> {
+fn events_of(
+    c: ChatChunk,
+    think: &mut crate::backend::reasoning::ThinkSplitter,
+) -> Vec<StreamEvent> {
     let mut out = Vec::new();
     let mut text = String::new();
+    let mut reasoning = String::new();
     let mut finish_reason = None;
 
     for choice in c.choices {
+        // A server that splits the scratchpad out for us, under either name it might use.
+        if let Some(s) = choice.delta.reasoning.or(choice.delta.reasoning_content) {
+            reasoning.push_str(&s);
+        }
         if let Some(s) = choice.delta.content {
-            text.push_str(&s);
+            // And a server that does not: the tags arrive inside the content, a few
+            // characters at a time, so this is a state machine rather than a search.
+            let split = think.push(&s);
+            text.push_str(&split.answer);
+            reasoning.push_str(&split.reasoning);
         }
         for call in choice.delta.tool_calls.into_iter().flatten() {
             out.push(StreamEvent::Call(call));
@@ -262,9 +285,21 @@ fn events_of(c: ChatChunk) -> Vec<StreamEvent> {
     if !text.is_empty() {
         out.insert(0, StreamEvent::Delta(text));
     }
+    if !reasoning.is_empty() {
+        out.insert(0, StreamEvent::Reasoning(reasoning));
+    }
     // The usage report arrives on a chunk of its own, after the one that ends generation,
     // so an end is reported whenever either shows up.
     if finish_reason.is_some() || c.usage.is_some() {
+        // Generation is over, so anything the splitter is still holding will never be
+        // disambiguated by a later fragment - release it rather than swallow it.
+        let last = think.finish();
+        if !last.answer.is_empty() {
+            out.push(StreamEvent::Delta(last.answer));
+        }
+        if !last.reasoning.is_empty() {
+            out.push(StreamEvent::Reasoning(last.reasoning));
+        }
         out.push(StreamEvent::End {
             finish_reason,
             usage: c.usage,

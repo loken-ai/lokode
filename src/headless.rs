@@ -165,6 +165,13 @@ pub async fn run(
             // Deltas are the raw stream, which under the envelope protocol is a JSON object
             // being typed out. The prose is reported once it is known.
             AgentEvent::AssistantDelta(_) => {}
+            // A scratchpad is not a result. It goes to stderr with the rest of the
+            // narration under `text`, and never into the report a caller parses.
+            AgentEvent::Reasoning(s) => {
+                if text_output {
+                    eprint!("{s}");
+                }
+            }
             AgentEvent::AssistantText(s) => {
                 if text_output && !s.trim().is_empty() {
                     println!("{s}");

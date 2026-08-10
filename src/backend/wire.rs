@@ -204,6 +204,16 @@ pub struct ChunkDelta {
     pub content: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<ToolCallDelta>>,
+    /// A reasoning model's scratchpad, where the server splits it out for us.
+    ///
+    /// Not in the OpenAI specification, so the vendors disagree on the name: ollama and
+    /// OpenRouter say `reasoning`, DeepSeek says `reasoning_content`, and loken leaves it
+    /// inline in `content` behind `<think>` tags. Both names are read here; the inline
+    /// form is handled by the splitter.
+    #[serde(default)]
+    pub reasoning: Option<String>,
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
 }
 
 /// A fragment of a tool call.
