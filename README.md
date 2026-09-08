@@ -7,7 +7,7 @@ no request leaving the box, no editor to adopt.
 verve --model qwen3-coder:latest --root .
 ```
 
-It speaks the OpenAI-compatible API, so it works against [LLMuse](https://github.com/loken-ai/loken),
+It speaks the OpenAI-compatible API, so it works against [loken](https://github.com/loken-ai/loken),
 ollama, vLLM, llama.cpp or anything else that serves one - the default backend is
 `http://127.0.0.1:11435`. It also speaks the Anthropic Messages API, for the days you want a
 model that is not on your machine.
