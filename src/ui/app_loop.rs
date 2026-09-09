@@ -56,6 +56,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         restored,
         checkpoints,
         checkpoint_error,
+        instruction_notes,
         mcp,
     } = boot::boot(&cfg).await?;
 
@@ -92,7 +93,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         protocol,
         checkpoints,
         checkpoint_error,
-        mcp.notices.clone(),
+        [instruction_notes, mcp.notices.clone()].concat(),
         session_id,
         restored,
         &shutdown,
@@ -246,7 +247,7 @@ async fn run_ui(
     protocol: ToolProtocol,
     checkpoints: Option<Arc<Checkpoints>>,
     checkpoint_error: Option<String>,
-    mcp_notices: Vec<String>,
+    startup_notices: Vec<String>,
     session_id: String,
     restored: usize,
     shutdown: &CancellationToken,
@@ -272,7 +273,7 @@ async fn run_ui(
             "no change history for this session ({why}); /undo and /diff are unavailable"
         )));
     }
-    for notice in &mcp_notices {
+    for notice in &startup_notices {
         state.entries.push(Entry::Notice(notice.clone()));
     }
     // Raised while resolving settings, before there was a screen to say them on.
@@ -488,7 +489,9 @@ async fn run_ui(
                                 // when the thing you want undone is what the model just did.
                                 state.remember(&text);
                                 if let Some(command) = text.strip_prefix('/') {
-                                    let reply = run_command(command.trim(), checkpoints.as_deref()).await;
+                                    let reply =
+                                        run_command(command.trim(), checkpoints.as_deref(), &cfg.root)
+                                            .await;
                                     state.entries.push(Entry::Notice(reply));
                                     continue;
                                 }
@@ -530,7 +533,11 @@ fn is_quit(k: &KeyEvent) -> bool {
 /// These do not reach the model and do not become part of the conversation: they are things
 /// the user is asking of the tool about the session, and putting them in the transcript
 /// would describe a turn that never happened.
-async fn run_command(command: &str, checkpoints: Option<&Checkpoints>) -> String {
+async fn run_command(
+    command: &str,
+    checkpoints: Option<&Checkpoints>,
+    root: &std::path::Path,
+) -> String {
     match command {
         "help" | "" => HELP.into(),
         "undo" => match checkpoints {
@@ -552,6 +559,23 @@ async fn run_command(command: &str, checkpoints: Option<&Checkpoints>) -> String
                 }
             },
         },
+        "init" => {
+            let path = crate::config::project_instructions_path(root);
+            if path.exists() {
+                format!(
+                    "{} is already there; edit it rather than overwrite it",
+                    path.display()
+                )
+            } else {
+                match std::fs::write(&path, crate::config::draft_instructions(root)) {
+                    Err(e) => format!("could not write {}: {e}", path.display()),
+                    Ok(()) => format!(
+                        "wrote {}: edit it, then start a session to have it read",
+                        path.display()
+                    ),
+                }
+            }
+        }
         "diff" => match checkpoints {
             None => "no change history for this session".into(),
             Some(cp) => match cp.diff().await {
@@ -569,6 +593,7 @@ async fn run_command(command: &str, checkpoints: Option<&Checkpoints>) -> String
 const HELP: &str = "\
 /diff   everything the agent has changed this session
 /undo   put back the most recent turn that changed something
+/init   write a first draft of this project's instructions
 /help   this";
 
 /// Which decision a keystroke stands for at the approval modal.

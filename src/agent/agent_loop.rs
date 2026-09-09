@@ -136,6 +136,9 @@ struct Completion {
 
 pub struct AgentConfig {
     pub model: String,
+    /// The standing instructions the preamble carries, kept so a protocol change or a
+    /// model change can rebuild the preamble without reading the files again.
+    pub instructions: Option<String>,
     pub grammar_enabled: bool,
     pub max_steps: usize,
     pub max_answer_tokens: usize,
@@ -169,7 +172,26 @@ impl Agent {
     /// In the native protocol the tools travel in their own field and the server states
     /// the calling convention itself, so repeating a JSON schema here would describe a
     /// shape the model is not being asked for.
-    pub fn build_system_prompt(reg: &Registry, protocol: ToolProtocol) -> String {
+    pub fn build_system_prompt(
+        reg: &Registry,
+        protocol: ToolProtocol,
+        instructions: Option<&str>,
+    ) -> String {
+        let mut prompt = Self::contract(reg, protocol);
+        // Last, and named as the project's own: a model that has read the contract first
+        // is less likely to take a project's wording for the calling convention.
+        if let Some(text) = instructions.map(str::trim).filter(|t| !t.is_empty()) {
+            prompt.push_str(
+                "\n\nStanding instructions for this project and this user. Follow them \
+                 unless the user says otherwise in the conversation.\n\n",
+            );
+            prompt.push_str(text);
+            prompt.push('\n');
+        }
+        prompt
+    }
+
+    fn contract(reg: &Registry, protocol: ToolProtocol) -> String {
         match protocol {
             ToolProtocol::Native => format!(
                 "You are a local-first code agent driving a TUI on the user's machine.\n\
@@ -196,7 +218,11 @@ impl Agent {
     /// without changing it would leave the model reading instructions for the other one.
     fn fall_back_to_envelope(&mut self) {
         self.cfg.protocol = ToolProtocol::Envelope;
-        let preamble = Self::build_system_prompt(&self.registry, ToolProtocol::Envelope);
+        let preamble = Self::build_system_prompt(
+            &self.registry,
+            ToolProtocol::Envelope,
+            self.cfg.instructions.as_deref(),
+        );
         self.session.set_system_prompt(preamble);
     }
 
@@ -850,9 +876,14 @@ mod tests {
             backend: Arc::new(crate::backend::client::BackendClient::new(
                 backend.url.clone(),
             )),
-            session: Session::new(Agent::build_system_prompt(&registry, protocol), 8192, 4096),
+            session: Session::new(
+                Agent::build_system_prompt(&registry, protocol, None),
+                8192,
+                4096,
+            ),
             registry,
             cfg: AgentConfig {
+                instructions: None,
                 model: "test".into(),
                 grammar_enabled: true,
                 max_steps: 4,

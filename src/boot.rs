@@ -36,6 +36,8 @@ pub struct Booted {
     pub recorder: Option<JoinHandle<()>>,
     pub session_id: String,
     pub model: String,
+    /// What reading the standing instructions had to say, if anything.
+    pub instruction_notes: Vec<String>,
     pub protocol: ToolProtocol,
     /// How many messages came back from a resumed session.
     pub restored: usize,
@@ -89,7 +91,13 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         ProtocolChoice::Envelope => ToolProtocol::Envelope,
         ProtocolChoice::Auto | ProtocolChoice::Native => ToolProtocol::Native,
     };
-    let system = Agent::build_system_prompt(&registry, protocol);
+    // Bounded against this window, and what could not be sent is said rather than
+    // silently dropped.
+    let (instructions, notes) = crate::config::load_instructions(
+        &cfg.root,
+        crate::agent::session::instruction_chars(cfg.context_tokens, cfg.max_answer_tokens),
+    );
+    let system = Agent::build_system_prompt(&registry, protocol, instructions.as_deref());
     let mut session = Session::new(system, cfg.context_tokens, cfg.max_answer_tokens);
     let restored = earlier.as_ref().map(|e| e.messages.len()).unwrap_or(0);
 
@@ -146,6 +154,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         session,
         cfg: AgentConfig {
             model: model.clone(),
+            instructions,
             grammar_enabled: cfg.grammar_enabled,
             max_steps: cfg.max_steps,
             max_answer_tokens: cfg.max_answer_tokens,
@@ -165,6 +174,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         recorder,
         session_id,
         model,
+        instruction_notes: notes,
         protocol,
         restored,
         checkpoints,

@@ -87,6 +87,19 @@ At an approval prompt: `y` accepts once, `a` accepts everything in the stated sc
 session, `n` or `Esc` declines. `Enter` deliberately does nothing there - it is the send key,
 and a prompt appearing mid-sentence should not be able to approve a command you have not read.
 
+## What the project tells the agent
+
+`.verve.md` at the root of a project, and `~/.config/verve/verve.md` for yourself, are read
+at the start of every session and appended to the system message: the conventions, the
+command that checks a change, what must not be touched. The user's file comes first and the
+project's second, each named, so the model can tell whose rule it is reading.
+
+`/init` writes a first draft from what the repository shows - the language, the test
+command, the layout - for you to edit. Keep it short: this text is in the system message,
+which compaction never drops, so it holds the window for the whole session. What does not
+fit is trimmed at a line boundary and said out loud, because an instruction the agent never
+received would otherwise look like one it ignored.
+
 ## Taking something back
 
 Every change the agent makes is committed to a git repository kept beside the session, with

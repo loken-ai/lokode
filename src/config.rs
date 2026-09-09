@@ -27,6 +27,119 @@ pub fn project_config_path(root: &Path) -> PathBuf {
     root.join(".verve.toml")
 }
 
+/// The project's standing instructions to the agent: its conventions, its build, what it
+/// must not touch. Committed, so the whole team works with the same ones.
+pub fn project_instructions_path(root: &Path) -> PathBuf {
+    root.join(".verve.md")
+}
+
+/// The user's own standing instructions, for every project.
+pub fn user_instructions_path() -> Option<PathBuf> {
+    user_config_path().map(|p| p.with_file_name("verve.md"))
+}
+
+/// The standing instructions, user's first and project's second, and anything the user
+/// should be told about reading them.
+///
+/// They are appended to the system message, which compaction never drops, so they hold
+/// the window for the whole session and are bounded. Trimming is said out loud: text the
+/// agent was told to follow and did not receive would otherwise look like text it ignored.
+pub fn load_instructions(root: &Path, max_chars: usize) -> (Option<String>, Vec<String>) {
+    let files = [
+        user_instructions_path(),
+        Some(project_instructions_path(root)),
+    ];
+    instructions_from(files.into_iter().flatten(), max_chars)
+}
+
+/// [`load_instructions`] against paths a caller names, which is what lets a test drive it
+/// without moving the process's home directory.
+fn instructions_from(
+    files: impl IntoIterator<Item = PathBuf>,
+    max_chars: usize,
+) -> (Option<String>, Vec<String>) {
+    let mut parts = Vec::new();
+    let mut warnings = Vec::new();
+    for path in files {
+        match std::fs::read_to_string(&path) {
+            Ok(text) if !text.trim().is_empty() => {
+                parts.push((path, text.trim().to_string()));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warnings.push(format!("reading {}: {e}", path.display())),
+        }
+    }
+    if parts.is_empty() {
+        return (None, warnings);
+    }
+    let mut text = String::new();
+    for (path, body) in &parts {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&format!("# {}\n{}", path.display(), body));
+    }
+    if text.len() > max_chars {
+        // Cut at a line boundary: half a sentence of instruction is worse than none.
+        let cut = text[..max_chars].rfind('\n').unwrap_or(max_chars);
+        warnings.push(format!(
+            "standing instructions are longer than this window allows; {} of {} characters were sent",
+            cut,
+            text.len()
+        ));
+        text.truncate(cut);
+    }
+    (Some(text), warnings)
+}
+
+/// A first draft of a project's instructions, from what the repository shows.
+///
+/// Written rather than guessed at by the model: a file the user edits is a file they
+/// trust, and the layout and the test command are things the repository already states.
+pub fn draft_instructions(root: &Path) -> String {
+    let has = |name: &str| root.join(name).exists();
+    let (language, test) = if has("Cargo.toml") {
+        ("Rust", "cargo test")
+    } else if has("package.json") {
+        ("JavaScript or TypeScript", "npm test")
+    } else if has("pyproject.toml") || has("setup.py") {
+        ("Python", "pytest")
+    } else if has("go.mod") {
+        ("Go", "go test ./...")
+    } else {
+        ("", "")
+    };
+    let mut dirs: Vec<String> = std::fs::read_dir(root)
+        .map(|it| {
+            it.filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| !n.starts_with('.') && n != "target" && n != "node_modules")
+                .collect()
+        })
+        .unwrap_or_default();
+    dirs.sort();
+    let mut out = String::from(
+        "# Working on this project\n\n\
+         Everything here is read by the agent at the start of every session. Keep it short:\n\
+         it holds the context window for the whole session.\n\n",
+    );
+    if !language.is_empty() {
+        out.push_str(&format!("## What it is\n\n{language}.\n\n"));
+        out.push_str(&format!("## Checking a change\n\n`{test}`\n\n"));
+    }
+    if !dirs.is_empty() {
+        out.push_str(&format!("## Layout\n\n{}\n\n", dirs.join(", ")));
+    }
+    out.push_str(
+        "## Conventions\n\n\
+         Say what the project expects: how commits are worded, what must not be touched,\n\
+         which commands are safe to run without asking.\n",
+    );
+    out
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct FileConfig {
@@ -461,5 +574,84 @@ mod tests {
         assert!(!sends_secret_in_clear("https://gpu.example.com"));
         assert!(!sends_secret_in_clear("http://127.0.0.1:11435"));
         assert!(!sends_secret_in_clear("http://localhost:11435"));
+    }
+}
+
+#[cfg(test)]
+mod instruction_tests {
+    use super::*;
+
+    /// A project's instructions come after the user's, and each is named so the model can
+    /// tell whose rule it is reading.
+    #[test]
+    fn both_files_are_read_and_the_project_comes_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".config").join("verve")).unwrap();
+        std::fs::write(
+            home.join(".config").join("verve").join("verve.md"),
+            "always answer in French",
+        )
+        .unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(project_instructions_path(&root), "run cargo test").unwrap();
+
+        let (text, warnings) = instructions_from(
+            [
+                home.join(".config").join("verve").join("verve.md"),
+                project_instructions_path(&root),
+            ],
+            10_000,
+        );
+        let text = text.unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let user_at = text.find("always answer in French").unwrap();
+        let project_at = text.find("run cargo test").unwrap();
+        assert!(user_at < project_at);
+        assert!(text.contains("verve.md"));
+    }
+
+    #[test]
+    fn nothing_written_is_nothing_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (text, warnings) = load_instructions(dir.path(), 10_000);
+        assert!(text.is_none());
+        assert!(warnings.is_empty());
+    }
+
+    /// Text the agent was told to follow and did not receive would read as text it
+    /// ignored, so a trim is announced.
+    #[test]
+    fn what_does_not_fit_is_trimmed_and_said() {
+        let dir = tempfile::tempdir().unwrap();
+        let body: String = (0..200).map(|i| format!("rule number {i}\n")).collect();
+        std::fs::write(project_instructions_path(dir.path()), &body).unwrap();
+        let (text, warnings) = load_instructions(dir.path(), 400);
+        let text = text.unwrap();
+        assert!(text.len() <= 400);
+        assert!(text.ends_with(|c: char| c != ' '));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("longer than this window allows"));
+    }
+
+    /// The draft states what the repository shows, and nothing it does not.
+    #[test]
+    fn the_draft_names_the_language_and_the_test_command() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::create_dir(dir.path().join("target")).unwrap();
+        let draft = draft_instructions(dir.path());
+        assert!(draft.contains("Rust"));
+        assert!(draft.contains("cargo test"));
+        assert!(draft.contains("src"));
+        // A build directory is not layout.
+        assert!(!draft.contains("target"));
+
+        let bare = tempfile::tempdir().unwrap();
+        let draft = draft_instructions(bare.path());
+        assert!(!draft.contains("cargo test"));
+        assert!(draft.contains("Conventions"));
     }
 }

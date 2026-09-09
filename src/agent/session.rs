@@ -76,6 +76,15 @@ pub fn tool_output_chars(context_tokens: usize, reserve_tokens: usize) -> usize 
     context_tokens.saturating_sub(reserve_tokens) * CHARS_PER_TOKEN / 4
 }
 
+/// What the standing instructions may hold of the window.
+///
+/// An eighth of the budget, and half of what one tool result may take, because this text
+/// is in the system message: compaction never drops it, so it is paid on every request of
+/// the session rather than once.
+pub fn instruction_chars(context_tokens: usize, reserve_tokens: usize) -> usize {
+    context_tokens.saturating_sub(reserve_tokens) * CHARS_PER_TOKEN / 8
+}
+
 impl Session {
     /// `context_tokens` is the window the backend is expected to offer, and
     /// `reserve_tokens` what to leave free for the answer.
