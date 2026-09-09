@@ -76,6 +76,13 @@ One thing it uses if it is there, and one it needs:
 The model's prose is rendered as the light markdown it tends to write - fenced code,
 headings, `code` and **bold** - and anything that is a diff is coloured as one.
 
+The status line says what the turn is doing whenever nothing is being printed - fitting the
+history, waiting for the model, thinking, answering, repairing a reply, running a named
+tool - with how long it has been doing it, beside a spinner that moves while a turn is
+alive. Most of a turn is spent in those phases: the request has gone out and the model is
+reading a context of thousands of tokens, or a command is running under a tool. Without
+them the screen is identical to one that has stopped.
+
 At an approval prompt: `y` accepts once, `a` accepts everything in the stated scope for this
 session, `n` or `Esc` declines. `Enter` deliberately does nothing there - it is the send key,
 and a prompt appearing mid-sentence should not be able to approve a command you have not read.

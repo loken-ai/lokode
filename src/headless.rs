@@ -162,6 +162,13 @@ pub async fn run(
 
     while let Some(event) = rx.recv().await {
         match event {
+            // Where the turn is, for somebody watching a pipeline. Narration, so it goes
+            // to stderr with the rest and never into the report.
+            AgentEvent::Phase(phase) => {
+                if text_output {
+                    eprintln!("· {}", phase.label());
+                }
+            }
             // Deltas are the raw stream, which under the envelope protocol is a JSON object
             // being typed out. The prose is reported once it is known.
             AgentEvent::AssistantDelta(_) => {}

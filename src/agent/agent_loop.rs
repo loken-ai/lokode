@@ -19,9 +19,50 @@ use crate::backend::wire::{FunctionCall, Message, ToolCall, Usage};
 use crate::checkpoint::{Checkpoints, Snapshot};
 use crate::tools::registry::{Registry, ToolCtx, ToolOutput};
 
+/// What the loop is doing between one visible thing and the next.
+///
+/// A turn spends most of its time where nothing is printed: the request has gone out and
+/// the model is reading a context that can be thousands of tokens, or a command is running
+/// under a tool. Without a word for those the interface looks identical to one that has
+/// stopped, which is what a user reports as "nothing is happening".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Phase {
+    /// The history is being fitted to the window before the request goes out.
+    Preparing,
+    /// The request is out and nothing has come back: the model is reading the prompt.
+    Waiting,
+    /// The answer is arriving.
+    Answering,
+    /// The model's scratchpad is arriving, before any of the answer.
+    Thinking,
+    /// A reply that did not parse is being repaired.
+    Repairing,
+    /// Tools are running, named in the order the model asked for them.
+    Running(Vec<String>),
+}
+
+impl Phase {
+    /// What the status line says of this phase.
+    pub fn label(&self) -> String {
+        match self {
+            Phase::Preparing => "fitting the history".to_string(),
+            Phase::Waiting => "waiting for the model".to_string(),
+            Phase::Answering => "answering".to_string(),
+            Phase::Thinking => "thinking".to_string(),
+            Phase::Repairing => "repairing the reply".to_string(),
+            Phase::Running(names) => match names.len() {
+                1 => format!("running {}", names[0]),
+                n => format!("running {} tools: {}", n, names.join(", ")),
+            },
+        }
+    }
+}
+
 /// Events the agent loop emits so the UI can render progress.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
+    /// Where the turn is, when nothing else is being printed.
+    Phase(Phase),
     AssistantDelta(String),
     AssistantText(String),
     /// The model's scratchpad. Shown, never recorded, never sent back.
@@ -192,6 +233,7 @@ impl Agent {
             // Before every call, not once per turn: a single tool result can be larger
             // than everything said so far, so the history can outgrow the window in the
             // middle of a turn as easily as between two.
+            let _ = events.send(AgentEvent::Phase(Phase::Preparing)).await;
             let dropped = self.session.compact();
             if dropped > 0 {
                 tracing::warn!(
@@ -207,6 +249,7 @@ impl Agent {
                     .await;
             }
             let sent_chars = self.session.size_chars();
+            let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
             let mut attempt = self.stream_one(&turn_schema, &cancel, &events).await;
 
             // A backend that will not take native tool calls says so by refusing the
@@ -224,6 +267,7 @@ impl Agent {
                             "backend does not do native tool calls; using the JSON envelope".into(),
                         ))
                         .await;
+                    let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
                     attempt = self.stream_one(&turn_schema, &cancel, &events).await;
                 }
             }
@@ -276,7 +320,7 @@ impl Agent {
 
             let raw = completion.text.clone();
             let turn = match self
-                .read_turn(completion, &turn_schema, &validator, &cancel)
+                .read_turn(completion, &turn_schema, &validator, &cancel, &events)
                 .await
             {
                 Ok(v) => v,
@@ -342,6 +386,11 @@ impl Agent {
                         .await;
                 }
 
+                let _ = events
+                    .send(AgentEvent::Phase(Phase::Running(
+                        run.iter().map(|c| c.name.clone()).collect(),
+                    )))
+                    .await;
                 let results = futures::future::join_all(
                     run.iter()
                         .map(|call| self.dispatch_tool(&call.name, call.arguments.clone())),
@@ -427,6 +476,7 @@ impl Agent {
         schema: &Value,
         validator: &Validator,
         cancel: &CancellationToken,
+        events: &mpsc::Sender<AgentEvent>,
     ) -> Result<ModelTurn> {
         match self.cfg.protocol {
             ToolProtocol::Native => {
@@ -452,6 +502,7 @@ impl Agent {
                 })
             }
             ToolProtocol::Envelope => {
+                let _ = events.send(AgentEvent::Phase(Phase::Repairing)).await;
                 let envelope = self
                     .parse_with_repair(&completion.text, schema, validator, cancel)
                     .await?;
@@ -552,6 +603,9 @@ impl Agent {
         };
 
         let mut out = Completion::default();
+        // Said once each: the phase is what the status line holds until the next one, not
+        // a line per token.
+        let (mut answering, mut thinking) = (false, false);
         loop {
             let next = tokio::select! {
                 biased;
@@ -572,6 +626,10 @@ impl Agent {
             };
             match next? {
                 StreamEvent::Delta(p) => {
+                    if !answering {
+                        answering = true;
+                        let _ = events.send(AgentEvent::Phase(Phase::Answering)).await;
+                    }
                     out.text.push_str(&p);
                     let _ = events.send(AgentEvent::AssistantDelta(p)).await;
                 }
@@ -579,6 +637,10 @@ impl Agent {
                 // `out.text`: the scratchpad is not the answer, and replaying it into the
                 // history would teach the next turn that it was.
                 StreamEvent::Reasoning(p) => {
+                    if !answering && !thinking {
+                        thinking = true;
+                        let _ = events.send(AgentEvent::Phase(Phase::Thinking)).await;
+                    }
                     let _ = events.send(AgentEvent::Reasoning(p)).await;
                 }
                 StreamEvent::Call(delta) => out.calls.push(delta),

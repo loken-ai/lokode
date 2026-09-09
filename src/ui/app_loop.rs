@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -147,6 +147,12 @@ struct UiState {
     pending_approval: Option<ApprovalPrompt>,
     busy: bool,
     step: usize,
+    /// What the turn is doing and since when, for the status line. `None` between turns.
+    phase: Option<crate::agent::agent_loop::Phase>,
+    /// Read only while a phase is set, so where it starts costs nothing.
+    phase_since: Option<Instant>,
+    /// Advances on every repaint while busy, which is what moves the spinner.
+    tick: usize,
     /// Abandons the turn in flight. `None` between turns.
     turn_cancel: Option<CancellationToken>,
     /// What the chat pane last drew, so scrolling can be bounded by what exists.
@@ -328,6 +334,9 @@ async fn run_ui(
                 step: state.step,
                 max_steps: cfg.max_steps,
                 busy: state.busy,
+                phase: state.phase.as_ref().map(|p| p.label()),
+                in_phase: state.phase_since.map(|t| t.elapsed()).unwrap_or_default(),
+                tick: state.tick,
             };
             f.render_widget(
                 Paragraph::new(status.to_line()).style(Style::default().fg(Color::Gray)),
@@ -339,11 +348,24 @@ async fn run_ui(
             }
         })?;
 
-        // No timer branch: every reason to redraw arrives as an event - a keystroke, a
-        // resize, a piece of the model's answer, an approval. A tick woke this loop twelve
-        // times a second to repaint a screen nothing had changed.
+        // The only timer, and it runs only while a turn does: time passing IS the change
+        // to draw then, since the status line counts how long the phase has been going and
+        // the spinner has to move. At idle every reason to redraw still arrives as an
+        // event - a keystroke, a resize, a piece of the answer, an approval - and this arm
+        // is a branch that never completes, so nothing wakes the loop.
+        let tick = async {
+            if state.busy {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
         tokio::select! {
             biased;
+
+            _ = tick => {
+                state.tick = state.tick.wrapping_add(1);
+            }
 
             Some(prompt) = approval_rx.recv() => {
                 state.pending_approval = Some(prompt);
@@ -351,6 +373,10 @@ async fn run_ui(
 
             Some(evt) = agent_evt_rx.recv() => {
                 match evt {
+                    AgentEvent::Phase(phase) => {
+                        state.phase = Some(phase);
+                        state.phase_since = Some(Instant::now());
+                    }
                     AgentEvent::Reasoning(p) => state.push_reasoning(&p),
                     AgentEvent::AssistantDelta(chunk) => {
                         match state.entries.last_mut() {
@@ -381,6 +407,7 @@ async fn run_ui(
                     AgentEvent::TurnDone => {
                         state.busy = false;
                         state.step = 0;
+                        state.phase = None;
                         state.turn_cancel = None;
                         // A turn only ends while a prompt is up if it was abandoned: the
                         // tool that asked has already given up waiting, so the modal is
@@ -467,6 +494,8 @@ async fn run_ui(
                                 }
                                 state.busy = true;
                                 state.step = 0;
+                                state.phase = Some(crate::agent::agent_loop::Phase::Preparing);
+                                state.phase_since = Some(Instant::now());
                                 // A child of the shutdown token, so quitting cancels the
                                 // turn in flight as well as this one's own Esc.
                                 let cancel = shutdown.child_token();
