@@ -65,18 +65,33 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     //   input_tx → agent task ── pushes "user said X"
     //   agent_evt_tx → UI     ── streaming text + tool events
     let (input_tx, mut input_rx) = mpsc::channel::<TurnRequest>(4);
+    // Asked of the agent between turns, because it owns the session and the interface
+    // cannot read it from here.
+    let (control_tx, mut control_rx) = mpsc::channel::<crate::agent::agent_loop::Control>(4);
     let (agent_evt_tx, mut agent_evt_rx) = mpsc::channel::<AgentEvent>(128);
     let agent_evt_tx_for_loop = agent_evt_tx.clone();
     let agent_task = tokio::spawn(async move {
-        while let Some(TurnRequest { text, cancel }) = input_rx.recv().await {
-            if let Err(e) = agent
-                .run_user_turn(text, cancel, agent_evt_tx_for_loop.clone())
-                .await
-            {
-                let _ = agent_evt_tx_for_loop
-                    .send(AgentEvent::Notice(format!("agent error: {e:#}")))
-                    .await;
-                let _ = agent_evt_tx_for_loop.send(AgentEvent::TurnDone).await;
+        loop {
+            // A control request is answered between turns: the turn channel is read
+            // first, so nothing can slip a change under a request being built.
+            tokio::select! {
+                biased;
+                turn = input_rx.recv() => {
+                    let Some(TurnRequest { text, cancel }) = turn else { break };
+                    if let Err(e) = agent
+                        .run_user_turn(text, cancel, agent_evt_tx_for_loop.clone())
+                        .await
+                    {
+                        let _ = agent_evt_tx_for_loop
+                            .send(AgentEvent::Notice(format!("agent error: {e:#}")))
+                            .await;
+                        let _ = agent_evt_tx_for_loop.send(AgentEvent::TurnDone).await;
+                    }
+                }
+                request = control_rx.recv() => {
+                    let Some(request) = request else { break };
+                    agent.control(request).await;
+                }
             }
         }
     });
@@ -99,6 +114,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         restored,
         &shutdown,
         input_tx,
+        control_tx,
         steer,
         &mut agent_evt_rx,
         &mut approval_rx,
@@ -254,6 +270,7 @@ async fn run_ui(
     restored: usize,
     shutdown: &CancellationToken,
     input_tx: mpsc::Sender<TurnRequest>,
+    control_tx: mpsc::Sender<crate::agent::agent_loop::Control>,
     // Hands the running turn a line typed while it runs.
     steer: mpsc::Sender<String>,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
@@ -497,9 +514,14 @@ async fn run_ui(
                                 // when the thing you want undone is what the model just did.
                                 state.remember(&text);
                                 if let Some(command) = text.strip_prefix('/') {
-                                    let reply =
-                                        run_command(command.trim(), checkpoints.as_deref(), &cfg.root)
-                                            .await;
+                                    let reply = run_command(
+                                        command.trim(),
+                                        checkpoints.as_deref(),
+                                        &cfg.root,
+                                        &control_tx,
+                                        state.busy,
+                                    )
+                                    .await;
                                     state.entries.push(Entry::Notice(reply));
                                     continue;
                                 }
@@ -557,7 +579,29 @@ async fn run_command(
     command: &str,
     checkpoints: Option<&Checkpoints>,
     root: &std::path::Path,
+    control: &mpsc::Sender<crate::agent::agent_loop::Control>,
+    busy: bool,
 ) -> String {
+    let (verb, rest) = match command.split_once(char::is_whitespace) {
+        Some((v, r)) => (v, r.trim()),
+        None => (command, ""),
+    };
+    if verb == "model" {
+        // The agent reads control requests between turns, so asking during one would
+        // wait for the turn to end with nothing on screen explaining the silence.
+        if busy {
+            return "the agent is working; ask again when the turn is over".into();
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let request = crate::agent::agent_loop::Control::Model {
+            name: (!rest.is_empty()).then(|| rest.to_string()),
+            reply: tx,
+        };
+        if control.send(request).await.is_err() {
+            return "the agent is not listening".into();
+        }
+        return rx.await.unwrap_or_else(|_| "the agent said nothing".into());
+    }
     match command {
         "help" | "" => HELP.into(),
         "undo" => match checkpoints {
@@ -611,6 +655,7 @@ async fn run_command(
 }
 
 const HELP: &str = "\
+/model  what the backend serves, or /model <name> to switch and remember it
 /diff   everything the agent has changed this session
 /undo   put back the most recent turn that changed something
 /init   write a first draft of this project's instructions

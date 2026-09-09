@@ -122,6 +122,17 @@ impl Session {
         self.transcript.as_ref()
     }
 
+    /// Take the window of another model, and forget what the last one taught.
+    ///
+    /// The chars-per-token ratio was measured against one tokenizer, so carrying it to
+    /// another model is carrying a measurement of something else. It goes back to the
+    /// constant and is corrected again from the first reply the new model sends.
+    pub fn set_window(&mut self, context_tokens: usize, reserve_tokens: usize) {
+        self.usable_tokens = context_tokens.saturating_sub(reserve_tokens);
+        self.chars_per_token = CHARS_PER_TOKEN as f64;
+        self.budget_chars = (self.usable_tokens as f64 * self.chars_per_token * SAFETY) as usize;
+    }
+
     /// Replace the preamble in place.
     ///
     /// Used when the protocol changes mid-session: the system message states the contract

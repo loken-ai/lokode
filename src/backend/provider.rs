@@ -74,4 +74,11 @@ pub trait Provider: Send + Sync {
     /// possible and has nothing to show while it waits - streaming it would add a frame
     /// budget to a request whose whole point is to be over quickly.
     async fn complete(&self, req: TurnRequest) -> Result<String>;
+
+    /// What the backend says it serves, for choosing one without having to know its name.
+    ///
+    /// A backend that does not answer is not a broken backend: the caller falls back to
+    /// what it was told, so this returns the error rather than an empty list, which would
+    /// read as a server that serves nothing.
+    async fn models(&self) -> Result<Vec<String>>;
 }

@@ -162,6 +162,33 @@ The exit code says what happened without anything having to be parsed: `0` finis
 something failed - a backend error, or the step limit - and `2` a tool was refused by the
 policy, which is a different thing from the model deciding not to use one.
 
+## Choosing a model
+
+`--model` is optional. What is asked for wins, then what a resumed session was last using,
+then what the configuration remembers; failing all that the backend is asked, and one that
+serves a single model leaves nothing to choose. With several and nothing remembered the
+session opens with no model and says so: `/model` lists what the backend serves, `/model
+<name>` switches now and writes the name into your own configuration for next time.
+
+A switch mid-session keeps the conversation and takes the new model's window from
+`[models."<name>"]` when the configuration names one, because a budget inherited from
+another model either wastes the window or overruns it. What the last model taught about
+its tokenizer is forgotten at the same time, and measured again from the first reply.
+
+## Choosing a model
+
+The model flag is optional. What is asked for wins, then what a resumed session was last
+using, then what the configuration remembers; failing all that the backend is asked, and
+one that serves a single model leaves nothing to choose. With several and nothing
+remembered the session opens with no model and says so: `/model` lists what the backend
+serves, `/model <name>` switches now and writes the name into your own configuration for
+next time.
+
+A switch mid-session keeps the conversation and takes the new model's window from its own
+table in the configuration when there is one, because a budget inherited from another
+model either wastes the window or overruns it. What the last model taught about its
+tokenizer is forgotten at the same time, and measured again from the first reply.
+
 ## Configuring it
 
 Settings come from four places. The narrower statement wins, because it is the one made

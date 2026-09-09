@@ -36,7 +36,7 @@ pub struct Booted {
     pub recorder: Option<JoinHandle<()>>,
     pub session_id: String,
     pub model: String,
-    /// What reading the standing instructions had to say, if anything.
+    /// What reading the standing instructions, and settling on a model, had to say.
     pub instruction_notes: Vec<String>,
     pub protocol: ToolProtocol,
     /// How many messages came back from a resumed session.
@@ -60,7 +60,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let (approval_tx, approval_rx) = approval::channel();
     let shutdown = CancellationToken::new();
 
-    let ctx = ToolCtx {
+    let mut ctx = ToolCtx {
         root: cfg.root.clone(),
         approval: approval_tx,
         session_approvals: Arc::new(SessionApprovals::new()),
@@ -77,6 +77,11 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     };
 
     let earlier = open_session(cfg)?;
+    let backend = provider_for(cfg)?;
+    // Nothing has to name a model. What was asked for wins, then what the session was
+    // last using, then what the configuration remembers; failing all that the backend is
+    // asked, and a backend that serves exactly one leaves nothing to choose.
+    let mut model_notes = Vec::new();
     let model = match cfg.model.clone().or_else(|| {
         earlier
             .as_ref()
@@ -84,7 +89,37 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             .filter(|m| !m.is_empty())
     }) {
         Some(m) => m,
-        None => anyhow::bail!("--model is required unless resuming a session that recorded one"),
+        None => match backend.models().await {
+            Ok(models) if models.len() == 1 => {
+                let only = models.into_iter().next().unwrap_or_default();
+                model_notes.push(format!(
+                    "no model was named; the backend serves only {only}"
+                ));
+                only
+            }
+            // An interface can ask; a script cannot, which is why the headless path
+            // refuses an unset model rather than guessing at one of several.
+            Ok(models) if !models.is_empty() => {
+                model_notes.push(format!(
+                    "no model is set: /model to choose one of {}",
+                    models.join(", ")
+                ));
+                String::new()
+            }
+            Ok(_) => {
+                model_notes.push(
+                    "no model is set and the backend lists none: name one with /model".into(),
+                );
+                String::new()
+            }
+            Err(e) => {
+                model_notes.push(format!(
+                    "no model is set and the backend does not say what it serves ({e:#}); \
+                     name one with /model"
+                ));
+                String::new()
+            }
+        },
     };
 
     // `auto` starts native and drops to the envelope the first time a backend refuses it,
@@ -93,14 +128,29 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         ProtocolChoice::Envelope => ToolProtocol::Envelope,
         ProtocolChoice::Auto | ProtocolChoice::Native => ToolProtocol::Native,
     };
+    // A window belongs to a model: the one named for this session takes what the
+    // configuration says it needs, and the default only when it says nothing.
+    let per_model = cfg.models.get(&model);
+    let context_tokens = per_model
+        .and_then(|m| m.context_tokens)
+        .unwrap_or(cfg.context_tokens);
+    let max_answer_tokens = per_model
+        .and_then(|m| m.max_answer_tokens)
+        .unwrap_or(cfg.max_answer_tokens);
+
+    // A tool result is only ever large relative to the window it lands in, so the
+    // ceiling follows the model's window rather than the default.
+    ctx.max_output_chars =
+        crate::agent::session::tool_output_chars(context_tokens, max_answer_tokens);
+
     // Bounded against this window, and what could not be sent is said rather than
     // silently dropped.
     let (instructions, notes) = crate::config::load_instructions(
         &cfg.root,
-        crate::agent::session::instruction_chars(cfg.context_tokens, cfg.max_answer_tokens),
+        crate::agent::session::instruction_chars(context_tokens, max_answer_tokens),
     );
     let system = Agent::build_system_prompt(&registry, protocol, instructions.as_deref());
-    let mut session = Session::new(system, cfg.context_tokens, cfg.max_answer_tokens);
+    let mut session = Session::new(system, context_tokens, max_answer_tokens);
     let restored = earlier.as_ref().map(|e| e.messages.len()).unwrap_or(0);
 
     let mut recorder = None;
@@ -153,11 +203,14 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
         steer: steer_rx,
-        backend: provider_for(cfg)?,
+        backend,
         registry,
         session,
         cfg: AgentConfig {
             model: model.clone(),
+            remember_model_in: crate::config::user_config_path(),
+            context_tokens: cfg.context_tokens,
+            models: cfg.models.clone(),
             instructions,
             grammar_enabled: cfg.grammar_enabled,
             max_steps: cfg.max_steps,
@@ -178,7 +231,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         recorder,
         session_id,
         model,
-        instruction_notes: notes,
+        instruction_notes: [notes, model_notes].concat(),
         protocol,
         restored,
         checkpoints,

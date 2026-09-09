@@ -58,6 +58,19 @@ impl Phase {
     }
 }
 
+/// Something the interface asks of the agent between turns.
+///
+/// The agent runs in its own task and owns the session, so a question about the session -
+/// which model, how full the window is - cannot be answered from the interface's side. It
+/// is asked here and answered on the channel the asker holds.
+pub enum Control {
+    /// Switch model, or, with no name, say what could be switched to.
+    Model {
+        name: Option<String>,
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
+}
+
 /// Events the agent loop emits so the UI can render progress.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -138,9 +151,16 @@ struct Completion {
 
 pub struct AgentConfig {
     pub model: String,
+    /// The window to use for a model the configuration says nothing about.
+    pub context_tokens: usize,
+    /// What each named model needs, when it differs from the default.
+    pub models: std::collections::BTreeMap<String, crate::config::ModelSection>,
     /// The standing instructions the preamble carries, kept so a protocol change or a
     /// model change can rebuild the preamble without reading the files again.
     pub instructions: Option<String>,
+    /// Where a chosen model is written down for the next session. `None` remembers
+    /// nothing, which is what a test and a one-shot run both want.
+    pub remember_model_in: Option<std::path::PathBuf>,
     pub grammar_enabled: bool,
     pub max_steps: usize,
     pub max_answer_tokens: usize,
@@ -232,6 +252,84 @@ impl Agent {
         self.session.set_system_prompt(preamble);
     }
 
+    /// Answer one control request. Between turns, which is where the session can change
+    /// under the model without a request being half-built against the old one.
+    pub async fn control(&mut self, request: Control) {
+        match request {
+            Control::Model { name, reply } => {
+                let answer = self.switch_model(name).await;
+                let _ = reply.send(answer);
+            }
+        }
+    }
+
+    /// Switch to `name`, or describe what is on offer when there is none.
+    ///
+    /// A backend that cannot list its models is not a backend that cannot serve one, so a
+    /// name is taken on trust when the listing fails. A name the backend does list and
+    /// does not serve is refused, because the alternative is a session that fails on every
+    /// turn with a message from the server.
+    async fn switch_model(&mut self, name: Option<String>) -> String {
+        let listed = self.backend.models().await;
+        let Some(name) = name else {
+            return match listed {
+                Err(e) => format!(
+                    "the backend does not say what it serves ({e:#}); name a model with /model <name>"
+                ),
+                Ok(models) if models.is_empty() => "the backend serves no model".to_string(),
+                Ok(models) => {
+                    let lines: Vec<String> = models
+                        .iter()
+                        .map(|m| {
+                            let mark = if *m == self.cfg.model { "* " } else { "  " };
+                            format!("{mark}{m}")
+                        })
+                        .collect();
+                    format!("/model <name> to switch:\n{}", lines.join("\n"))
+                }
+            };
+        };
+        if let Ok(models) = &listed {
+            if !models.is_empty() && !models.contains(&name) {
+                return format!(
+                    "the backend does not serve {name}; it serves:\n{}",
+                    models.join("\n")
+                );
+            }
+        }
+        if name == self.cfg.model {
+            return format!("already on {name}");
+        }
+        let previous = std::mem::replace(&mut self.cfg.model, name.clone());
+        // A window belongs to a model, and so does the tokenizer the budget was
+        // calibrated against; carrying either over is carrying a measurement of the
+        // model that just left.
+        let per_model = self.cfg.models.get(&name);
+        let context = per_model
+            .and_then(|m| m.context_tokens)
+            .unwrap_or(self.cfg.context_tokens);
+        let reserve = per_model
+            .and_then(|m| m.max_answer_tokens)
+            .unwrap_or(self.cfg.max_answer_tokens);
+        self.session.set_window(context, reserve);
+        if let Some(t) = self.session.transcript() {
+            t.append(crate::agent::transcript::Record::Model { name: name.clone() });
+        }
+        tracing::info!(from = %previous, to = %name, context, "model changed");
+        // Remembered for the next session. Failing to write is worth saying and is not
+        // worth refusing the switch over.
+        let Some(path) = self.cfg.remember_model_in.clone() else {
+            return format!("now on {name}, window {context}");
+        };
+        match crate::config::remember_model(&path, &name) {
+            Ok(()) => format!(
+                "now on {name}, window {context}; remembered in {}",
+                path.display()
+            ),
+            Err(e) => format!("now on {name}, window {context}; could not remember it: {e:#}"),
+        }
+    }
+
     /// Run one user turn end-to-end. Loops model→tools→model until the
     /// model emits zero tool_calls, `max_steps` is reached, or `cancel` fires.
     ///
@@ -239,12 +337,27 @@ impl Agent {
     /// has to react to a keystroke already holds the handle it needs. It is stored on the
     /// tool context for the length of the turn, which is how a tool waiting on a
     /// subprocess learns that the user has stopped caring about the answer.
+    /// Whether a turn can run at all.
+    fn model_is_set(&self) -> bool {
+        !self.cfg.model.trim().is_empty()
+    }
+
     pub async fn run_user_turn(
         &mut self,
         user_input: String,
         cancel: CancellationToken,
         events: mpsc::Sender<AgentEvent>,
     ) -> Result<()> {
+        if !self.model_is_set() {
+            let _ = events
+                .send(AgentEvent::Notice(
+                    "no model is set: /model lists what the backend serves".into(),
+                ))
+                .await;
+            let _ = events.send(AgentEvent::TurnDone).await;
+            return Ok(());
+        }
+
         self.ctx.cancel = cancel.clone();
         self.turn += 1;
         tracing::info!(
@@ -909,6 +1022,10 @@ mod tests {
             registry,
             cfg: AgentConfig {
                 instructions: None,
+                // A test must never write into the person's own configuration.
+                remember_model_in: None,
+                context_tokens: 8192,
+                models: Default::default(),
                 model: "test".into(),
                 grammar_enabled: true,
                 max_steps: 4,
@@ -934,6 +1051,38 @@ mod tests {
             out.push(e);
         }
         out
+    }
+
+    /// A switch takes the window the configuration gives that model, and a name the
+    /// backend does not serve is refused rather than carried into every later request.
+    #[tokio::test]
+    async fn switching_model_takes_its_window_and_refuses_an_unserved_name() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![]).await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        agent.cfg.models.insert(
+            "big".into(),
+            crate::config::ModelSection {
+                context_tokens: Some(32_768),
+                max_answer_tokens: None,
+            },
+        );
+        let before = agent.session.budget_chars();
+
+        // The fake backend answers nothing on /v1/models, so a name is taken on trust:
+        // a backend that cannot list is not a backend that cannot serve.
+        let said = agent.switch_model(Some("big".into())).await;
+        assert!(said.contains("now on big"), "{said}");
+        assert_eq!(agent.cfg.model, "big");
+        assert!(
+            agent.session.budget_chars() > before,
+            "the wider window was not taken: {} then {}",
+            before,
+            agent.session.budget_chars()
+        );
+
+        let said = agent.switch_model(Some("big".into())).await;
+        assert!(said.contains("already on big"), "{said}");
     }
 
     /// A line typed while the turn is running reaches the model on the next step, and

@@ -38,6 +38,8 @@ pub struct AppConfig {
     pub warnings: Vec<String>,
     /// Tool servers to start, by name.
     pub mcp_servers: BTreeMap<String, crate::config::McpServer>,
+    /// What each named model needs, when it differs from the defaults.
+    pub models: BTreeMap<String, crate::config::ModelSection>,
     /// Directories an approved shell command may write to, or `None` to leave it
     /// unconfined.
     pub shell_writable: Option<Vec<PathBuf>>,

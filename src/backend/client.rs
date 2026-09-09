@@ -389,6 +389,46 @@ impl crate::backend::provider::Provider for BackendClient {
     async fn stream(&self, req: crate::backend::provider::TurnRequest) -> Result<ChunkStream> {
         self.stream_request(self.render(req)).await
     }
+
+    async fn models(&self) -> Result<Vec<String>> {
+        let url = format!("{}/v1/models", self.base.trim_end_matches('/'));
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("GET {url}"))?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            anyhow::bail!("{url} answered {status}");
+        }
+        let body: serde_json::Value = serde_json::from_str(&body).context("decoding /v1/models")?;
+        Ok(model_ids(&body))
+    }
+}
+
+/// The ids out of a models listing, in the order the server gave them.
+///
+/// Both shapes seen in the wild are read: the OpenAI `data` array, and the bare array a
+/// few local servers answer with.
+fn model_ids(body: &serde_json::Value) -> Vec<String> {
+    let rows = body
+        .get("data")
+        .and_then(|d| d.as_array())
+        .or_else(|| body.as_array());
+    rows.map(|rows| {
+        rows.iter()
+            .filter_map(|m| {
+                m.get("id")
+                    .or_else(|| m.get("name"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| m.as_str())
+            })
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 impl BackendClient {

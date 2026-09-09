@@ -159,6 +159,18 @@ pub struct FileConfig {
     pub mcp: McpSection,
     #[serde(default)]
     pub shell: ShellSection,
+    /// What a particular model needs, by name. Only the window differs in practice, and
+    /// it differs enough to matter: a budget inherited from another model is a budget
+    /// that either wastes the window or overruns it.
+    #[serde(default)]
+    pub models: BTreeMap<String, ModelSection>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ModelSection {
+    pub context_tokens: Option<usize>,
+    pub max_answer_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -358,6 +370,11 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 w
             },
         },
+        models: {
+            let mut models = base.models;
+            models.extend(over.models);
+            models
+        },
         mcp: McpSection {
             servers: {
                 // Merged by name so a project can add a server without restating the
@@ -382,6 +399,54 @@ pub fn load(root: &Path) -> Result<FileConfig> {
         cfg = merge(cfg, project);
     }
     Ok(cfg)
+}
+
+/// Write the model into the user's configuration, so the next session starts on it.
+///
+/// The rest of the file is left as it is, comments included: a tool that rewrites a
+/// file a person edits has to hand it back recognisable. Only a top-level `model =` line
+/// is touched, and one is added at the top when there is none.
+pub fn remember_model(path: &Path, name: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let existing = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    std::fs::write(path, with_model(&existing, name))
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+/// `text` with its top-level `model` set to `name`.
+fn with_model(text: &str, name: &str) -> String {
+    let line = format!("model = \"{name}\"");
+    let mut out: Vec<String> = Vec::new();
+    let mut written = false;
+    for raw in text.lines() {
+        let trimmed = raw.trim_start();
+        // Past the first table header a `model =` belongs to that table, not to the
+        // top level, and rewriting it would change a different setting entirely.
+        if !written && trimmed.starts_with('[') {
+            out.push(line.clone());
+            written = true;
+        }
+        if !written && trimmed.starts_with("model") && trimmed[5..].trim_start().starts_with('=') {
+            out.push(line.clone());
+            written = true;
+            continue;
+        }
+        out.push(raw.to_string());
+    }
+    if !written {
+        out.insert(0, line);
+    }
+    let mut text = out.join("\n");
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 /// One header, as it will be sent.
@@ -653,5 +718,59 @@ mod instruction_tests {
         let draft = draft_instructions(bare.path());
         assert!(!draft.contains("cargo test"));
         assert!(draft.contains("Conventions"));
+    }
+}
+
+#[cfg(test)]
+mod remember_tests {
+    use super::*;
+
+    /// The file is a person's, so it comes back recognisable: only the model line moves.
+    #[test]
+    fn the_model_line_is_replaced_and_the_rest_is_left_alone() {
+        let before = "# mine\nmodel = \"old\"\n\n[limits]\nmax-steps = 32\n";
+        let after = with_model(before, "new");
+        assert_eq!(
+            after,
+            "# mine\nmodel = \"new\"\n\n[limits]\nmax-steps = 32\n"
+        );
+    }
+
+    #[test]
+    fn a_file_without_one_gains_it_at_the_top() {
+        let after = with_model("[limits]\nmax-steps = 32\n", "new");
+        assert!(after.starts_with("model = \"new\"\n[limits]"), "{after}");
+    }
+
+    /// A `model` inside a table is another setting entirely.
+    #[test]
+    fn a_model_key_inside_a_table_is_not_the_one_that_moves() {
+        let before = "[mcp.servers.x]\nmodel = \"theirs\"\n";
+        let after = with_model(before, "new");
+        assert!(after.starts_with("model = \"new\"\n"), "{after}");
+        assert!(after.contains("model = \"theirs\""), "{after}");
+    }
+
+    #[test]
+    fn an_empty_file_becomes_one_line() {
+        assert_eq!(with_model("", "m"), "model = \"m\"\n");
+    }
+
+    /// The file and the directory are made when they are not there, so remembering works
+    /// on a machine that has never had a configuration.
+    #[test]
+    fn remembering_creates_what_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("verve").join("config.toml");
+        remember_model(&path, "small").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "model = \"small\"\n"
+        );
+        remember_model(&path, "large").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "model = \"large\"\n"
+        );
     }
 }

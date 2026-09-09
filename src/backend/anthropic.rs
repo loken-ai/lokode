@@ -314,6 +314,26 @@ impl Provider for AnthropicProvider {
         }
     }
 
+    async fn models(&self) -> Result<Vec<String>> {
+        let url = format!("{}/v1/models", self.base.trim_end_matches('/'));
+        let resp = self.http.get(&url).send().await.context("GET /v1/models")?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            anyhow::bail!("{url} answered {status}");
+        }
+        let body: serde_json::Value = serde_json::from_str(&body).context("decoding /v1/models")?;
+        Ok(body["data"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|m| m["id"].as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     async fn stream(&self, req: TurnRequest) -> Result<ChunkStream> {
         let resp = self
             .http

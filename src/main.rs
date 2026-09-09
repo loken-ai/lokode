@@ -277,6 +277,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             backend_kind,
             warnings,
             mcp_servers: file.mcp.servers.clone(),
+            models: file.models.clone(),
             // The project itself is always writable; the rest is what was named.
             shell_writable: (cli.confine_shell || file.shell.confine_writes.unwrap_or(false)).then(
                 || {

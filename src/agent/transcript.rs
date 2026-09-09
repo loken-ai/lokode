@@ -31,6 +31,11 @@ pub enum Record {
         started_at: u64,
     },
     Message(Message),
+    /// The model changed mid-session. Recorded so a resume comes back on the model the
+    /// session was last using rather than the one it opened with.
+    Model {
+        name: String,
+    },
     /// Something the user was told that is not part of the conversation.
     Notice {
         text: String,
@@ -143,6 +148,8 @@ pub fn replay(path: &Path) -> Result<Replay> {
                 root = Some(r);
                 model = Some(m);
             }
+            // A later switch wins over the one the session opened with.
+            Record::Model { name } => model = Some(name),
             Record::Message(m) if m.role != "system" => messages.push(m),
             _ => {}
         }
