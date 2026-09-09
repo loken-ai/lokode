@@ -708,10 +708,7 @@ mod tests {
                 let mut buf = Vec::new();
                 let mut chunk = [0u8; 4096];
                 // Read until the body has arrived; the request declares its length.
-                loop {
-                    let Ok(n) = sock.read(&mut chunk).await else {
-                        break;
-                    };
+                while let Ok(n) = sock.read(&mut chunk).await {
                     if n == 0 {
                         break;
                     }
