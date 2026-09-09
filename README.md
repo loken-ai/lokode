@@ -69,6 +69,7 @@ One thing it uses if it is there, and one it needs:
 | `Enter` | send |
 | `Shift-Enter` | newline |
 | `Esc` | interrupt the running turn |
+| `/plan`, `/act` | plan without changing anything, then carry it out |
 | `Enter` while it works | hand the line to the turn in flight |
 | `↑` / `↓` | walk what you have already sent (from an empty input) |
 | `PageUp` / `PageDown`, wheel | scroll |
@@ -162,18 +163,17 @@ The exit code says what happened without anything having to be parsed: `0` finis
 something failed - a backend error, or the step limit - and `2` a tool was refused by the
 policy, which is a different thing from the model deciding not to use one.
 
-## Choosing a model
+## Planning before acting
 
-`--model` is optional. What is asked for wins, then what a resumed session was last using,
-then what the configuration remembers; failing all that the backend is asked, and one that
-serves a single model leaves nothing to choose. With several and nothing remembered the
-session opens with no model and says so: `/model` lists what the backend serves, `/model
-<name>` switches now and writes the name into your own configuration for next time.
+`/plan` puts the agent in a mode where every tool that writes, runs a command or reaches
+the network is refused before it runs, and the model is told so: it reads, searches and
+finishes with the plan as numbered steps. `/act` leaves it. `--plan` starts there, and a
+mode key in the configuration makes that the default for a project.
 
-A switch mid-session keeps the conversation and takes the new model's window from
-`[models."<name>"]` when the configuration names one, because a budget inherited from
-another model either wastes the window or overruns it. What the last model taught about
-its tokenizer is forgotten at the same time, and measured again from the first reply.
+This is not a stricter set of approvals. Someone who wants to know what would happen should
+not have to decline fifteen prompts to find out, and an agent that must ask before every
+step cannot describe the plan. Planning pairs with the model choice: plan on the model that
+reasons best, switch to a smaller one, then act.
 
 ## Choosing a model
 

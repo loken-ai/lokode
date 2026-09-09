@@ -104,6 +104,10 @@ struct Cli {
     #[arg(long)]
     show_config: bool,
 
+    /// Start planning: read and search, change nothing until /act.
+    #[arg(long)]
+    plan: bool,
+
     /// Run one turn without the interface and exit. Everything below applies to that.
     #[arg(short, long)]
     prompt: Option<String>,
@@ -278,6 +282,11 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             warnings,
             mcp_servers: file.mcp.servers.clone(),
             models: file.models.clone(),
+            mode: if cli.plan || file.mode.as_deref() == Some("plan") {
+                verve::agent::agent_loop::Mode::Plan
+            } else {
+                verve::agent::agent_loop::Mode::Act
+            },
             // The project itself is always writable; the rest is what was named.
             shell_writable: (cli.confine_shell || file.shell.confine_writes.unwrap_or(false)).then(
                 || {
@@ -314,6 +323,7 @@ fn print_config(cfg: &Resolved) {
         "  model              {}",
         a.model.as_deref().unwrap_or("(unset)")
     );
+    println!("  mode               {}", a.mode.label());
     println!("  root               {}", a.root.display());
     println!("  backend-url        {}", a.backend_url);
     println!("  backend-kind       {}", a.backend_kind.label());

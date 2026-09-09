@@ -40,6 +40,8 @@ pub struct AppConfig {
     pub mcp_servers: BTreeMap<String, crate::config::McpServer>,
     /// What each named model needs, when it differs from the defaults.
     pub models: BTreeMap<String, crate::config::ModelSection>,
+    /// Whether the session starts able to change things.
+    pub mode: crate::agent::agent_loop::Mode,
     /// Directories an approved shell command may write to, or `None` to leave it
     /// unconfined.
     pub shell_writable: Option<Vec<PathBuf>>,

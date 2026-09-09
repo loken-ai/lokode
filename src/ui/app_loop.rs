@@ -172,6 +172,9 @@ struct UiState {
     phase_since: Option<Instant>,
     /// Advances on every repaint while busy, which is what moves the spinner.
     tick: usize,
+    /// Whether the agent is planning. Held here because the mode lives with the agent,
+    /// and the interface only learns of a change by having asked for it.
+    planning: bool,
     /// Abandons the turn in flight. `None` between turns.
     turn_cancel: Option<CancellationToken>,
     /// What the chat pane last drew, so scrolling can be bounded by what exists.
@@ -276,7 +279,10 @@ async fn run_ui(
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
 ) -> Result<()> {
-    let mut state = UiState::default();
+    let mut state = UiState {
+        planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
+        ..Default::default()
+    };
     state.entries.push(Entry::Notice(format!(
         "Welcome. Enter sends, Shift-Enter is a newline, Esc interrupts a running turn, \
          PageUp/PageDown scroll, Ctrl-C or Ctrl-Q quits.\n\
@@ -353,6 +359,7 @@ async fn run_ui(
                 root: cfg.root.display().to_string(),
                 session: session_id.clone(),
                 grammar: cfg.grammar_enabled,
+                planning: state.planning,
                 step: state.step,
                 max_steps: cfg.max_steps,
                 busy: state.busy,
@@ -514,6 +521,7 @@ async fn run_ui(
                                 // when the thing you want undone is what the model just did.
                                 state.remember(&text);
                                 if let Some(command) = text.strip_prefix('/') {
+                                    let verb = command.trim_start_matches('/').trim();
                                     let reply = run_command(
                                         command.trim(),
                                         checkpoints.as_deref(),
@@ -522,6 +530,14 @@ async fn run_ui(
                                         state.busy,
                                     )
                                     .await;
+                                    // The mode lives with the agent; the interface knows
+                                    // it changed because the change was accepted.
+                                    if verb.starts_with("plan") && reply.starts_with("planning") {
+                                        state.planning = true;
+                                    }
+                                    if verb.starts_with("act") && reply.starts_with("acting") {
+                                        state.planning = false;
+                                    }
                                     state.entries.push(Entry::Notice(reply));
                                     continue;
                                 }
@@ -586,6 +602,25 @@ async fn run_command(
         Some((v, r)) => (v, r.trim()),
         None => (command, ""),
     };
+    if verb == "plan" || verb == "act" {
+        if busy {
+            return "the agent is working; ask again when the turn is over".into();
+        }
+        let mode = if verb == "plan" {
+            crate::agent::agent_loop::Mode::Plan
+        } else {
+            crate::agent::agent_loop::Mode::Act
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if control
+            .send(crate::agent::agent_loop::Control::Mode { mode, reply: tx })
+            .await
+            .is_err()
+        {
+            return "the agent is not listening".into();
+        }
+        return rx.await.unwrap_or_else(|_| "the agent said nothing".into());
+    }
     if verb == "model" {
         // The agent reads control requests between turns, so asking during one would
         // wait for the turn to end with nothing on screen explaining the silence.
@@ -655,6 +690,8 @@ async fn run_command(
 }
 
 const HELP: &str = "\
+/plan   read and search, change nothing
+/act    leave planning, change things again
 /model  what the backend serves, or /model <name> to switch and remember it
 /diff   everything the agent has changed this session
 /undo   put back the most recent turn that changed something

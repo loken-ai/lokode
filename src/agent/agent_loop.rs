@@ -58,6 +58,28 @@ impl Phase {
     }
 }
 
+/// Whether the agent may change anything.
+///
+/// Planning is not a weaker set of approvals: it is a different question. A user who wants
+/// to know what would happen should not have to say no to fifteen prompts to find out, and
+/// an agent that has to ask before every step of a plan cannot describe the plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    /// Reads and searches; every tool that changes something is refused before it runs.
+    Plan,
+    #[default]
+    Act,
+}
+
+impl Mode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Plan => "plan",
+            Mode::Act => "act",
+        }
+    }
+}
+
 /// Something the interface asks of the agent between turns.
 ///
 /// The agent runs in its own task and owns the session, so a question about the session -
@@ -67,6 +89,11 @@ pub enum Control {
     /// Switch model, or, with no name, say what could be switched to.
     Model {
         name: Option<String>,
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
+    /// Plan or act.
+    Mode {
+        mode: Mode,
         reply: tokio::sync::oneshot::Sender<String>,
     },
 }
@@ -151,6 +178,7 @@ struct Completion {
 
 pub struct AgentConfig {
     pub model: String,
+    pub mode: Mode,
     /// The window to use for a model the configuration says nothing about.
     pub context_tokens: usize,
     /// What each named model needs, when it differs from the default.
@@ -201,9 +229,21 @@ impl Agent {
     pub fn build_system_prompt(
         reg: &Registry,
         protocol: ToolProtocol,
+        mode: Mode,
         instructions: Option<&str>,
     ) -> String {
         let mut prompt = Self::contract(reg, protocol);
+        // Stated in the contract rather than only enforced at dispatch: a model that
+        // knows it is planning writes a plan, where one that is merely refused writes the
+        // same call again.
+        if mode == Mode::Plan {
+            prompt.push_str(
+                "\n\nYou are PLANNING. Read, search and ask, but do not change anything: \
+                 every tool that writes, runs a command or reaches the network is refused \
+                 while planning. Finish by stating the plan as numbered steps, each naming \
+                 what you would run or change.",
+            );
+        }
         // Last, and named as the project's own: a model that has read the contract first
         // is less likely to take a project's wording for the calling convention.
         if let Some(text) = instructions.map(str::trim).filter(|t| !t.is_empty()) {
@@ -244,12 +284,32 @@ impl Agent {
     /// without changing it would leave the model reading instructions for the other one.
     fn fall_back_to_envelope(&mut self) {
         self.cfg.protocol = ToolProtocol::Envelope;
+        self.rebuild_preamble();
+    }
+
+    /// Rewrite the contract the model is held to, from whatever it now is.
+    fn rebuild_preamble(&mut self) {
         let preamble = Self::build_system_prompt(
             &self.registry,
-            ToolProtocol::Envelope,
+            self.cfg.protocol,
+            self.cfg.mode,
             self.cfg.instructions.as_deref(),
         );
         self.session.set_system_prompt(preamble);
+    }
+
+    /// Plan or act, from now on.
+    fn set_mode(&mut self, mode: Mode) -> String {
+        if self.cfg.mode == mode {
+            return format!("already in {} mode", mode.label());
+        }
+        self.cfg.mode = mode;
+        self.rebuild_preamble();
+        tracing::info!(mode = mode.label(), "mode changed");
+        match mode {
+            Mode::Plan => "planning: nothing will be changed until /act".to_string(),
+            Mode::Act => "acting: the agent may change things again, asking as it goes".to_string(),
+        }
     }
 
     /// Answer one control request. Between turns, which is where the session can change
@@ -259,6 +319,9 @@ impl Agent {
             Control::Model { name, reply } => {
                 let answer = self.switch_model(name).await;
                 let _ = reply.send(answer);
+            }
+            Control::Mode { mode, reply } => {
+                let _ = reply.send(self.set_mode(mode));
             }
         }
     }
@@ -876,6 +939,17 @@ impl Agent {
             tracing::warn!(tool = name, "model called a tool that does not exist");
             return ToolOutput::err(format!("unknown tool '{name}'"));
         };
+        // Refused here rather than at the approval prompt: planning is a question about
+        // what would happen, and answering it must not depend on somebody declining
+        // fifteen times. The refusal names the mode so the model plans instead of
+        // retrying, and reads as this agent's rule rather than as the user saying no.
+        if self.cfg.mode == Mode::Plan && tool.mutates() {
+            tracing::info!(tool = name, "refused while planning");
+            return ToolOutput::err(format!(
+                "planning only: '{name}' would change something, so it was not run. \
+                 Say what you would do with it as a step of the plan."
+            ));
+        }
         let started = std::time::Instant::now();
         let out = match tool.run(&self.ctx, args).await {
             Ok(o) => o,
@@ -1015,12 +1089,13 @@ mod tests {
                 backend.url.clone(),
             )),
             session: Session::new(
-                Agent::build_system_prompt(&registry, protocol, None),
+                Agent::build_system_prompt(&registry, protocol, Mode::Act, None),
                 8192,
                 4096,
             ),
             registry,
             cfg: AgentConfig {
+                mode: Mode::Act,
                 instructions: None,
                 // A test must never write into the person's own configuration.
                 remember_model_in: None,
@@ -1051,6 +1126,59 @@ mod tests {
             out.push(e);
         }
         out
+    }
+
+    /// While planning, a tool that would change something is refused before it runs, and
+    /// the refusal says why so the model writes a plan instead of calling again. A tool
+    /// that only reads still runs: a plan nobody could research would be worth nothing.
+    #[tokio::test]
+    async fn planning_refuses_what_would_change_something_and_still_reads() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write_file","arguments":"{\"path\": \"a.txt\", \"content\": \"two\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c2","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"1. rewrite a.txt"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.cfg.mode = Mode::Plan;
+        agent.rebuild_preamble();
+        let events = drive(&mut agent, "change a.txt to two").await;
+
+        let refusal = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output } if name == "write_file" => Some(output),
+                _ => None,
+            })
+            .expect("the write was never answered");
+        assert!(refusal.is_error);
+        assert!(refusal.content.contains("planning only"), "{refusal:?}");
+        // The file is what it was: the refusal is before the tool, not inside it.
+        assert_eq!(h.read("a.txt"), "one");
+        // Reading is how a plan gets written, so it is not refused.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                AgentEvent::ToolResult { name, output } if name == "read_file" && !output.is_error
+            )),
+            "reading was refused too: {events:?}"
+        );
+        // The model is told it is planning, so it stops calling and writes the plan.
+        assert!(agent.session.history[0]
+            .content
+            .contains("You are PLANNING"));
     }
 
     /// A switch takes the window the configuration gives that model, and a name the

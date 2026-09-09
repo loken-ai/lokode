@@ -9,6 +9,8 @@ pub struct Status {
     pub root: String,
     pub session: String,
     pub grammar: bool,
+    /// Shown only while planning: acting is the ordinary state and does not need saying.
+    pub planning: bool,
     pub step: usize,
     pub max_steps: usize,
     pub busy: bool,
@@ -65,6 +67,18 @@ impl Status {
             Span::styled(format!("{grammar}  "), Style::default().fg(Color::Cyan)),
             Span::raw(format!("step {}/{}", self.step, self.max_steps)),
         ];
+        if self.planning {
+            spans.insert(
+                1,
+                Span::styled(
+                    "PLAN  ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ),
+            );
+        }
         // The phase is what a user is looking for when the screen has stopped changing, so
         // it goes last, where the eye lands, with the time it has been there beside it.
         if let Some(phase) = self.phase.as_deref().filter(|_| self.busy) {
@@ -87,6 +101,7 @@ mod tests {
             root: "/p".into(),
             session: "0123456789".into(),
             grammar: true,
+            planning: false,
             step: 2,
             max_steps: 16,
             busy,

@@ -144,6 +144,8 @@ pub fn draft_instructions(root: &Path) -> String {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct FileConfig {
     pub model: Option<String>,
+    /// `plan` to start read-only, `act` to start able to change things.
+    pub mode: Option<String>,
     /// `auto`, `native` or `envelope`.
     pub tool_protocol: Option<String>,
     #[serde(default)]
@@ -329,6 +331,7 @@ fn is_readable_by_others(_path: &Path) -> bool {
 pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
     FileConfig {
         model: over.model.or(base.model),
+        mode: over.mode.or(base.mode),
         tool_protocol: over.tool_protocol.or(base.tool_protocol),
         backend: BackendSection {
             kind: over.backend.kind.or(base.backend.kind),

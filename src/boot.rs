@@ -149,7 +149,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         &cfg.root,
         crate::agent::session::instruction_chars(context_tokens, max_answer_tokens),
     );
-    let system = Agent::build_system_prompt(&registry, protocol, instructions.as_deref());
+    let mode = cfg.mode;
+    let system = Agent::build_system_prompt(&registry, protocol, mode, instructions.as_deref());
     let mut session = Session::new(system, context_tokens, max_answer_tokens);
     let restored = earlier.as_ref().map(|e| e.messages.len()).unwrap_or(0);
 
@@ -208,6 +209,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         session,
         cfg: AgentConfig {
             model: model.clone(),
+            mode,
             remember_model_in: crate::config::user_config_path(),
             context_tokens: cfg.context_tokens,
             models: cfg.models.clone(),
