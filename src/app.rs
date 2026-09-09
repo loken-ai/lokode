@@ -42,6 +42,8 @@ pub struct AppConfig {
     pub models: BTreeMap<String, crate::config::ModelSection>,
     /// Whether the session starts able to change things.
     pub mode: crate::agent::agent_loop::Mode,
+    /// What is settled in advance about approvals.
+    pub policy: crate::sandbox::policy::Policy,
     /// Directories an approved shell command may write to, or `None` to leave it
     /// unconfined.
     pub shell_writable: Option<Vec<PathBuf>>,

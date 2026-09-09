@@ -527,6 +527,7 @@ async fn run_ui(
                                         checkpoints.as_deref(),
                                         &cfg.root,
                                         &control_tx,
+                                        &cfg.policy,
                                         state.busy,
                                     )
                                     .await;
@@ -596,12 +597,16 @@ async fn run_command(
     checkpoints: Option<&Checkpoints>,
     root: &std::path::Path,
     control: &mpsc::Sender<crate::agent::agent_loop::Control>,
+    policy: &crate::sandbox::policy::Policy,
     busy: bool,
 ) -> String {
     let (verb, rest) = match command.split_once(char::is_whitespace) {
         Some((v, r)) => (v, r.trim()),
         None => (command, ""),
     };
+    if verb == "approve" {
+        return policy.describe();
+    }
     if verb == "plan" || verb == "act" {
         if busy {
             return "the agent is working; ask again when the turn is over".into();
@@ -690,6 +695,7 @@ async fn run_command(
 }
 
 const HELP: &str = "\
+/approve what the configuration settles without asking
 /plan   read and search, change nothing
 /act    leave planning, change things again
 /model  what the backend serves, or /model <name> to switch and remember it

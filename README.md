@@ -163,6 +163,33 @@ The exit code says what happened without anything having to be parsed: `0` finis
 something failed - a backend error, or the step limit - and `2` a tool was refused by the
 policy, which is a different thing from the model deciding not to use one.
 
+## Settling approvals in advance
+
+An agreement given at the prompt lasts as long as the session, so working the same way
+every day means answering the same questions every day. An `[approve]` section states them
+once, in a file that can be read in review:
+
+```toml
+[approve]
+max-auto = 50                      # per turn, then it asks again
+
+[approve.allow]
+bash = ["cargo test*", "git status"]
+write = ["src/*"]
+egress = ["docs.rs"]
+
+[approve.deny]
+bash = ["git push*", "*rm -rf*"]
+```
+
+A refusal wins over an agreement, always: a rule written down so that something never
+happens must not be reachable by an agreement given in a hurry. Patterns take one wildcard,
+`*`, for any run of characters, because a rule language with more in it invites a rule
+nobody can read. Write rules are read relative to the project, so the same file works on
+another machine. The cap is per turn: a standing agreement is for the work a person
+expects, and a loop calling a tool a thousand times is not that work. `/approve` says what
+is in force.
+
 ## Planning before acting
 
 `/plan` puts the agent in a mode where every tool that writes, runs a command or reaches

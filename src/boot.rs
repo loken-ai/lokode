@@ -60,7 +60,10 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let (approval_tx, approval_rx) = approval::channel();
     let shutdown = CancellationToken::new();
 
+    let auto_used = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut ctx = ToolCtx {
+        policy: Arc::new(cfg.policy.clone()),
+        auto_used: auto_used.clone(),
         root: cfg.root.clone(),
         approval: approval_tx,
         session_approvals: Arc::new(SessionApprovals::new()),

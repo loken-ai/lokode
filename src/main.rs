@@ -282,6 +282,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             warnings,
             mcp_servers: file.mcp.servers.clone(),
             models: file.models.clone(),
+            policy: file.approve.clone(),
             mode: if cli.plan || file.mode.as_deref() == Some("plan") {
                 verve::agent::agent_loop::Mode::Plan
             } else {

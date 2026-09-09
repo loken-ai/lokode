@@ -166,6 +166,9 @@ pub struct FileConfig {
     /// that either wastes the window or overruns it.
     #[serde(default)]
     pub models: BTreeMap<String, ModelSection>,
+    /// What may go ahead without a question, and what may never go ahead at all.
+    #[serde(default)]
+    pub approve: crate::sandbox::policy::Policy,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -373,6 +376,14 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 w
             },
         },
+        approve: crate::sandbox::policy::Policy {
+            // Added to rather than replaced, on both sides: a project stating what is
+            // safe in it must not drop the user's own refusals, and a user's refusal must
+            // survive a project that says nothing about it.
+            allow: merge_rules(base.approve.allow, over.approve.allow),
+            deny: merge_rules(base.approve.deny, over.approve.deny),
+            max_auto: over.approve.max_auto.min(base.approve.max_auto),
+        },
         models: {
             let mut models = base.models;
             models.extend(over.models);
@@ -402,6 +413,18 @@ pub fn load(root: &Path) -> Result<FileConfig> {
         cfg = merge(cfg, project);
     }
     Ok(cfg)
+}
+
+/// Both sides of a rule set, kept.
+fn merge_rules(
+    mut base: crate::sandbox::policy::Rules,
+    over: crate::sandbox::policy::Rules,
+) -> crate::sandbox::policy::Rules {
+    base.bash.extend(over.bash);
+    base.write.extend(over.write);
+    base.egress.extend(over.egress);
+    base.tools.extend(over.tools);
+    base
 }
 
 /// Write the model into the user's configuration, so the next session starts on it.

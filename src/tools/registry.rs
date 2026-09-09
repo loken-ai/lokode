@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +15,11 @@ use crate::sandbox::approval::{
 
 #[derive(Clone)]
 pub struct ToolCtx {
+    /// What the configuration settles in advance, and how much of it one turn may use.
+    pub policy: Arc<crate::sandbox::policy::Policy>,
+    /// Requests the policy has granted this turn. Reset when a turn starts, because a cap
+    /// is about one piece of work rather than about a session.
+    pub auto_used: Arc<AtomicUsize>,
     pub root: PathBuf,
     pub approval: ApprovalSender,
     pub session_approvals: Arc<SessionApprovals>,
@@ -63,6 +69,25 @@ impl ToolCtx {
     /// this out longhand each held their own copy of the rule about what `Always` means,
     /// which is how it came to mean the whole tool.
     pub async fn approve(&self, req: ApprovalRequest) -> Approval {
+        // The configuration is read first, and its refusals answer on their own: a rule
+        // written down so that something never happens must not be reachable by an
+        // agreement given in a hurry at the modal.
+        match self.policy.verdict(
+            &req.scope,
+            &self.root,
+            self.auto_used.load(Ordering::Relaxed),
+        ) {
+            crate::sandbox::policy::Verdict::Refused(why) => {
+                tracing::info!(tool = %req.tool, scope = ?req.scope, %why, "refused by policy");
+                return Approval::Denied;
+            }
+            crate::sandbox::policy::Verdict::Allowed => {
+                self.auto_used.fetch_add(1, Ordering::Relaxed);
+                tracing::info!(tool = %req.tool, scope = ?req.scope, "allowed by policy");
+                return Approval::Proceed;
+            }
+            crate::sandbox::policy::Verdict::Ask => {}
+        }
         if self.session_approvals.is_always(&req.scope).await {
             tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by an earlier agreement");
             return Approval::Proceed;

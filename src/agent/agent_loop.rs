@@ -411,6 +411,11 @@ impl Agent {
         cancel: CancellationToken,
         events: mpsc::Sender<AgentEvent>,
     ) -> Result<()> {
+        // The cap on what a policy may grant is about one piece of work, so it starts
+        // again with each turn rather than running out over a session.
+        self.ctx
+            .auto_used
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         if !self.model_is_set() {
             let _ = events
                 .send(AgentEvent::Notice(
