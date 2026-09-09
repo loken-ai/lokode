@@ -69,12 +69,17 @@ One thing it uses if it is there, and one it needs:
 | `Enter` | send |
 | `Shift-Enter` | newline |
 | `Esc` | interrupt the running turn |
+| `Enter` while it works | hand the line to the turn in flight |
 | `↑` / `↓` | walk what you have already sent (from an empty input) |
 | `PageUp` / `PageDown`, wheel | scroll |
 | `Ctrl-C`, `Ctrl-Q` | quit |
 
 The model's prose is rendered as the light markdown it tends to write - fenced code,
 headings, `code` and **bold** - and anything that is a diff is coloured as one.
+
+Typing while the agent works is allowed: the line joins the conversation at the next step
+boundary and the screen says when it was handed over. That is the difference between
+steering a turn and abandoning it. A slash command typed then runs immediately.
 
 The status line says what the turn is doing whenever nothing is being printed - fitting the
 history, waiting for the model, thinking, answering, repairing a reply, running a named

@@ -47,6 +47,8 @@ pub struct Booted {
     pub checkpoint_error: Option<String>,
     /// The tool servers that were started, and anything worth saying about them.
     pub mcp: crate::mcp::Loaded,
+    /// Hands the agent a line the user typed while a turn was running.
+    pub steer: tokio::sync::mpsc::Sender<String>,
 }
 
 pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
@@ -148,7 +150,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         }
     };
 
+    let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
+        steer: steer_rx,
         backend: provider_for(cfg)?,
         registry,
         session,
@@ -180,6 +184,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         checkpoints,
         checkpoint_error,
         mcp,
+        steer: steer_tx,
     })
 }
 

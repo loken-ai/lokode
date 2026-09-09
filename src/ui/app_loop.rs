@@ -58,6 +58,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         checkpoint_error,
         instruction_notes,
         mcp,
+        steer,
     } = boot::boot(&cfg).await?;
 
     // Channels:
@@ -98,6 +99,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         restored,
         &shutdown,
         input_tx,
+        steer,
         &mut agent_evt_rx,
         &mut approval_rx,
     )
@@ -252,6 +254,8 @@ async fn run_ui(
     restored: usize,
     shutdown: &CancellationToken,
     input_tx: mpsc::Sender<TurnRequest>,
+    // Hands the running turn a line typed while it runs.
+    steer: mpsc::Sender<String>,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
 ) -> Result<()> {
@@ -404,6 +408,11 @@ async fn run_ui(
                             body: output.content,
                         });
                     }
+                    AgentEvent::Steered(s) => state.entries.push(Entry::Notice(format!(
+                        "handed to the model at step {}: {}",
+                        state.step + 1,
+                        s.lines().next().unwrap_or_default()
+                    ))),
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
                     AgentEvent::TurnDone => {
                         state.busy = false;
@@ -478,7 +487,6 @@ async fn run_ui(
                                 continue;
                             }
                             KeyCode::Enter if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                                if state.busy { continue; }
                                 let text: String = input.lines().join("\n");
                                 if text.trim().is_empty() { continue; }
                                 state.entries.push(Entry::User(text.clone()));
@@ -493,6 +501,18 @@ async fn run_ui(
                                         run_command(command.trim(), checkpoints.as_deref(), &cfg.root)
                                             .await;
                                     state.entries.push(Entry::Notice(reply));
+                                    continue;
+                                }
+                                // Typed while a turn runs, this steers it rather than
+                                // starting another: it joins the conversation at the next
+                                // step boundary, which is where the history can take it.
+                                if state.busy {
+                                    if steer.send(text).await.is_err() {
+                                        state.entries.push(Entry::Notice(
+                                            "the agent is not listening; press Esc to stop the turn"
+                                                .into(),
+                                        ));
+                                    }
                                     continue;
                                 }
                                 state.busy = true;

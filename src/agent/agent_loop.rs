@@ -76,6 +76,8 @@ pub enum AgentEvent {
         output: ToolOutput,
     },
     Notice(String),
+    /// A line the user typed while the turn was running, now in the conversation.
+    Steered(String),
     TurnDone,
 }
 
@@ -153,6 +155,10 @@ pub struct AgentConfig {
 }
 
 pub struct Agent {
+    /// Lines the user typed while a turn was running. Drained at a step boundary, which
+    /// is where the history can take a user message without moving a boundary the
+    /// compactor reasons about.
+    pub steer: mpsc::Receiver<String>,
     /// Whoever answers. The loop knows nothing about which API it is.
     pub backend: Arc<dyn Provider>,
     pub registry: Arc<Registry>,
@@ -259,6 +265,13 @@ impl Agent {
             // Before every call, not once per turn: a single tool result can be larger
             // than everything said so far, so the history can outgrow the window in the
             // middle of a turn as easily as between two.
+            // Anything said while the previous step ran joins the conversation here,
+            // before the request is built, so the model reads it on this step rather
+            // than after the turn it was meant to change.
+            while let Ok(said) = self.steer.try_recv() {
+                self.session.push(Message::user(said.clone()));
+                let _ = events.send(AgentEvent::Steered(said)).await;
+            }
             let _ = events.send(AgentEvent::Phase(Phase::Preparing)).await;
             let dropped = self.session.compact();
             if dropped > 0 {
@@ -871,8 +884,20 @@ mod tests {
         protocol: ToolProtocol,
         reg: Registry,
     ) -> Agent {
+        agent_steerable(h, backend, protocol, reg).0
+    }
+
+    /// The same, keeping the end of the steering channel a test needs to type into.
+    fn agent_steerable(
+        h: &Harness,
+        backend: &FakeBackend,
+        protocol: ToolProtocol,
+        reg: Registry,
+    ) -> (Agent, mpsc::Sender<String>) {
         let registry = Arc::new(reg);
-        Agent {
+        let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
+        let agent = Agent {
+            steer: steer_rx,
             backend: Arc::new(crate::backend::client::BackendClient::new(
                 backend.url.clone(),
             )),
@@ -894,7 +919,8 @@ mod tests {
             ctx: h.ctx.clone(),
             checkpoints: None,
             turn: 0,
-        }
+        };
+        (agent, steer_tx)
     }
 
     async fn drive(agent: &mut Agent, prompt: &str) -> Vec<AgentEvent> {
@@ -908,6 +934,53 @@ mod tests {
             out.push(e);
         }
         out
+    }
+
+    /// A line typed while the turn is running reaches the model on the next step, and
+    /// says so. Without this the only interventions are abandoning the turn or waiting
+    /// for it to end, which is restarting rather than steering.
+    #[tokio::test]
+    async fn a_line_typed_during_a_turn_joins_the_next_step() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"list_dir","arguments":"{\"path\": \".\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+
+        let reg = crate::boot::build_registry(h.root.clone()).0;
+        let (mut agent, steer) = agent_steerable(&h, &backend, ToolProtocol::Native, reg);
+        // Queued before the turn is driven: the drain is at the step boundary, so it is
+        // read on the step it precedes rather than after the turn.
+        steer
+            .send("only the .txt files, please".into())
+            .await
+            .unwrap();
+        let events = drive(&mut agent, "what is here").await;
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Steered(s) if s.contains("only the .txt"))),
+            "the turn never said it had taken the line: {events:?}"
+        );
+        let sent = backend.seen.lock().unwrap();
+        let messages = sent[0]["messages"].as_array().unwrap();
+        assert!(
+            messages.iter().any(|m| m["role"] == "user"
+                && m["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("only the .txt")),
+            "the model was never told: {messages:?}"
+        );
     }
 
     /// The native path end to end: a streamed call is reassembled, dispatched, and
