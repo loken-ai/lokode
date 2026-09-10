@@ -6,6 +6,7 @@ pub mod history;
 pub mod hooks;
 pub mod mentions;
 pub mod protocol;
+pub mod repairs;
 pub mod roles;
 pub mod session;
 pub mod steps;

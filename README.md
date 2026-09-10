@@ -384,6 +384,13 @@ not check out raises the session to that model for the steps that follow, saying
 do check out bring it back down. A step that only read something moves nothing either way,
 because a search says nothing about whether a model can produce a change that compiles.
 
+What fixed a complaint here is remembered too. When a change does not check out, what the
+check said is held; when a later change makes the same complaint go away, what that change
+did is filed against it. The next time the same complaint appears it arrives with the note,
+so the model does not work out from nothing what this project worked out last week. Line
+and column numbers and the path in front of them are dropped from the signature: the same
+mistake made twice is the same mistake at two places. `/why` lists what has been learned.
+
 What each model has managed here is remembered between sessions: how many of its writes
 checked out, per model, per project, kept beside the state on this machine and never in the
 repository. When the cheap model has been failing most of its writes in a project, the next

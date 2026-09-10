@@ -326,6 +326,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
         this_turn: Default::default(),
+        repairs: crate::agent::repairs::Repairs::open(crate::paths::state_dir(), &cfg.root),
         checked_this_step: Default::default(),
         barren: Default::default(),
         failures: Default::default(),

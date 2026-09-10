@@ -135,7 +135,7 @@ impl ModelHistory {
 ///
 /// The directory listing of a state folder should not be a list of what someone is
 /// working on.
-fn key(root: &Path) -> String {
+pub(super) fn key(root: &Path) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in root.as_os_str().as_encoded_bytes() {
         hash ^= *byte as u64;

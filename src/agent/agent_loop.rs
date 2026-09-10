@@ -522,6 +522,9 @@ pub struct Agent {
     /// What each model has managed in this project, learned from the writes that did and
     /// did not check out.
     pub history: crate::agent::history::ModelHistory,
+    /// What fixed a complaint here before, so the same one does not cost the same steps
+    /// twice.
+    pub repairs: crate::agent::repairs::Repairs,
     /// The model this session was on before a failed check raised it, and how many clean
     /// steps have passed since. `None` when nothing has been raised.
     pub escalated_from: Option<String>,
@@ -860,6 +863,10 @@ impl Agent {
         lines.push(format!(
             "what this project has shown:\n{}",
             self.history.describe()
+        ));
+        lines.push(format!(
+            "what has been fixed here before:\n{}",
+            self.repairs.describe()
         ));
         lines.join("\n")
     }
@@ -1463,7 +1470,15 @@ impl Agent {
                         record.after.wrote = true;
                         // The objective signal a cascade would escalate on. Recorded now,
                         // used by nothing yet.
-                        record.after.check_passed = Some(!result.content.contains(CHECK_FAILED));
+                        let passed = !result.content.contains(CHECK_FAILED);
+                        record.after.check_passed = Some(passed);
+                        // What fixed this before, and what this is fixing now. A complaint
+                        // is held until a change makes it go away, and the pair is what
+                        // the next occurrence arrives with.
+                        match result.content.split_once(CHECK_FAILED) {
+                            Some((_, said)) => self.repairs.failed(said),
+                            None => self.repairs.fixed(&result.content),
+                        }
                         self.record_change(&call.name, &events).await;
                     }
                 }
@@ -2312,6 +2327,7 @@ mod tests {
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
             this_turn: Default::default(),
+            repairs: Default::default(),
             checked_this_step: Default::default(),
             barren: Default::default(),
             failures: Default::default(),
@@ -2713,6 +2729,36 @@ mod tests {
             .expect("the call was never answered");
         assert!(!result.is_error, "{result:?}");
         assert_eq!(h.read("a.txt"), "two");
+    }
+
+    /// A project fails the same way twice. The complaint is held until a change makes it
+    /// go away, and the next time it appears it arrives with what worked.
+    #[tokio::test]
+    async fn a_complaint_comes_back_with_what_fixed_it() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one");
+        let mut agent = {
+            let backend = fake_backend(vec![sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ])])
+            .await;
+            agent_with_all_tools(&h, &backend, ToolProtocol::Native)
+        };
+        agent
+            .repairs
+            .failed("src/a.rs:12:5: cannot find value `foo` in this scope");
+        agent
+            .repairs
+            .fixed("edited src/a.rs\nadded the missing use");
+
+        assert_eq!(
+            agent
+                .repairs
+                .recall("src/other.rs:88:1: cannot find value `foo` in this scope"),
+            Some("edited src/a.rs")
+        );
+        assert!(agent.explain_choice().contains("edited src/a.rs"));
     }
 
     /// A model asking the same question every step learns nothing each time. The memo
