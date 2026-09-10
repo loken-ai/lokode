@@ -4,6 +4,10 @@ verve gives a language model the ability to read your files, change them, reach 
 and run commands. This document says what is actually enforced and what is not, because a
 guarantee you believe in and do not have is worse than one you know you lack.
 
+It is experimental software. What is written here is what the code does today, and today's
+defaults are chosen for a machine you are experimenting on rather than for one that matters.
+Nothing below has been audited by anybody.
+
 ## What is enforced
 
 **Path confinement.** Every tool that takes a path resolves it through one function, which

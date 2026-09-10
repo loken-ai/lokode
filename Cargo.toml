@@ -2,7 +2,7 @@
 name = "verve"
 version = "0.1.0"
 edition = "2021"
-description = "A local-first coding agent in the terminal, driven by a model on your own machine"
+description = "Experimental local-first coding agent in the terminal, driven by a model on your own machine"
 repository = "https://github.com/loken-ai/verve"
 license = "MIT OR Apache-2.0"
 keywords = ["agent", "tui", "coding"]
