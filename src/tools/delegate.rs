@@ -93,6 +93,7 @@ impl Tool for Delegate {
         );
         let mut sub = crate::agent::agent_loop::Agent {
             this_turn: Default::default(),
+            barren: Default::default(),
             repeats: Default::default(),
             before_plan: None,
             history: Default::default(),

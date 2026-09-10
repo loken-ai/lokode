@@ -326,6 +326,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
         this_turn: Default::default(),
+        barren: Default::default(),
         repeats: Default::default(),
         before_plan: None,
         // What this project has taught about each model, from the writes that did and did

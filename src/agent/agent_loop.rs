@@ -231,6 +231,13 @@ fn last_is_parallel(registry: &Registry, run: &[ResolvedCall]) -> bool {
         .unwrap_or(false)
 }
 
+/// How many steps may fail outright, one after another, before the turn is given back.
+///
+/// Three is enough for a search that guesses wrong twice and then reads the tree, and
+/// short enough that a model repeating a broken idea costs three context reads and not
+/// sixteen.
+const BARREN_STEPS: u32 = 3;
+
 /// What makes two calls the same call: the tool, and the arguments it was given.
 fn repeat_key(call: &ResolvedCall) -> String {
     format!("{}\u{0}{}", call.name, call.arguments)
@@ -430,6 +437,8 @@ impl Spend {
 pub struct Agent {
     /// What this turn changed and what it cost, for the line that closes it.
     pub this_turn: TurnTally,
+    /// Steps in a row where every tool call failed and nothing was written.
+    pub barren: u32,
     /// Read-only calls already answered in this turn, by tool and arguments.
     ///
     /// A model that has lost its place asks the same question again, and a run can hold
@@ -943,6 +952,7 @@ impl Agent {
 
         self.this_turn = TurnTally::begin();
         self.repeats.clear();
+        self.barren = 0;
 
         // The cap on what a policy may grant is about one piece of work, so it starts
         // again with each turn rather than running out over a session.
@@ -1193,6 +1203,11 @@ impl Agent {
             }
             record.after.tools = turn.calls.iter().map(|c| c.name.clone()).collect();
 
+            // Whether this step got anywhere: a step whose every call failed, over and
+            // over, is a model that has lost the thread, and each further step costs a
+            // full context read to fail the same way.
+            let mut called = 0usize;
+            let mut failed = 0usize;
             // Read-only calls in a run go together. A turn that asks to read three files
             // waits for three round trips otherwise, one after another, for no reason -
             // none of them can see what the others did. A mutating call ends the run: what
@@ -1280,6 +1295,8 @@ impl Agent {
                 record.after.tool_ms += ran_at.elapsed().as_millis() as u64;
                 self.spend.tool_ms += ran_at.elapsed().as_millis() as u64;
                 for (call, result) in run.into_iter().zip(results) {
+                    called += 1;
+                    failed += usize::from(result.is_error);
                     let key = repeat_key(&call);
                     let _ = events
                         .send(AgentEvent::ToolResult {
@@ -1321,8 +1338,25 @@ impl Agent {
                     }
                 }
             }
+            if called > 0 && called == failed {
+                self.barren += 1;
+            } else {
+                self.barren = 0;
+            }
             self.reconsider_model(&record, &events).await;
+            let barren = self.barren;
+            let tools = record.after.tools.join(", ");
             self.close_step(record);
+            if barren >= BARREN_STEPS {
+                let _ = events
+                    .send(AgentEvent::Notice(format!(
+                        "stopped: {barren} steps in a row where every call failed \
+                         (last: {tools}). Say what to do differently, or /undo."
+                    )))
+                    .await;
+                self.end_turn(&events).await;
+                return Ok(());
+            }
         }
 
         let _ = events
@@ -2014,6 +2048,7 @@ mod tests {
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
             this_turn: Default::default(),
+            barren: Default::default(),
             repeats: Default::default(),
             before_plan: None,
             history: Default::default(),
@@ -2284,6 +2319,33 @@ mod tests {
             .expect("the file was never read back");
         assert!(last.content.contains("two"), "{last:?}");
         assert!(!last.content.contains("you already ran this"), "{last:?}");
+    }
+
+    /// A model repeating a broken idea costs a full context read per step. Three steps
+    /// where nothing worked is enough to hand the turn back.
+    #[tokio::test]
+    async fn a_turn_where_nothing_works_is_given_back() {
+        let h = Harness::new(Answer::Yes);
+        let miss = || {
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"read_file","arguments":"{\"path\": \"nope.rs\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ])
+        };
+        let backend = fake_backend(vec![miss(), miss(), miss(), miss(), miss()]).await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "read nope.rs").await;
+
+        let calls = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::ToolResult { .. }))
+            .count();
+        assert_eq!(calls, 3, "the turn ran past the point of trying");
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::Notice(n)
+                if n.contains("every call failed"))),
+            "the user was not told why it stopped"
+        );
     }
 
     /// A backend that takes the tool definitions and drops them fails nothing: the model
