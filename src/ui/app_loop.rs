@@ -59,6 +59,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         instruction_notes,
         mcp,
         steer,
+        tools,
     } = boot::boot(&cfg).await?;
 
     // Channels:
@@ -116,6 +117,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         input_tx,
         control_tx,
         steer,
+        tools,
         &mut agent_evt_rx,
         &mut approval_rx,
     )
@@ -279,6 +281,8 @@ async fn run_ui(
     control_tx: mpsc::Sender<crate::agent::agent_loop::Control>,
     // Hands the running turn a line typed while it runs.
     steer: mpsc::Sender<String>,
+    // What this session can call, for /tools.
+    tools: Vec<String>,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
 ) -> Result<()> {
@@ -536,27 +540,40 @@ async fn run_ui(
                                 // Handled before the turn is started so that `/undo` works
                                 // when the thing you want undone is what the model just did.
                                 state.remember(&text);
-                                if let Some(command) = text.strip_prefix('/') {
+                                let mut text = text;
+                                if let Some(command) = text.clone().strip_prefix('/') {
                                     let verb = command.trim_start_matches('/').trim();
-                                    let reply = run_command(
+                                    let ran = run_command(
                                         command.trim(),
                                         checkpoints.as_deref(),
                                         &cfg.root,
                                         &control_tx,
                                         &cfg.policy,
+                                        &tools,
                                         state.busy,
                                     )
                                     .await;
-                                    // The mode lives with the agent; the interface knows
-                                    // it changed because the change was accepted.
-                                    if verb.starts_with("plan") && reply.starts_with("planning") {
-                                        state.planning = true;
+                                    match ran {
+                                        Ran::Said(reply) => {
+                                            // The mode lives with the agent; the interface
+                                            // knows it changed because it was accepted.
+                                            if verb.starts_with("plan")
+                                                && reply.starts_with("planning")
+                                            {
+                                                state.planning = true;
+                                            }
+                                            if verb.starts_with("act")
+                                                && reply.starts_with("acting")
+                                            {
+                                                state.planning = false;
+                                            }
+                                            state.entries.push(Entry::Notice(reply));
+                                            continue;
+                                        }
+                                        // A command the project defines is a way of
+                                        // asking, so it becomes this turn's prompt.
+                                        Ran::Prompt(prompt) => text = prompt,
                                     }
-                                    if verb.starts_with("act") && reply.starts_with("acting") {
-                                        state.planning = false;
-                                    }
-                                    state.entries.push(Entry::Notice(reply));
-                                    continue;
                                 }
                                 // Typed while a turn runs, this steers it rather than
                                 // starting another: it joins the conversation at the next
@@ -608,21 +625,43 @@ fn is_quit(k: &KeyEvent) -> bool {
 /// These do not reach the model and do not become part of the conversation: they are things
 /// the user is asking of the tool about the session, and putting them in the transcript
 /// would describe a turn that never happened.
+/// What running a command came to.
+enum Ran {
+    /// Something to put on screen.
+    Said(String),
+    /// Instructions to hand the model as this turn's prompt.
+    Prompt(String),
+}
+
 async fn run_command(
     command: &str,
     checkpoints: Option<&Checkpoints>,
     root: &std::path::Path,
     control: &mpsc::Sender<crate::agent::agent_loop::Control>,
     policy: &crate::sandbox::policy::Policy,
+    tools: &[String],
     busy: bool,
-) -> String {
+) -> Ran {
     let (verb, rest) = match command.split_once(char::is_whitespace) {
         Some((v, r)) => (v, r.trim()),
         None => (command, ""),
     };
+    // A project's own commands, before the built-ins are consulted so a team can name
+    // one of theirs after a built-in only by choosing to.
+    if let Some(text) = crate::config::user_command(root, verb) {
+        // What follows the command name is handed to it, which is how one command serves
+        // a family of tasks. A command that names no argument still gets it, appended,
+        // so nothing a user typed is silently dropped.
+        let text = match (rest.is_empty(), text.contains("$ARGS")) {
+            (true, _) => text.replace("$ARGS", ""),
+            (false, true) => text.replace("$ARGS", rest),
+            (false, false) => format!("{text}\n\n{rest}"),
+        };
+        return Ran::Prompt(text);
+    }
     if verb == "context" || verb == "compact" {
         if busy {
-            return "the agent is working; ask again when the turn is over".into();
+            return Ran::Said("the agent is working; ask again when the turn is over".into());
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
         let request = if verb == "context" {
@@ -631,16 +670,19 @@ async fn run_command(
             crate::agent::agent_loop::Control::Compact { reply: tx }
         };
         if control.send(request).await.is_err() {
-            return "the agent is not listening".into();
+            return Ran::Said("the agent is not listening".into());
         }
-        return rx.await.unwrap_or_else(|_| "the agent said nothing".into());
+        return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
+    }
+    if verb == "tools" {
+        return Ran::Said(tools.join("\n"));
     }
     if verb == "approve" {
-        return policy.describe();
+        return Ran::Said(policy.describe());
     }
     if verb == "plan" || verb == "act" {
         if busy {
-            return "the agent is working; ask again when the turn is over".into();
+            return Ran::Said("the agent is working; ask again when the turn is over".into());
         }
         let mode = if verb == "plan" {
             crate::agent::agent_loop::Mode::Plan
@@ -653,15 +695,15 @@ async fn run_command(
             .await
             .is_err()
         {
-            return "the agent is not listening".into();
+            return Ran::Said("the agent is not listening".into());
         }
-        return rx.await.unwrap_or_else(|_| "the agent said nothing".into());
+        return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
     }
     if verb == "model" {
         // The agent reads control requests between turns, so asking during one would
         // wait for the turn to end with nothing on screen explaining the silence.
         if busy {
-            return "the agent is working; ask again when the turn is over".into();
+            return Ran::Said("the agent is working; ask again when the turn is over".into());
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
         let request = crate::agent::agent_loop::Control::Model {
@@ -669,12 +711,12 @@ async fn run_command(
             reply: tx,
         };
         if control.send(request).await.is_err() {
-            return "the agent is not listening".into();
+            return Ran::Said("the agent is not listening".into());
         }
-        return rx.await.unwrap_or_else(|_| "the agent said nothing".into());
+        return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
     }
-    match command {
-        "help" | "" => HELP.into(),
+    Ran::Said(match command {
+        "help" | "" => help(root),
         "undo" => match checkpoints {
             None => "no change history for this session".into(),
             Some(cp) => match cp.undo().await {
@@ -721,8 +763,23 @@ async fn run_command(
                 Ok(d) => d,
             },
         },
-        other => format!("no such command: /{other}\n{HELP}"),
+        other => format!("no such command: /{other}\n{}", help(root)),
+    })
+}
+
+/// The commands, the project's own listed after the built-ins.
+fn help(root: &std::path::Path) -> String {
+    let mine = crate::config::user_commands(root);
+    if mine.is_empty() {
+        return HELP.to_string();
     }
+    format!(
+        "{HELP}\n\nthis project also defines:\n{}",
+        mine.iter()
+            .map(|n| format!("/{n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
 }
 
 const HELP: &str = "\
@@ -735,7 +792,8 @@ const HELP: &str = "\
 /diff   everything the agent has changed this session
 /undo   put back the most recent turn that changed something
 /init   write a first draft of this project's instructions
-/help   this";
+/tools  the tools this session can call, and where they came from
+/help   this, and any command the project defines";
 
 /// Which decision a keystroke stands for at the approval modal.
 ///

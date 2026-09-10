@@ -93,6 +93,44 @@ fn instructions_from(
     (Some(text), warnings)
 }
 
+/// The directory a project keeps its own commands in, one Markdown file per command.
+pub fn commands_dir(root: &Path) -> PathBuf {
+    root.join(".verve").join("commands")
+}
+
+/// The text of a command the project defines, if it defines one by that name.
+///
+/// A command is a file of instructions, not a program: what it holds is handed to the
+/// model as the turn's prompt. That is how a team ships a way of working - a review
+/// checklist, a release routine - without anyone writing Rust.
+pub fn user_command(root: &Path, name: &str) -> Option<String> {
+    // A name that walks out of the directory is not a command name.
+    if name.is_empty() || name.contains(['/', '\\', '.']) {
+        return None;
+    }
+    let path = commands_dir(root).join(format!("{name}.md"));
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|t| t.trim().to_string())
+}
+
+/// The commands a project defines, by name.
+pub fn user_commands(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(commands_dir(root))
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    name.strip_suffix(".md").map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
 /// A first draft of a project's instructions, from what the repository shows.
 ///
 /// Written rather than guessed at by the model: a file the user edits is a file they
@@ -798,5 +836,45 @@ mod remember_tests {
             std::fs::read_to_string(&path).unwrap(),
             "model = \"large\"\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    fn with_command(dir: &Path, name: &str, body: &str) {
+        let d = commands_dir(dir);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(format!("{name}.md")), body).unwrap();
+    }
+
+    #[test]
+    fn a_project_command_is_read_and_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        with_command(
+            dir.path(),
+            "review",
+            "Review the diff against our conventions.",
+        );
+        with_command(dir.path(), "release", "Cut a release.");
+        assert_eq!(
+            user_command(dir.path(), "review").as_deref(),
+            Some("Review the diff against our conventions.")
+        );
+        assert_eq!(user_command(dir.path(), "nope"), None);
+        assert_eq!(user_commands(dir.path()), vec!["release", "review"]);
+    }
+
+    /// A name is a name, not a path: nothing outside the directory is a command.
+    #[test]
+    fn a_name_that_walks_out_is_not_a_command() {
+        let dir = tempfile::tempdir().unwrap();
+        with_command(dir.path(), "ok", "fine");
+        std::fs::write(dir.path().join("secret.md"), "not a command").unwrap();
+        assert_eq!(user_command(dir.path(), "../secret"), None);
+        assert_eq!(user_command(dir.path(), "..\\secret"), None);
+        assert_eq!(user_command(dir.path(), "secret.md"), None);
+        assert_eq!(user_command(dir.path(), ""), None);
     }
 }

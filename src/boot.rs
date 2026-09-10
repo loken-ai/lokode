@@ -49,6 +49,8 @@ pub struct Booted {
     pub mcp: crate::mcp::Loaded,
     /// Hands the agent a line the user typed while a turn was running.
     pub steer: tokio::sync::mpsc::Sender<String>,
+    /// Every tool this session can call, named and described, built-ins and the servers'.
+    pub tools: Vec<String>,
 }
 
 pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
@@ -204,6 +206,23 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         }
     };
 
+    // Read before the registry is handed to the agent, which takes it.
+    let tools: Vec<String> = {
+        let mut rows: Vec<String> = registry
+            .iter()
+            .map(|(name, tool)| {
+                // A tool from a server carries its server in its name, which is the only
+                // place the difference is recorded.
+                let from = match name.split_once("__") {
+                    Some((server, _)) => format!(" (from {server})"),
+                    None => String::new(),
+                };
+                format!("{name}{from}: {}", tool.description())
+            })
+            .collect();
+        rows.sort();
+        rows
+    };
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
         steer: steer_rx,
@@ -243,6 +262,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         checkpoint_error,
         mcp,
         steer: steer_tx,
+        tools,
     })
 }
 
