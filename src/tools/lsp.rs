@@ -443,7 +443,7 @@ impl Tool for LspDiagnostics {
         let a: DiagArgs = serde_json::from_value(args)?;
         let path = match allowlist::resolve(&ctx.root, &a.path, true) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolOutput::err(e.to_string())),
+            Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
         let Some(lang) = LangId::from_path(&path) else {
             return Ok(ToolOutput::err(format!(
@@ -552,7 +552,7 @@ impl Tool for LspHover {
         let a: HoverArgs = serde_json::from_value(args)?;
         let path = match allowlist::resolve(&ctx.root, &a.path, true) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolOutput::err(e.to_string())),
+            Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
         let Some(lang) = LangId::from_path(&path) else {
             return Ok(ToolOutput::err(format!(

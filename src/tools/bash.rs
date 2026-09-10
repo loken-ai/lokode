@@ -54,8 +54,8 @@ impl Tool for Bash {
         let a: BashArgs = serde_json::from_value(args)?;
         let cwd = match a.cwd.as_ref() {
             Some(p) => match allowlist::resolve(&ctx.root, p, true) {
-                Ok(p) => p,
-                Err(e) => return Ok(ToolOutput::err(e.to_string())),
+                Ok(resolved) => resolved,
+                Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, p, &e))),
             },
             None => ctx.root.clone(),
         };

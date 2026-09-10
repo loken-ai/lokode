@@ -2,6 +2,21 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+/// A refusal, with where the file the caller meant actually is.
+///
+/// The suggestion is built by the caller rather than by the resolver: finding it walks the
+/// project, which is not something a path check should ever do on its own.
+pub fn refusal(root: &Path, wanted: &Path, error: &PathError) -> String {
+    let mut out = error.to_string();
+    if matches!(error, PathError::NotFound { .. }) {
+        let near = nearby(root, wanted);
+        if !near.is_empty() {
+            out.push_str(&format!("; there is one at {}", near.join(", ")));
+        }
+    }
+    out
+}
+
 #[derive(Debug, Error)]
 pub enum PathError {
     #[error("path '{path}' does not exist")]
@@ -301,4 +316,32 @@ mod new_directory_tests {
         let r = resolve(dir.path(), Path::new("src/a.rs"), false).unwrap();
         assert_eq!(r, dir.path().join("src/a.rs").canonicalize().unwrap());
     }
+}
+
+/// Paths under `root` whose file name matches the one that was not found.
+///
+/// A model that has not read the tree guesses a path, and the guess is usually right about
+/// the file and wrong about where it sits: `/workspace/src/a.rs` for `src/a.rs`. Answering
+/// the refusal with where the file actually is saves the round trip that would find it.
+///
+/// Bounded on both sides: the walk stops once enough matches are in hand, and the answer
+/// names at most a few, because a refusal that lists a hundred paths is not an answer.
+pub fn nearby(root: &Path, wanted: &Path) -> Vec<String> {
+    const MOST: usize = 3;
+    let Some(name) = wanted.file_name() else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for entry in ignore::WalkBuilder::new(root).build().flatten() {
+        if entry.file_name() != name {
+            continue;
+        }
+        if let Ok(rel) = entry.path().strip_prefix(root) {
+            found.push(rel.display().to_string());
+            if found.len() == MOST {
+                break;
+            }
+        }
+    }
+    found
 }

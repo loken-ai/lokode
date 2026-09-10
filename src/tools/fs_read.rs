@@ -51,7 +51,7 @@ impl Tool for ReadFile {
         let a: ReadFileArgs = serde_json::from_value(args)?;
         let resolved = match allowlist::resolve(&ctx.root, &a.path, true) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolOutput::err(e.to_string())),
+            Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
         let body = match text::read_numbered(&resolved, a.start_line, a.end_line).await {
             Ok(b) => b,
@@ -93,7 +93,7 @@ impl Tool for ListDir {
         let a: ListDirArgs = serde_json::from_value(args)?;
         let dir = match allowlist::resolve(&ctx.root, &a.path, true) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolOutput::err(e.to_string())),
+            Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
         let mut rd = match tokio::fs::read_dir(&dir).await {
             Ok(r) => r,
@@ -189,6 +189,35 @@ impl Tool for Glob {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A path that is wrong about where a file sits, but right about the file, is answered
+    /// with where it is. The alternative is a round trip that finds the same thing.
+    #[tokio::test]
+    async fn a_path_that_is_not_there_says_where_the_file_is() {
+        let h = Harness::new(Answer::Yes);
+        h.write("src/brew.rs", "fn strength() {}");
+        let out = ReadFile
+            .run(&h.ctx, serde_json::json!({"path": "workspace/src/brew.rs"}))
+            .await
+            .unwrap();
+        assert!(out.is_error, "{out:?}");
+        assert!(out.content.contains("src/brew.rs"), "{}", out.content);
+        assert!(out.content.contains("there is one at"), "{}", out.content);
+    }
+
+    /// A name nothing in the project has gets the refusal alone: a suggestion that names
+    /// nothing is noise in a window that has to hold the work.
+    #[tokio::test]
+    async fn a_name_the_project_does_not_have_gets_no_suggestion() {
+        let h = Harness::new(Answer::Yes);
+        h.write("src/brew.rs", "fn strength() {}");
+        let out = ReadFile
+            .run(&h.ctx, serde_json::json!({"path": "src/kettle.rs"}))
+            .await
+            .unwrap();
+        assert!(out.is_error, "{out:?}");
+        assert!(!out.content.contains("there is one at"), "{}", out.content);
+    }
+
     use crate::tools::harness::{outside, refused, succeeded, Answer, Harness};
     use serde_json::json;
 

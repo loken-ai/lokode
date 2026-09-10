@@ -49,8 +49,8 @@ impl Tool for Grep {
         let a: GrepArgs = serde_json::from_value(args)?;
         let search_root = match a.path.as_ref() {
             Some(p) => match allowlist::resolve(&ctx.root, p, true) {
-                Ok(p) => p,
-                Err(e) => return Ok(ToolOutput::err(e.to_string())),
+                Ok(resolved) => resolved,
+                Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, p, &e))),
             },
             None => ctx.root.clone(),
         };

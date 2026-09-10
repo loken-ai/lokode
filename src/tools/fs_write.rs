@@ -52,7 +52,7 @@ impl Tool for WriteFile {
         let a: WriteFileArgs = serde_json::from_value(args)?;
         let target = match allowlist::resolve(&ctx.root, &a.path, false) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolOutput::err(e.to_string())),
+            Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
 
         let before = match text::read_text_if_exists(&target).await {
@@ -133,7 +133,7 @@ impl Tool for EditFile {
         let a: EditFileArgs = serde_json::from_value(args)?;
         let target = match allowlist::resolve(&ctx.root, &a.path, true) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolOutput::err(e.to_string())),
+            Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
         let before = match text::read_text(&target).await {
             Ok(b) => b,
@@ -245,7 +245,7 @@ impl Tool for EditLines {
         }
         let target = match allowlist::resolve(&ctx.root, &a.path, true) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolOutput::err(e.to_string())),
+            Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
         let before = match text::read_text(&target).await {
             Ok(b) => b,
@@ -354,7 +354,10 @@ impl Tool for ApplyPatch {
             }
             let target = match allowlist::resolve(&ctx.root, std::path::Path::new(rel), false) {
                 Ok(p) => p,
-                Err(e) => return Ok(ToolOutput::err(format!("{rel}: {e}"))),
+                Err(e) => {
+                    let why = allowlist::refusal(&ctx.root, std::path::Path::new(rel), &e);
+                    return Ok(ToolOutput::err(format!("{rel}: {why}")));
+                }
             };
             let before = match tokio::fs::read_to_string(&target).await {
                 Ok(s) => Some(s),
