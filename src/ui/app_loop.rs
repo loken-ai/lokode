@@ -983,6 +983,24 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         }
         return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
     }
+    if verb == "retry" {
+        if busy {
+            return Ran::Said("the agent is working; ask again when the turn is over".into());
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let request = crate::agent::agent_loop::Control::Retry {
+            model: (!rest.is_empty()).then(|| rest.to_string()),
+            reply: tx,
+        };
+        if control.send(request).await.is_err() {
+            return Ran::Said("the agent is not listening".into());
+        }
+        return match rx.await {
+            Ok(Ok(asked)) => Ran::Prompt(asked),
+            Ok(Err(why)) => Ran::Said(why),
+            Err(_) => Ran::Said("the agent said nothing".into()),
+        };
+    }
     if verb == "model" {
         // The agent reads control requests between turns, so asking during one would
         // wait for the turn to end with nothing on screen explaining the silence.
@@ -1075,6 +1093,7 @@ const HELP: &str = "\
 /plan   read and search, change nothing
 /act    leave planning, change things again
 /model  what the backend serves, or /model <name> to switch and remember it
+/retry  ask the last question again, or /retry <model> to ask another model
 /diff   everything the agent has changed this session
 /undo   put back the most recent turn that changed something
 /digest what has been worked out about this project, or /digest forget

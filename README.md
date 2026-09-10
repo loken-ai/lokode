@@ -73,6 +73,7 @@ One thing it uses if it is there, and one it needs:
 | `Enter` while it works | hand the line to the turn in flight |
 | `@path` in a prompt | send that file, or that directory's listing, with the question |
 | `↑` / `↓` | walk what you have already sent (from an empty input) |
+| `/retry`, `/retry <model>` | ask the last question again, of the same model or another |
 | `PageUp` / `PageDown`, wheel | scroll |
 | `Ctrl-C`, `Ctrl-Q` | quit |
 
@@ -118,6 +119,12 @@ itself. A whole-file write over a file that has changed on disk since the model 
 refused, because that write would discard whatever you did in your own editor. And a path
 that is not there is answered with where the file actually is, rather than with a refusal
 that costs a search to act on.
+
+`/retry` asks the last question again from where it was asked: what the agent did after it
+leaves the conversation, so the model is not reading its own failed attempt while it tries
+again. `/retry <model>` asks a different one, which is the cheapest experiment there is when
+a turn goes wrong. The transcript keeps both attempts, because what was tried is part of
+what happened, and `/undo` puts the files back if the first attempt wrote any.
 
 A turn that is getting nowhere is handed back rather than run to the step limit. Three
 steps in a row where every call either failed or had already been answered, or six failed

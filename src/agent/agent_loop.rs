@@ -93,6 +93,12 @@ pub enum Control {
     },
     /// Hold the session to a tool protocol, once something has found out which one works.
     Protocol(ToolProtocol),
+    /// Take the conversation back to the last thing the user asked and hand it back, so it
+    /// can be asked again - of another model, or of the same one from a clean start.
+    Retry {
+        model: Option<String>,
+        reply: tokio::sync::oneshot::Sender<Result<String, String>>,
+    },
     /// Plan or act.
     Mode {
         mode: Mode,
@@ -798,6 +804,19 @@ impl Agent {
                     }
                     self.rebuild_preamble();
                 }
+            }
+            Control::Retry { model, reply } => {
+                let answer = match self.session.rewind_to_last_ask() {
+                    None => Err("nothing has been asked yet".to_string()),
+                    Some(asked) => {
+                        if let Some(name) = model {
+                            let said = self.switch_model(Some(name)).await;
+                            tracing::info!(%said, "retry switched model");
+                        }
+                        Ok(asked)
+                    }
+                };
+                let _ = reply.send(answer);
             }
             Control::Mode { mode, reply } => {
                 let _ = reply.send(self.set_mode(mode));

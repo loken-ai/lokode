@@ -202,6 +202,23 @@ impl Session {
 
     /// Compact now, whatever the budget says, down to the same target a full window
     /// would be taken to. Returns how many messages went.
+    /// Take the conversation back to just before the last thing the user asked, and hand
+    /// that back.
+    ///
+    /// What the agent did after it goes: the point of asking again is to ask from where it
+    /// was asked the first time, not to ask a model that has already read its own failed
+    /// attempt. The transcript keeps both, because what was tried is part of what
+    /// happened.
+    pub fn rewind_to_last_ask(&mut self) -> Option<String> {
+        let at = self
+            .history
+            .iter()
+            .rposition(|m| m.role == "user" && !m.content.is_empty())?;
+        let asked = self.history[at].content.clone();
+        self.history.truncate(at);
+        Some(asked)
+    }
+
     pub fn compact_now(&mut self) -> usize {
         let budget = self.budget_chars;
         // Compaction is a comparison against the budget, so asking for it early is
@@ -298,6 +315,27 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Asking again means asking from where it was asked, not asking a model that has
+    /// already read its own failed attempt.
+    #[test]
+    fn rewinding_gives_back_the_question_and_drops_what_followed() {
+        let mut s = Session::new("system".into(), 8192, 1024);
+        s.push(Message::user("do the thing"));
+        s.push(Message::assistant("I will"));
+        s.push(Message::user("actually do this instead"));
+        s.push(Message::assistant("trying"));
+        s.push(Message::tool("it failed", "c1".to_string()));
+
+        assert_eq!(
+            s.rewind_to_last_ask().as_deref(),
+            Some("actually do this instead")
+        );
+        assert_eq!(s.history.last().map(|m| m.content.as_str()), Some("I will"));
+        // The one before it is still there to ask again after that.
+        assert_eq!(s.rewind_to_last_ask().as_deref(), Some("do the thing"));
+        assert!(s.rewind_to_last_ask().is_none());
+    }
 
     fn msg(role: &str, n: usize) -> Message {
         let body = "x".repeat(n);
