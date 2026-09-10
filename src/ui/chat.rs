@@ -250,6 +250,83 @@ impl Entry {
     }
 }
 
+/// Break rendered lines so that one line is one row on screen.
+///
+/// The pane used to hand its lines to a paragraph that wrapped them itself. That left the
+/// program counting logical lines while the terminal showed rows, so scrolling was off by
+/// however much had wrapped, and nothing could be said about what sits at a given row -
+/// which is what selecting with the mouse needs to know.
+///
+/// Broken at a space where there is one, mid-word where there is not, and never mid-span:
+/// a span carries its colour, and half a span carries half of it.
+pub fn wrap(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return lines;
+    }
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        if line_width(&line) <= width {
+            out.push(line);
+            continue;
+        }
+        let mut row: Vec<Span<'static>> = Vec::new();
+        let mut used = 0usize;
+        for span in line.spans {
+            let style = span.style;
+            let mut text = span.content.into_owned();
+            while !text.is_empty() {
+                let room = width - used;
+                if text.chars().count() <= room {
+                    used += text.chars().count();
+                    row.push(Span::styled(text, style));
+                    break;
+                }
+                let at = break_at(&text, room);
+                let (head, tail) = text.split_at(at);
+                if !head.is_empty() {
+                    row.push(Span::styled(head.to_string(), style));
+                }
+                out.push(Line::from(std::mem::take(&mut row)));
+                used = 0;
+                text = tail.trim_start_matches(' ').to_string();
+            }
+        }
+        out.push(Line::from(row));
+    }
+    out
+}
+
+/// Where to break `text` so that at most `room` columns are used.
+///
+/// At the last space that fits, so a word is not cut when it does not have to be; at
+/// `room` when there is no space, because a line has to end somewhere.
+fn break_at(text: &str, room: usize) -> usize {
+    let hard = text
+        .char_indices()
+        .nth(room)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    // A space exactly where the room runs out means the whole of what fits is a word
+    // boundary already.
+    if text[hard..].starts_with(' ') {
+        return hard;
+    }
+    match text[..hard].rfind(' ') {
+        Some(at) if at > 0 => at,
+        _ => hard,
+    }
+}
+
+/// The columns a line takes.
+pub fn line_width(line: &Line<'static>) -> usize {
+    line.spans.iter().map(|s| s.content.chars().count()).sum()
+}
+
+/// A line as the plain text it shows, for taking a selection out of the pane.
+pub fn line_text(line: &Line<'static>) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
 /// Whether a remark is about something that went wrong.
 ///
 /// Read off the wording rather than carried alongside it, because every one of these
@@ -570,6 +647,58 @@ mod tests {
         let body = "before\n```sh\nls **/*.rs\n```\nafter";
         let rendered = text(&prose(body));
         assert_eq!(rendered[2], "ls **/*.rs");
+    }
+
+    /// One line in, one row per screen width out, and the text unchanged apart from the
+    /// spaces a break falls on.
+    #[test]
+    fn wrapping_gives_one_row_per_line() {
+        let line = Line::from(Span::raw("aaa bbb ccc ddd"));
+        let rows = wrap(vec![line], 7);
+        let text: Vec<String> = rows.iter().map(line_text).collect();
+        assert_eq!(text, vec!["aaa bbb", "ccc ddd"]);
+        assert!(rows.iter().all(|r| line_width(r) <= 7));
+    }
+
+    /// A word longer than the pane has to be cut: a line has to end somewhere.
+    #[test]
+    fn a_word_wider_than_the_pane_is_cut() {
+        let rows = wrap(vec![Line::from(Span::raw("abcdefghij"))], 4);
+        let text: Vec<String> = rows.iter().map(line_text).collect();
+        assert_eq!(text, vec!["abcd", "efgh", "ij"]);
+    }
+
+    /// A break never falls inside a span, because a span carries its colour and half a
+    /// span carries half of it.
+    #[test]
+    fn colour_survives_a_break() {
+        let line = Line::from(vec![
+            Span::styled("red red red", Style::default().fg(Color::Red)),
+            Span::styled(" green", Style::default().fg(Color::Green)),
+        ]);
+        let rows = wrap(vec![line], 6);
+        for row in &rows {
+            for span in &row.spans {
+                assert!(span.style.fg.is_some(), "a span lost its colour: {row:?}");
+            }
+        }
+        // Nothing is lost but the spaces a break falls on.
+        let squashed: String = rows
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("")
+            .split_whitespace()
+            .collect();
+        assert_eq!(squashed, "redredredgreen");
+        assert!(rows.iter().all(|r| line_width(r) <= 6));
+    }
+
+    #[test]
+    fn a_line_that_fits_is_left_alone() {
+        let rows = wrap(vec![Line::from(Span::raw("short"))], 40);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(line_text(&rows[0]), "short");
     }
 
     /// An error in the same grey as a footnote is an error nobody reads.
