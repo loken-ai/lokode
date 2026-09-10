@@ -625,6 +625,30 @@ mod tests {
         assert_eq!(losses(&grown), "");
     }
 
+    /// A project reached through a symbolic link is still the project, and its files are
+    /// still named by what comes after the root.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_path_under_a_linked_root_is_still_shown_short() {
+        let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
+        h.write("a.txt", "one");
+        let link = h.root.parent().unwrap().join(format!(
+            "linked-{}",
+            h.root.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&h.root, &link).unwrap();
+        let mut ctx = h.ctx.clone();
+        ctx.root = link.clone();
+        let out = WriteFile
+            .run(&ctx, serde_json::json!({"path": "a.txt", "content": "two"}))
+            .await
+            .unwrap();
+        let _ = std::fs::remove_file(&link);
+        assert!(!out.is_error, "{out:?}");
+        assert!(out.content.starts_with("wrote a.txt "), "{}", out.content);
+    }
+
     /// A file somebody changed while the model was thinking is not the file the model
     /// read. Overwriting it whole would throw their work away with nothing to show it.
     #[tokio::test]

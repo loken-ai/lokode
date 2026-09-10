@@ -81,10 +81,18 @@ impl ToolCtx {
     /// a narrow screen it is a line of scaffolding in front of the three words that
     /// matter, and the model does not address files that way either.
     pub fn short(&self, path: &Path) -> String {
-        path.strip_prefix(&self.root)
-            .unwrap_or(path)
-            .display()
-            .to_string()
+        if let Ok(rel) = path.strip_prefix(&self.root) {
+            return rel.display().to_string();
+        }
+        // A resolved path is canonical and the configured root need not be, so a project
+        // reached through a symbolic link matches neither until the root is canonical
+        // too. Only on the miss: the common case costs nothing.
+        if let Ok(base) = self.root.canonicalize() {
+            if let Ok(rel) = path.strip_prefix(&base) {
+                return rel.display().to_string();
+            }
+        }
+        path.display().to_string()
     }
 
     /// Remember what `path` holds now, so a later write can tell whether it still does.

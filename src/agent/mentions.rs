@@ -25,6 +25,11 @@ pub fn expand(text: &str, root: &Path, max_chars: usize) -> Expanded {
     let mut attached = Vec::new();
     let mut bodies = String::new();
     let mut budget = max_chars;
+    // Resolved paths come back canonical, so the root has to be canonical too or the
+    // prefix does not come off and the whole absolute path is what the user is shown.
+    // A project reached through a symbolic link is the ordinary case for this: every
+    // temporary directory on macOS is one.
+    let base = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
     for token in mentions(text) {
         // Through the sandbox, so a mention cannot reach outside the project any more
@@ -33,7 +38,7 @@ pub fn expand(text: &str, root: &Path, max_chars: usize) -> Expanded {
             continue;
         };
         let shown = path
-            .strip_prefix(root)
+            .strip_prefix(&base)
             .unwrap_or(&path)
             .display()
             .to_string();
@@ -140,6 +145,25 @@ mod tests {
         let out = expand("what is in @src", dir.path(), 10_000);
         assert_eq!(out.attached, vec!["src"]);
         assert!(out.text.contains("main.rs"));
+    }
+
+    /// A project reached through a symbolic link is still the project. The resolved path
+    /// is canonical, so a root that is not gets the whole absolute path put in front of
+    /// the user instead of the name they typed.
+    #[test]
+    #[cfg(unix)]
+    fn a_project_behind_a_link_still_names_its_files_plainly() {
+        let dir = project();
+        let link = dir.path().parent().unwrap().join(format!(
+            "link-{}",
+            dir.path().file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(dir.path(), &link).unwrap();
+        let out = expand("why does @src/main.rs do nothing?", &link, 10_000);
+        let _ = std::fs::remove_file(&link);
+        assert_eq!(out.attached, vec!["src/main.rs"]);
+        assert!(out.text.contains("--- src/main.rs ---"), "{}", out.text);
     }
 
     /// Nothing that is not a path is attached, and nothing outside the project is
