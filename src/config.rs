@@ -216,6 +216,9 @@ pub struct FileConfig {
     /// Whether to have a nearby backend hold the next model ready while other work runs.
     /// On by default, and a no-op against anything that is not nearby.
     pub preload: Option<bool>,
+    /// Guess the next read while the model is still thinking. Only ever done against a
+    /// backend near enough that an idle card is the only thing it costs.
+    pub speculate: Option<bool>,
     /// Whether to look into the project while nobody is waiting, and remember what is
     /// found. Off by default: it spends the machine's time on its own.
     pub discover: Option<bool>,
@@ -441,6 +444,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
         },
         roles: crate::agent::roles::Roles::merge(base.roles, over.roles),
         preload: over.preload.or(base.preload),
+        speculate: over.speculate.or(base.speculate),
         discover: over.discover.or(base.discover),
         hooks: HooksSection {
             pre_tool: over.hooks.pre_tool.or(base.hooks.pre_tool),

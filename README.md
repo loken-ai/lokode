@@ -101,6 +101,13 @@ alive. Most of a turn is spent in those phases: the request has gone out and the
 reading a context of thousands of tokens, or a command is running under a tool. Without
 them the screen is identical to one that has stopped.
 
+While the model writes its answer the card is busy and the rest of the machine is not. A
+small model spends that time guessing which read is coming next, the read is made, and the
+step that asks for it is answered without a round trip. Read-only by construction: a guess
+that would change something is dropped rather than run, because being wrong has to stay
+free. It happens only against a backend on this machine or this network, where an idle card
+is the whole cost, and `speculate = false` turns it off.
+
 A turn closes with what it came to: how long it took, how many steps, what it spent and
 which files it changed. A turn that answered in a moment and changed nothing says nothing,
 because a receipt for that is noise.

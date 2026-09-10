@@ -351,6 +351,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             // Only worth doing, and only harmless, against a server whose weights are
             // near: a hosted endpoint has nothing to warm and would bill the attempt.
             preload: cfg.preload && crate::config::backend_is_nearby(&cfg.backend_url),
+            speculate: cfg.speculate && crate::config::backend_is_nearby(&cfg.backend_url),
             roles: cfg.roles.clone(),
             hooks: cfg.hooks.clone(),
             remember_model_in: crate::config::user_config_path(),

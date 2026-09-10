@@ -204,6 +204,7 @@ impl Discovery {
                 model: self.model.clone(),
                 mode: crate::agent::agent_loop::Mode::Plan,
                 preload: false,
+                speculate: false,
                 roles: Default::default(),
                 hooks: Default::default(),
                 instructions: None,

@@ -119,6 +119,7 @@ impl Tool for Delegate {
                 // The sub-session is short and its model is already chosen; nothing after
                 // it is known, so there is nothing to hold ready.
                 preload: false,
+                speculate: false,
                 roles: w.roles.clone(),
                 mode: crate::agent::agent_loop::Mode::Act,
                 hooks: Default::default(),

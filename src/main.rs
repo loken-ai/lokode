@@ -290,6 +290,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             hooks: file.hooks.clone(),
             roles: file.roles.clone(),
             preload: file.preload.unwrap_or(true),
+            speculate: file.speculate.unwrap_or(true),
             // Off unless asked for: it spends the machine's time on its own, and that is
             // a thing to opt into rather than to discover.
             discover: cli.discover || file.discover.unwrap_or(false),

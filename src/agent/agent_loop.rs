@@ -365,6 +365,9 @@ pub struct AgentConfig {
     /// Whether to have the backend hold the next model ready while other work runs.
     /// Only ever true for a backend near enough for a load to be worth hiding.
     pub preload: bool,
+    /// Whether to guess the next read while the model is thinking. Only ever true for a
+    /// backend near enough that an idle card is the whole cost.
+    pub speculate: bool,
     /// Which model does which kind of work, when the project says.
     pub roles: crate::agent::roles::Roles,
     /// Commands to run at the edges of a tool call and a turn.
@@ -1141,7 +1144,20 @@ impl Agent {
                 .await;
             let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
             let asked_at = std::time::Instant::now();
-            let mut attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+            // The card is busy with one model and idle for everything else. A small model
+            // can spend that time guessing which file the answer is going to ask for, and
+            // a read has no effect to undo when the guess is wrong.
+            let (attempt, guessed) =
+                tokio::join!(self.stream_one(&turn_schema, &cancel, &events), async {
+                    match self.cfg.speculate {
+                        true => self.speculate(&cancel).await,
+                        false => None,
+                    }
+                });
+            let mut attempt = attempt;
+            if let Some((key, out)) = guessed {
+                self.repeats.entry(key).or_insert(out);
+            }
             record.after.model_ms = asked_at.elapsed().as_millis() as u64;
             self.spend.model_ms += record.after.model_ms;
 
@@ -1631,6 +1647,90 @@ impl Agent {
         if self.steps.len() > 200 {
             self.steps.remove(0);
         }
+    }
+
+    /// The read the next step is most likely to ask for, done while the model is thinking.
+    ///
+    /// The card answering the turn is busy; everything else on the machine is not. A small
+    /// model is asked which single read-only call is coming, that call is made, and its
+    /// answer is put where a repeat would find it. A wrong guess costs time that was being
+    /// spent waiting anyway, and a right one takes a whole round trip out of the turn.
+    ///
+    /// Read-only by construction: a guess that would change something is dropped rather
+    /// than run, because the point is that being wrong is free.
+    async fn speculate(&self, cancel: &CancellationToken) -> Option<(String, ToolOutput)> {
+        let names: Vec<&str> = self
+            .registry
+            .iter()
+            .filter(|(_, t)| !t.mutates())
+            .map(|(n, _)| n.as_str())
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        let recent: String = self
+            .session
+            .history
+            .iter()
+            .rev()
+            .take(4)
+            .map(|m| {
+                let body: String = m.content.chars().take(600).collect();
+                format!("{}: {body}", m.role)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            .chars()
+            .take(REVIEW_ARG_CHARS)
+            .collect();
+        let req = TurnRequest {
+            model: self.model_for(crate::agent::roles::Role::Search),
+            messages: vec![
+                Message::system(format!(
+                    "You are guessing which single read-only call an agent is about to \
+                     make next, so its answer can be ready. Reply with one JSON object and \
+                     nothing else: {{\"name\": ..., \"arguments\": {{...}}}}. The name must \
+                     be one of: {}. Reply with {{}} when you cannot tell.",
+                    names.join(", ")
+                )),
+                Message::user(format!("The conversation so far:\n{recent}")),
+            ],
+            tools: None,
+            grammar: None,
+            max_tokens: 160,
+            temperature: 0.0,
+            user: Some(format!("{}-guess", self.session.id)),
+        };
+        let answer = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return None,
+            r = self.backend.complete(req) => r.ok()?,
+        };
+        let parsed = crate::backend::repair::tolerant_parse(&answer).ok()?;
+        let name = parsed.get("name")?.as_str()?.to_string();
+        let arguments = parsed.get("arguments").cloned().unwrap_or(Value::Null);
+        // Only a tool this session has, and only one that changes nothing.
+        let tool = self.registry.get(&name)?;
+        if tool.mutates() {
+            return None;
+        }
+        let call = ResolvedCall {
+            id: String::new(),
+            name: name.clone(),
+            arguments: arguments.clone(),
+        };
+        let key = repeat_key(&call);
+        if self.repeats.contains_key(&key) {
+            return None;
+        }
+        let out = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return None,
+            out = self.dispatch_tool(&name, arguments) => out,
+        };
+        // A guess that failed teaches the next step nothing and would be served as an
+        // answer. Only what worked is worth keeping.
+        (!out.is_error).then_some((key, out))
     }
 
     /// What a second model says about a change, before it is written.
@@ -2353,6 +2453,7 @@ mod tests {
             cfg: AgentConfig {
                 mode: Mode::Act,
                 preload: false,
+                speculate: false,
                 roles: Default::default(),
                 hooks: Default::default(),
                 instructions: None,
@@ -2759,6 +2860,60 @@ mod tests {
             Some("edited src/a.rs")
         );
         assert!(agent.explain_choice().contains("edited src/a.rs"));
+    }
+
+    /// The card answering the turn is busy and the rest of the machine is not. A small
+    /// model guesses the read that is coming and it is made while the answer is still
+    /// being written, so the step that asks for it is answered without a round trip.
+    #[tokio::test]
+    async fn a_guessed_read_is_ready_before_it_is_asked_for() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "forty two");
+        let backend = fake_backend(vec![json_reply(
+            r#"{"name": "read_file", "arguments": {"path": "a.txt"}}"#,
+        )])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.session.push(Message::user("what does a.txt say"));
+
+        let (key, out) = agent
+            .speculate(&CancellationToken::new())
+            .await
+            .expect("the guess was not made");
+        assert!(out.content.contains("forty two"), "{out:?}");
+        // Filed where a repeat of the same call would find it.
+        assert!(key.contains("read_file"), "{key}");
+        assert!(key.contains("a.txt"), "{key}");
+    }
+
+    /// A guess that would change something is dropped rather than run: being wrong has to
+    /// stay free.
+    #[tokio::test]
+    async fn a_guess_that_would_write_is_not_made() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one");
+        let backend = fake_backend(vec![json_reply(
+            r#"{"name": "write_file", "arguments": {"path": "a.txt", "content": "two"}}"#,
+        )])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.session.push(Message::user("say hello"));
+
+        assert!(agent.speculate(&CancellationToken::new()).await.is_none());
+        assert_eq!(h.read("a.txt"), "one");
+    }
+
+    /// A guess for a tool this session does not have is not a guess.
+    #[tokio::test]
+    async fn a_guess_at_a_tool_that_does_not_exist_is_dropped() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![json_reply(
+            r#"{"name": "list_everything", "arguments": {}}"#,
+        )])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.session.push(Message::user("have a look"));
+        assert!(agent.speculate(&CancellationToken::new()).await.is_none());
     }
 
     /// A model asking the same question every step learns nothing each time. The memo
