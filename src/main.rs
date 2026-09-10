@@ -83,9 +83,9 @@ struct Cli {
 
     /// How to ask the model for tool calls.
     ///
-    /// `auto` uses the server's own tool-calling and falls back to the JSON envelope if it
-    /// is refused. Pin `envelope` for a backend that accepts the `tools` field and then
-    /// ignores it, which cannot be told apart from a model choosing not to call anything.
+    /// `auto` asks the backend once, at startup, whether it really makes tool calls, and
+    /// falls back to the JSON envelope when it refuses the field or takes it and ignores
+    /// it. Pin either to skip the question.
     #[arg(long, value_enum)]
     tool_protocol: Option<app::ProtocolChoice>,
 

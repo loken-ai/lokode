@@ -494,10 +494,13 @@ object per turn, constrained by a grammar generated from the tool schemas; it ne
 from the server beyond a completion, which is why it is what a small local model behind a
 plain backend still works against.
 
-`auto` starts native and drops to the envelope the first time a backend refuses the field,
-finishing the turn either way. A backend that *accepts* `tools` and then ignores it cannot be
-detected - it looks exactly like a model choosing not to call anything - so pin
-`--tool-protocol envelope` for one of those.
+`auto` asks the backend once, at startup, for a call it is told to make. A server that
+honours the `tools` field returns one; a server that takes the field and drops it returns
+prose, which is the failure that costs the most and reports nothing - the model is never
+told it has tools and every turn ends in a description of the call it could not make. The
+session drops to the envelope either way, and also the first time a backend refuses the
+field outright, finishing the turn either way. The status line says which protocol is in
+force. Pin `--tool-protocol native` or `envelope` to skip the question.
 
 ## Development
 
