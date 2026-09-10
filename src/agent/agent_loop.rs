@@ -255,6 +255,44 @@ pub fn is_backend_failure(text: &str) -> bool {
     text.starts_with('[') && text.to_lowercase().contains("error")
 }
 
+/// The registered tool whose name is closest to one that does not exist.
+///
+/// Closest by the words in the name rather than by edit distance: an invented name is a
+/// paraphrase, `list_files` for `list_dir` or `run_command` for `bash`, and the letters
+/// have less to say about that than the words do.
+fn nearest_tool(reg: &Registry, wanted: &str) -> Option<String> {
+    let parts = |s: &str| -> Vec<String> {
+        s.split(['_', '-', ' '])
+            .filter(|p| !p.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let akin = |a: &str, b: &str| a.starts_with(b) || b.starts_with(a);
+    let want = parts(wanted);
+    let mut best: Option<((usize, usize), &String)> = None;
+    for (name, _) in reg.iter() {
+        let have = parts(name);
+        let shared = want
+            .iter()
+            .filter(|w| have.iter().any(|h| akin(h, w)))
+            .count();
+        if shared == 0 {
+            continue;
+        }
+        // The first word is the verb, and two tools that share only a noun are not the
+        // same tool: read_file and list_files share "file" and do opposite things.
+        let verb = usize::from(match (want.first(), have.first()) {
+            (Some(w), Some(h)) => akin(h, w),
+            _ => false,
+        });
+        let score = (shared, verb);
+        if best.is_none_or(|(b, _)| score > b) {
+            best = Some((score, name));
+        }
+    }
+    best.map(|(_, name)| name.clone())
+}
+
 /// What makes two calls the same call: the tool, and the arguments it was given.
 fn repeat_key(call: &ResolvedCall) -> String {
     format!("{}\u{0}{}", call.name, call.arguments)
@@ -1871,7 +1909,13 @@ impl Agent {
     async fn dispatch_tool(&self, name: &str, args: Value) -> ToolOutput {
         let Some(tool) = self.registry.get(name) else {
             tracing::warn!(tool = name, "model called a tool that does not exist");
-            return ToolOutput::err(format!("unknown tool '{name}'"));
+            // Named rather than merely refused. A model that invents `list_files` means
+            // `list_dir`, and a refusal that says only that the name is wrong costs a step
+            // to guess again, often to the next invented name.
+            return ToolOutput::err(match nearest_tool(&self.registry, name) {
+                Some(near) => format!("no tool called '{name}'; did you mean '{near}'?"),
+                None => format!("no tool called '{name}'"),
+            });
         };
         // Refused here rather than at the approval prompt: planning is a question about
         // what would happen, and answering it must not depend on somebody declining
@@ -2422,6 +2466,24 @@ mod tests {
         assert!(!is_backend_failure(
             "The error you are seeing comes from the parser."
         ));
+    }
+
+    /// An invented tool name is a paraphrase of a real one, and a refusal that says only
+    /// that the name is wrong costs a step to guess again, usually to another invention.
+    #[test]
+    fn an_invented_tool_name_is_answered_with_the_real_one() {
+        let mut reg = Registry::new();
+        reg.register(ListDir);
+        reg.register(crate::tools::fs_read::ReadFile);
+        assert_eq!(
+            nearest_tool(&reg, "list_files").as_deref(),
+            Some("list_dir")
+        );
+        assert_eq!(
+            nearest_tool(&reg, "read_the_file").as_deref(),
+            Some("read_file")
+        );
+        assert_eq!(nearest_tool(&reg, "zzz").as_deref(), None);
     }
 
     /// A model asking the same question every step learns nothing each time. The memo
