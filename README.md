@@ -235,9 +235,14 @@ without anyone writing Rust, and it is in version control with the code it is ab
 ## What it cost
 
 `/cost` says what the session has spent: steps, tokens in and out, the rate the answers
-arrived at, and how much of the time went to the model rather than to tools. The server was
-already counting the tokens and nothing showed them, so the question "was that worth it"
-had no answer.
+arrived at, and how much of the time went to the model rather than to tools, then the last
+few steps one by one. The server was already counting the tokens and nothing showed them,
+so the question "was that worth it" had no answer.
+
+Every step is also written to the transcript with what was knowable before it - the size of
+the history, what the previous step called, whether its write came back clean, the mode -
+and what it cost. Nothing routes on any of it yet. A claim that one arrangement of models
+is faster than another needs both measured, and that needs the measurement to exist first.
 
 ## Where the window stands
 

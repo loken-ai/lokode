@@ -93,6 +93,7 @@ impl Tool for Delegate {
         );
         let mut sub = crate::agent::agent_loop::Agent {
             spend: Default::default(),
+            steps: Vec::new(),
             lsp: None,
             steer: tokio::sync::mpsc::channel(1).1,
             backend: w.backend.clone(),

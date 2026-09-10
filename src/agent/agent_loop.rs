@@ -137,6 +137,13 @@ pub enum AgentEvent {
     TurnDone,
 }
 
+/// What a write result says when the language server found something.
+///
+/// One string, because two places depend on it: the model reads it as part of the result,
+/// and the step record reads it to know the check failed. A cascade would escalate on
+/// exactly this.
+const CHECK_FAILED: &str = "the language server reports:";
+
 /// Left in the transcript when a turn ends without the model having answered.
 ///
 /// The turn's user message is already in the history, and `Session::compact` drops whole
@@ -262,6 +269,9 @@ impl Spend {
 pub struct Agent {
     /// What this session has spent.
     pub spend: Spend,
+    /// What each step asked for and what it cost. Recorded before anything routes on it,
+    /// because a claim that one arrangement is faster needs the other one measured too.
+    pub steps: Vec<crate::agent::steps::StepRecord>,
     /// The language servers, for checking a file the agent has just written. `None`
     /// leaves writes unchecked, which is what a test without a server wants.
     pub lsp: Option<Arc<crate::tools::lsp::LspPool>>,
@@ -460,7 +470,21 @@ impl Agent {
                 let _ = reply.send(self.session.fullness_percent());
             }
             Control::Spend { reply } => {
-                let _ = reply.send(self.spend.describe());
+                // The totals, then the last few steps: a session's cost is a sum, and
+                // where it went is a list.
+                let mut out = vec![self.spend.describe()];
+                let recent: Vec<String> = self
+                    .steps
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .map(|s| format!("  {}", s.describe()))
+                    .collect();
+                if !recent.is_empty() {
+                    out.push("last steps, most recent first:".to_string());
+                    out.extend(recent);
+                }
+                let _ = reply.send(out.join("\n"));
             }
         }
     }
@@ -632,10 +656,36 @@ impl Agent {
                     .await;
             }
             let sent_chars = self.session.size_chars();
+            // Opened before the request goes out: everything here is what a decision
+            // about which model to ask could have used, which is the point of recording
+            // it while nothing is deciding anything yet.
+            let mut record = crate::agent::steps::StepRecord {
+                turn: self.turn,
+                model: self.cfg.model.clone(),
+                before: crate::agent::steps::Before {
+                    context_chars: sent_chars,
+                    context_percent: self.session.fullness_percent(),
+                    step: step + 1,
+                    previous_tools: self
+                        .steps
+                        .last()
+                        .map(|s| s.after.tools.clone())
+                        .unwrap_or_default(),
+                    previous_failed_check: self
+                        .steps
+                        .last()
+                        .map(|s| s.after.check_passed == Some(false))
+                        .unwrap_or(false),
+                    grammar: self.cfg.grammar_enabled,
+                    mode: self.cfg.mode.label().to_string(),
+                },
+                after: Default::default(),
+            };
             let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
             let asked_at = std::time::Instant::now();
             let mut attempt = self.stream_one(&turn_schema, &cancel, &events).await;
-            self.spend.model_ms += asked_at.elapsed().as_millis() as u64;
+            record.after.model_ms = asked_at.elapsed().as_millis() as u64;
+            self.spend.model_ms += record.after.model_ms;
 
             // A backend that will not take native tool calls says so by refusing the
             // request. Nothing has been said to the user yet, so the same step can be run
@@ -655,6 +705,7 @@ impl Agent {
                     let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
                     let asked_at = std::time::Instant::now();
                     attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+                    record.after.model_ms += asked_at.elapsed().as_millis() as u64;
                     self.spend.model_ms += asked_at.elapsed().as_millis() as u64;
                 }
             }
@@ -678,7 +729,10 @@ impl Agent {
             // The server's count is the only tokenizer this client can reach, so it is
             // what the chars-per-token estimate is corrected against.
             self.spend.steps += 1;
+            record.after.finish_reason = completion.finish_reason.clone();
             if let Some(usage) = completion.usage {
+                record.after.prompt_tokens = usage.prompt_tokens;
+                record.after.completion_tokens = usage.completion_tokens;
                 self.spend.prompt_tokens += usage.prompt_tokens as u64;
                 self.spend.completion_tokens += usage.completion_tokens as u64;
                 if let Some(note) = self.session.observe(sent_chars, usage.prompt_tokens) {
@@ -740,9 +794,11 @@ impl Agent {
             self.record_assistant_turn(&turn)?;
 
             if turn.calls.is_empty() {
+                self.close_step(record);
                 self.end_turn(&events).await;
                 return Ok(());
             }
+            record.after.tools = turn.calls.iter().map(|c| c.name.clone()).collect();
 
             // Read-only calls in a run go together. A turn that asks to read three files
             // waits for three round trips otherwise, one after another, for no reason -
@@ -788,6 +844,7 @@ impl Agent {
                 )
                 .await;
 
+                record.after.tool_ms += ran_at.elapsed().as_millis() as u64;
                 self.spend.tool_ms += ran_at.elapsed().as_millis() as u64;
                 for (call, result) in run.into_iter().zip(results) {
                     let _ = events
@@ -812,10 +869,15 @@ impl Agent {
                         .map(|t| t.mutates())
                         .unwrap_or(false);
                     if mutating && !result.is_error {
+                        record.after.wrote = true;
+                        // The objective signal a cascade would escalate on. Recorded now,
+                        // used by nothing yet.
+                        record.after.check_passed = Some(!result.content.contains(CHECK_FAILED));
                         self.record_change(&call.name, &events).await;
                     }
                 }
             }
+            self.close_step(record);
         }
 
         let _ = events
@@ -826,6 +888,29 @@ impl Agent {
             .await;
         self.end_turn(&events).await;
         Ok(())
+    }
+
+    /// Keep one step's measurement, and write it where a later session can read it.
+    fn close_step(&mut self, record: crate::agent::steps::StepRecord) {
+        tracing::info!(
+            turn = record.turn,
+            step = record.before.step,
+            model = %record.model,
+            tools = ?record.after.tools,
+            model_ms = record.after.model_ms,
+            tool_ms = record.after.tool_ms,
+            check = ?record.after.check_passed,
+            "step"
+        );
+        if let Some(t) = self.session.transcript() {
+            t.append(crate::agent::transcript::Record::Step(record.clone()));
+        }
+        // Bounded: a long session's steps are on disk, and what is kept here is only what
+        // a person or a later decision would look back over.
+        self.steps.push(record);
+        if self.steps.len() > 200 {
+            self.steps.remove(0);
+        }
     }
 
     /// Diagnostics for a file a write tool just changed, when there are any.
@@ -1199,7 +1284,7 @@ impl Agent {
             Some(diagnostics) => {
                 let mut out = out;
                 out.content
-                    .push_str(&format!("\n\nthe language server reports:\n{diagnostics}"));
+                    .push_str(&format!("\n\n{CHECK_FAILED}\n{diagnostics}"));
                 out
             }
             None => out,
@@ -1347,6 +1432,7 @@ mod tests {
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
             spend: Spend::default(),
+            steps: Vec::new(),
             lsp: None,
             steer: steer_rx,
             backend: Arc::new(crate::backend::client::BackendClient::new(

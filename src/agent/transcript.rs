@@ -36,6 +36,11 @@ pub enum Record {
     Model {
         name: String,
     },
+    /// One step of a turn, with what was knowable before it and what it cost.
+    ///
+    /// Kept in the same file as the conversation so a session can be read back and
+    /// measured, which is what any later claim about routing will have to rest on.
+    Step(crate::agent::steps::StepRecord),
     /// Something the user was told that is not part of the conversation.
     Notice {
         text: String,
