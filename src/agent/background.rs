@@ -103,6 +103,16 @@ fn shorten(answer: &str) -> Option<String> {
     (!short.is_empty() && short.len() <= MAX_ANSWER_CHARS).then(|| short.to_string())
 }
 
+/// Whether the text is a failure the server wrote into the stream rather than an answer.
+///
+/// A server that fails part-way through generation reports it in the content, where it
+/// arrives shaped exactly like what the model said. Nothing was asked and answered, so the
+/// question is not spent on it, and it never becomes a fact the later turns are handed.
+fn is_backend_failure(text: &str) -> bool {
+    let text = text.trim();
+    text.starts_with('[') && text.to_lowercase().contains("error")
+}
+
 /// How long an answer may be and still read as a statement of fact.
 const MAX_ANSWER_CHARS: usize = 400;
 
@@ -246,6 +256,11 @@ impl Discovery {
             self.put_back(&question).await;
             return None;
         }
+        if is_backend_failure(&answer) {
+            tracing::info!(%question, %answer, "the backend failed mid-answer");
+            self.put_back(&question).await;
+            return None;
+        }
         // Something came back, so whatever was wrong before is not wrong now.
         self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
         if !looked {
@@ -312,6 +327,14 @@ mod tests {
         // The question was never spent, and the loop stops asking it.
         assert_eq!(digest.lock().await.questions.len(), 1);
         assert!(w.stalled());
+    }
+
+    #[test]
+    fn a_failure_the_backend_wrote_into_the_stream_is_not_a_fact() {
+        assert!(is_backend_failure(
+            "[Error: STREAMING PREFILL: Forward failed: cannot broadcast]"
+        ));
+        assert!(!is_backend_failure("It builds a CLI in Rust."));
     }
 
     #[test]
