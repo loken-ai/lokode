@@ -202,6 +202,9 @@ struct Completion {
 pub struct AgentConfig {
     pub model: String,
     pub mode: Mode,
+    /// Whether to have the backend hold the next model ready while other work runs.
+    /// Only ever true for a backend near enough for a load to be worth hiding.
+    pub preload: bool,
     /// Which model does which kind of work, when the project says.
     pub roles: crate::agent::roles::Roles,
     /// Commands to run at the edges of a tool call and a turn.
@@ -267,6 +270,9 @@ impl Spend {
 }
 
 pub struct Agent {
+    /// Whether a model is being held ready right now, so a second request cannot queue
+    /// behind the first.
+    pub warming: Arc<std::sync::atomic::AtomicBool>,
     /// What this session has spent.
     pub spend: Spend,
     /// What each step asked for and what it cost. Recorded before anything routes on it,
@@ -403,6 +409,19 @@ impl Agent {
             Mode::Plan => crate::agent::roles::Role::Plan,
             Mode::Act => crate::agent::roles::Role::Chat,
         };
+        // Planning is long and ends in acting, so the model acting will use is loaded
+        // while the plan is being written. By the time /act is typed it is resident.
+        if mode == Mode::Plan {
+            let next = self
+                .cfg
+                .roles
+                .get(crate::agent::roles::Role::Edit)
+                .or_else(|| self.cfg.roles.get(crate::agent::roles::Role::Chat))
+                .map(str::to_string);
+            if let Some(next) = next {
+                self.preload(&next);
+            }
+        }
         let switched = match self.cfg.roles.get(role) {
             Some(named) if named != self.cfg.model => {
                 let to = named.to_string();
@@ -423,6 +442,45 @@ impl Agent {
                 format!("acting{switched}: the agent may change things again, asking as it goes")
             }
         }
+    }
+
+    /// Have the backend hold `model` ready, behind whatever is happening now.
+    ///
+    /// A load is seconds of reading gigabytes onto a card. Asked for while a tool runs or
+    /// while a plan is being written, those seconds are spent inside time that was going
+    /// to pass anyway, and the switch that follows costs nothing.
+    ///
+    /// Fire and forget, and at most one at a time: this is an optimisation, so it must
+    /// never delay a turn, fail one, or queue up behind itself. The server decides whether
+    /// it can hold two models at once - that is its pressure protocol's job, not this
+    /// one's - and if it cannot, the next use of the current model reloads it.
+    fn preload(&self, model: &str) {
+        if !self.cfg.preload || model == self.cfg.model || model.trim().is_empty() {
+            return;
+        }
+        if self
+            .warming
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
+        let backend = self.backend.clone();
+        let warming = self.warming.clone();
+        let model = model.to_string();
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            match backend.warm(&model).await {
+                Ok(()) => tracing::info!(
+                    %model,
+                    ms = started.elapsed().as_millis(),
+                    "held ready for the next step"
+                ),
+                Err(e) => {
+                    tracing::info!(%model, why = %format!("{e:#}"), "could not be held ready")
+                }
+            }
+            warming.store(false, std::sync::atomic::Ordering::Relaxed);
+        });
     }
 
     /// Take the window a model needs and forget what the last one taught, which every
@@ -837,6 +895,19 @@ impl Agent {
                         run.iter().map(|c| c.name.clone()).collect(),
                     )))
                     .await;
+                // The same trade inside a turn: a test suite or a build is seconds
+                // during which the card is idle, and the model the next mode will want
+                // can be read in behind it.
+                if self.cfg.mode == Mode::Plan {
+                    if let Some(next) = self
+                        .cfg
+                        .roles
+                        .get(crate::agent::roles::Role::Edit)
+                        .map(str::to_string)
+                    {
+                        self.preload(&next);
+                    }
+                }
                 let ran_at = std::time::Instant::now();
                 let results = futures::future::join_all(
                     run.iter()
@@ -1431,6 +1502,7 @@ mod tests {
         let registry = Arc::new(reg);
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
+            warming: Default::default(),
             spend: Spend::default(),
             steps: Vec::new(),
             lsp: None,
@@ -1446,6 +1518,7 @@ mod tests {
             registry,
             cfg: AgentConfig {
                 mode: Mode::Act,
+                preload: false,
                 roles: Default::default(),
                 hooks: Default::default(),
                 instructions: None,
@@ -1478,6 +1551,40 @@ mod tests {
             out.push(e);
         }
         out
+    }
+
+    /// Planning is long and ends in acting, so the model acting will use is asked for
+    /// while the plan is being written. The request goes out and the turn does not wait
+    /// on it: warming that delayed anything would cost more than the load it hides.
+    #[tokio::test]
+    async fn planning_asks_for_the_model_acting_will_use() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![sse(&[
+            r#"{"choices":[{"delta":{"content":"ok"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ])])
+        .await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        agent.cfg.preload = true;
+        agent.cfg.roles.edit = Some("the-coder".into());
+
+        let said = agent.set_mode(Mode::Plan);
+        assert!(said.starts_with("planning"), "{said}");
+        // The warming request is its own task; it has arrived by the time the fake
+        // backend has seen a second request.
+        for _ in 0..40 {
+            if backend
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r["model"] == "the-coder")
+            {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        panic!("nothing was asked of the model acting would use");
     }
 
     /// A delegated question runs in a session of its own and brings back only what it

@@ -75,6 +75,15 @@ pub trait Provider: Send + Sync {
     /// budget to a request whose whole point is to be over quickly.
     async fn complete(&self, req: TurnRequest) -> Result<String>;
 
+    /// Have the backend hold `model` ready, without asking it anything worth reading.
+    ///
+    /// A local server loads gigabytes onto a card to answer the first request; a warm
+    /// model answers at once. The default does nothing, which is right for a hosted API:
+    /// there is nothing there to warm and the attempt would be billed.
+    async fn warm(&self, _model: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// What the backend says it serves, for choosing one without having to know its name.
     ///
     /// A backend that does not answer is not a broken backend: the caller falls back to

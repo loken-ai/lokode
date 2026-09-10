@@ -213,6 +213,9 @@ pub struct FileConfig {
     /// Which model does which kind of work.
     #[serde(default)]
     pub roles: crate::agent::roles::Roles,
+    /// Whether to have a nearby backend hold the next model ready while other work runs.
+    /// On by default, and a no-op against anything that is not nearby.
+    pub preload: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -434,6 +437,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
             },
         },
         roles: crate::agent::roles::Roles::merge(base.roles, over.roles),
+        preload: over.preload.or(base.preload),
         hooks: HooksSection {
             pre_tool: over.hooks.pre_tool.or(base.hooks.pre_tool),
             post_tool: over.hooks.post_tool.or(base.hooks.post_tool),
@@ -594,6 +598,33 @@ pub fn resolve_headers(
 }
 
 /// Whether a credential sent to this URL would cross a network unencrypted.
+/// Whether the backend's weights are near enough that loading them is worth arranging.
+///
+/// Warming is about a server that holds gigabytes on a card beside you: the load is
+/// seconds and hiding it behind other work is time gained for nothing. A hosted endpoint
+/// has nothing to warm and would be charged for the attempt, so it is left alone. Read off
+/// the address rather than declared, since nobody would remember to declare it.
+pub fn backend_is_nearby(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    match parsed.host_str() {
+        Some("localhost") | None => true,
+        Some(host) => match host.parse::<std::net::IpAddr>() {
+            Ok(ip) => ip.is_loopback() || is_private(ip),
+            Err(_) => false,
+        },
+    }
+}
+
+fn is_private(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        // The unique-local range, which is where a home network's addresses sit.
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xfe00) == 0xfc00,
+    }
+}
+
 fn sends_secret_in_clear(url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
@@ -901,5 +932,24 @@ mod command_tests {
         assert_eq!(user_command(dir.path(), "..\\secret"), None);
         assert_eq!(user_command(dir.path(), "secret.md"), None);
         assert_eq!(user_command(dir.path(), ""), None);
+    }
+}
+
+#[cfg(test)]
+mod nearby_tests {
+    use super::*;
+
+    /// Warming is about a server whose weights sit on a card beside you. A hosted
+    /// endpoint has nothing to warm and would be billed for the attempt.
+    #[test]
+    fn a_nearby_backend_is_one_on_this_machine_or_this_network() {
+        assert!(backend_is_nearby("http://127.0.0.1:11435"));
+        assert!(backend_is_nearby("http://localhost:11435"));
+        assert!(backend_is_nearby("http://192.168.1.1:11435"));
+        assert!(backend_is_nearby("http://10.1.2.3:8000"));
+        assert!(!backend_is_nearby("https://api.anthropic.com"));
+        assert!(!backend_is_nearby("https://gpu.example.com:8000"));
+        // A name could be anywhere, so it is not taken for nearby.
+        assert!(!backend_is_nearby("http://desktop:11435"));
     }
 }

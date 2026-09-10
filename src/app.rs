@@ -48,6 +48,8 @@ pub struct AppConfig {
     pub hooks: crate::config::HooksSection,
     /// Which model does which kind of work.
     pub roles: crate::agent::roles::Roles,
+    /// Whether to hold the next model ready behind other work.
+    pub preload: bool,
     /// Whether this run is driven by a script rather than by a person at a screen.
     pub headless: bool,
     /// Directories an approved shell command may write to, or `None` to leave it

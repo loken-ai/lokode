@@ -92,6 +92,7 @@ impl Tool for Delegate {
             ),
         );
         let mut sub = crate::agent::agent_loop::Agent {
+            warming: Default::default(),
             spend: Default::default(),
             steps: Vec::new(),
             lsp: None,
@@ -105,6 +106,9 @@ impl Tool for Delegate {
             ),
             cfg: crate::agent::agent_loop::AgentConfig {
                 model: w.model.clone(),
+                // The sub-session is short and its model is already chosen; nothing after
+                // it is known, so there is nothing to hold ready.
+                preload: false,
                 roles: w.roles.clone(),
                 mode: crate::agent::agent_loop::Mode::Act,
                 hooks: Default::default(),

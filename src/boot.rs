@@ -261,6 +261,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
 
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
+        warming: Default::default(),
         spend: Default::default(),
         steps: Vec::new(),
         lsp: Some(lsp.clone()),
@@ -271,6 +272,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         cfg: AgentConfig {
             model: model.clone(),
             mode,
+            // Only worth doing, and only harmless, against a server whose weights are
+            // near: a hosted endpoint has nothing to warm and would bill the attempt.
+            preload: cfg.preload && crate::config::backend_is_nearby(&cfg.backend_url),
             roles: cfg.roles.clone(),
             hooks: cfg.hooks.clone(),
             remember_model_in: crate::config::user_config_path(),

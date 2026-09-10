@@ -390,6 +390,22 @@ impl crate::backend::provider::Provider for BackendClient {
         self.stream_request(self.render(req)).await
     }
 
+    /// One token, which is what makes the server read the weights.
+    ///
+    /// There is no endpoint for "load this": every server loads on the first request, so
+    /// the smallest possible request is the way to ask. Its answer is thrown away.
+    async fn warm(&self, model: &str) -> Result<()> {
+        let req = ChatCompletionRequest {
+            model: model.to_string(),
+            messages: vec![crate::backend::wire::Message::user("hi")],
+            max_tokens: Some(1),
+            temperature: Some(0.0),
+            stream: Some(false),
+            ..Default::default()
+        };
+        self.complete_request(req).await.map(|_| ())
+    }
+
     async fn models(&self) -> Result<Vec<String>> {
         let url = format!("{}/v1/models", self.base.trim_end_matches('/'));
         let resp = self

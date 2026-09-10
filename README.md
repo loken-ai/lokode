@@ -323,6 +323,14 @@ next answer's character unexplainable.
 
 `/model` lists them beside what the backend serves.
 
+While a plan is being written, and while a tool runs during planning, the model that acting
+will use is asked for in the background so the server reads its weights then rather than
+when you type `/act`. A load is seconds of gigabytes onto a card, and those seconds pass
+anyway while you plan. It is fire and forget: it never delays a turn, never fails one, and
+never queues behind itself, and the server decides whether it can hold two models at once.
+Only done against a backend on this machine or this network, since a hosted endpoint has
+nothing to warm and would bill the attempt. `preload = false` turns it off.
+
 ## Choosing a model
 
 The model flag is optional. What is asked for wins, then what a resumed session was last
