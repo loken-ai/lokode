@@ -21,33 +21,36 @@ const MOST_CHARS: usize = 2000;
 /// How deep to go before a project is being catalogued rather than mapped.
 const DEPTH: usize = 4;
 
-/// The tree as a list of paths, one per line, directories marked.
+/// Every file the project holds, as its name and its path.
 ///
-/// Empty when there is nothing to say, so the caller can leave the section out rather than
-/// state that a project has no files.
-pub fn map(root: &Path) -> String {
-    let walker = ignore::WalkBuilder::new(root)
+/// One walk, written once: the map states what is there and the search reads what is in
+/// it, and two walks with different rules would disagree about what the project contains.
+pub fn source_files(root: &Path) -> Vec<(String, std::path::PathBuf)> {
+    ignore::WalkBuilder::new(root)
         .max_depth(Some(DEPTH))
         .git_ignore(true)
         // Read the ignore file whether or not this is a checkout: a project is a project
         // before it is a repository, and target/ is noise either way.
         .require_git(false)
         .hidden(true)
-        .build();
+        .build()
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter_map(|e| {
+            let rel = e.path().strip_prefix(root).ok()?;
+            Some((rel.display().to_string(), e.path().to_path_buf()))
+        })
+        .collect()
+}
+
+/// The tree as a list of paths, one per line, directories marked.
+///
+/// Empty when there is nothing to say, so the caller can leave the section out rather than
+/// state that a project has no files.
+pub fn map(root: &Path) -> String {
     let mut names: Vec<String> = Vec::new();
     let mut used = 0usize;
-    for entry in walker.flatten() {
-        if entry.depth() == 0 {
-            continue;
-        }
-        // Directories are what the files are under; naming both says the same thing twice.
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let Ok(rel) = entry.path().strip_prefix(root) else {
-            continue;
-        };
-        let shown = rel.display().to_string();
+    for (shown, _) in source_files(root) {
         used += shown.len() + 1;
         if used > MOST_CHARS {
             names.push("... and more".to_string());

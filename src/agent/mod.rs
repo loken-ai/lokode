@@ -8,6 +8,7 @@ pub mod layout;
 pub mod mentions;
 pub mod protocol;
 pub mod repairs;
+pub mod retrieve;
 pub mod roles;
 pub mod session;
 pub mod steps;

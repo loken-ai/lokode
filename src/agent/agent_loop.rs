@@ -1258,7 +1258,29 @@ impl Agent {
                 )))
                 .await;
         }
-        self.session.push(Message::user(expanded.text));
+        // And what the project itself has to say about the question. The search is
+        // mechanical and the project is on this disk, but the loop used to leave the whole
+        // of it to the model: which file, whether to look at all, when to stop. A small
+        // model does the cheapest thing instead, which is to answer from the one file it
+        // could name. Done here, the turn starts from what is there.
+        //
+        // Not when files were named: the person has already said what is relevant, and
+        // guessing over the top of that is guessing against them.
+        let mut text = expanded.text;
+        if expanded.attached.is_empty() && asks_about_the_project(&asked) {
+            if let Some(found) =
+                crate::agent::retrieve::passages(&asked, &self.ctx.root, self.ctx.max_output_chars)
+            {
+                let _ = events
+                    .send(AgentEvent::Notice(format!(
+                        "searched the project for it: {}",
+                        found.files.join(", ")
+                    )))
+                    .await;
+                text = format!("{text}\n\n{}", found.text);
+            }
+        }
+        self.session.push(Message::user(text));
 
         let turn_schema = build_turn_schema(&self.registry);
         let validator = Validator::new(&turn_schema).map_err(|e| anyhow::anyhow!("{e}"))?;
