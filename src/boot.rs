@@ -183,9 +183,20 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             }
         }
     }
-    let max_answer_tokens = per_model
+    let asked_answer_tokens = per_model
         .and_then(|m| m.max_answer_tokens)
         .unwrap_or(cfg.max_answer_tokens);
+    // The reserve comes out of the window before anything else is budgeted, so a window
+    // that cannot afford the configured answer gets a shorter one rather than a client
+    // with nothing left to read with.
+    let max_answer_tokens =
+        crate::agent::session::answer_reserve(context_tokens, asked_answer_tokens);
+    if max_answer_tokens != asked_answer_tokens {
+        model_notes.push(format!(
+            "the window is {context_tokens} tokens, so the answer is capped at \
+             {max_answer_tokens} rather than {asked_answer_tokens}"
+        ));
+    }
 
     // A tool result is only ever large relative to the window it lands in, so the
     // ceiling follows the model's window rather than the default.

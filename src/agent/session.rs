@@ -73,6 +73,22 @@ pub struct Session {
     transcript: Option<Transcript>,
 }
 
+/// The most of the window the answer may be promised, as a fraction of it.
+///
+/// Half. The reserve is subtracted from the window before anything else is budgeted, so a
+/// reserve equal to the window leaves nothing: no history, and every tool result clamped
+/// to its own truncation notice. That is not a small window, it is a client that cannot
+/// read, and the model answers from what it can invent instead. Asking for a shorter
+/// answer than configured is the recoverable half of that trade.
+const RESERVE_OF_WINDOW: usize = 2;
+
+/// What the answer may be promised, given the window it has to be promised out of.
+///
+/// The configured figure, unless the window cannot afford it.
+pub fn answer_reserve(context_tokens: usize, asked: usize) -> usize {
+    asked.min(context_tokens / RESERVE_OF_WINDOW)
+}
+
 /// What a single tool result may contribute to the conversation.
 ///
 /// A quarter of the history's budget, so the several results of one step can coexist
@@ -364,6 +380,18 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    /// A reserve equal to the window leaves nothing to read with, which is how a client
+    /// ends up answering from what it can invent: the window is subtracted to zero, every
+    /// tool result clamps to its own truncation notice, and nothing says so.
+    #[test]
+    fn the_answer_never_takes_the_whole_window() {
+        // What a backend offering 4096 tokens did with the default reserve.
+        assert_eq!(answer_reserve(4096, 4096), 2048);
+        assert!(tool_output_chars(4096, answer_reserve(4096, 4096)) > 0);
+        // A window that can afford what was asked keeps it.
+        assert_eq!(answer_reserve(32_768, 4096), 4096);
+    }
+
     use super::*;
 
     /// One long turn has no second user message to cut at. It used to have nothing that

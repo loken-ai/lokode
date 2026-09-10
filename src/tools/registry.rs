@@ -199,14 +199,24 @@ impl ToolCtx {
 
     /// Cut `s` to what one result may contribute, saying so in the text so the model
     /// reads a deliberate elision rather than a file that ends mid-line.
+    ///
+    /// The notice states the arithmetic. A result that ends in a bare "truncated" reads
+    /// like the end of the file, and a model that believes it has seen a whole file
+    /// answers about the part it was not shown; one that is told how much is left asks
+    /// for the rest, by range where the tool takes one.
     pub fn clamp(&self, mut s: String) -> String {
         if s.len() > self.max_output_chars {
+            let whole = s.len();
             let cut = (0..=self.max_output_chars)
                 .rev()
                 .find(|&i| s.is_char_boundary(i))
                 .unwrap_or(0);
             s.truncate(cut);
-            s.push_str("\n… (truncated to fit the context window)");
+            s.push_str(&format!(
+                "\n… (truncated to fit the context window: {cut} of {whole} characters \
+                 shown, {} left unread; ask again for a later part)",
+                whole - cut
+            ));
         }
         s
     }
@@ -353,7 +363,9 @@ mod tests {
             // Getting here at all means the cut was on a boundary; this pins down that
             // no half-character was left behind.
             assert!(
-                !out.trim_end_matches("\n… (truncated to fit the context window)")
+                !out.split("\n… (truncated")
+                    .next()
+                    .unwrap_or_default()
                     .contains('\u{fffd}'),
                 "ceiling {ceiling} left a broken character"
             );
