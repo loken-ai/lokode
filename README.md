@@ -107,10 +107,12 @@ small model spends that time guessing which read is coming next, the read is mad
 step that asks for it is answered without a round trip. It is abandoned the moment the
 answer arrives: a guess is worth having only if it lands first, and one that has not must
 never be something the turn waits on. Read-only by construction too, so a guess that would
-change something is dropped rather than run, because being wrong has to stay free. `speculate = true` turns it on, against a backend on this machine or this network. It is
-off by default and should stay off unless the guessing model can stay resident beside the
-one answering: where the cards hold only one, every guess evicts the model the turn is
-waiting on and the feature costs what it was meant to save.
+change something is dropped rather than run, because being wrong has to stay free. The request goes out at a priority that yields, which is what keeps it out of the way: a
+cluster is free to put it on another node, and a single machine is free to make it wait
+behind the answer. Which model does the guessing is the project's business, the one named
+for searching or the one already answering. It is on against a backend on this machine or
+this network and off against a hosted one, which would bill for a guess the same as for an
+answer; `speculate = false` turns it off either way.
 
 A turn closes with what it came to: how long it took, how many steps, what it spent and
 which files it changed. A turn that answered in a moment and changed nothing says nothing,

@@ -452,9 +452,10 @@ pub struct AgentConfig {
     /// Whether to have the backend hold the next model ready while other work runs.
     /// Only ever true for a backend near enough for a load to be worth hiding.
     pub preload: bool,
-    /// Whether to guess the next read while the model is thinking. Only ever true for a
-    /// backend near enough that an idle card is the whole cost.
-    pub speculate: bool,
+    /// Which model guesses the next read while this one thinks, and `None` for a session
+    /// that does no guessing. Resolved once, from what the backend already holds: a model
+    /// that would have to be loaded first is an eviction, not a guess.
+    pub guess_with: Option<String>,
     /// Which model does which kind of work, when the project says.
     pub roles: crate::agent::roles::Roles,
     /// Commands to run at the edges of a tool call and a turn.
@@ -615,6 +616,8 @@ pub struct Agent {
     /// What fixed a complaint here before, so the same one does not cost the same steps
     /// twice.
     pub repairs: crate::agent::repairs::Repairs,
+    /// The same backend at a priority that yields, for work nobody is waiting on.
+    pub background: Option<Arc<dyn crate::backend::provider::Provider>>,
     /// The model this session was on before a failed check raised it, and how many clean
     /// steps have passed since. `None` when nothing has been raised.
     pub escalated_from: Option<String>,
@@ -1761,15 +1764,18 @@ impl Agent {
     /// Read-only by construction: a guess that would change something is dropped rather
     /// than run, because the point is that being wrong is free.
     fn start_guess(&self, cancel: &CancellationToken) -> Option<Guessing> {
-        if !self.cfg.speculate {
-            return None;
-        }
+        let model = self.cfg.guess_with.clone()?;
         let stop = cancel.child_token();
         let asked = Guess {
-            backend: self.backend.clone(),
+            // At a priority that yields: a guess must never be in front of the answer the
+            // person is waiting for, and the cluster can put it on another node.
+            backend: self
+                .background
+                .clone()
+                .unwrap_or_else(|| self.backend.clone()),
             registry: self.registry.clone(),
             ctx: self.ctx.clone(),
-            model: self.model_for(crate::agent::roles::Role::Search),
+            model,
             session: self.session.id.clone(),
             recent: self.recent_for_guess(),
             known: self.repeats.keys().cloned().collect(),
@@ -2491,6 +2497,7 @@ mod tests {
         let agent = Agent {
             this_turn: Default::default(),
             repairs: Default::default(),
+            background: None,
             checked_this_step: Default::default(),
             barren: Default::default(),
             failures: Default::default(),
@@ -2516,7 +2523,7 @@ mod tests {
             cfg: AgentConfig {
                 mode: Mode::Act,
                 preload: false,
-                speculate: false,
+                guess_with: None,
                 roles: Default::default(),
                 hooks: Default::default(),
                 instructions: None,
@@ -2939,7 +2946,7 @@ mod tests {
         let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
         agent.session.push(Message::user("what does a.txt say"));
 
-        agent.cfg.speculate = true;
+        agent.cfg.guess_with = Some("test".into());
         let (handle, _stop) = agent
             .start_guess(&CancellationToken::new())
             .expect("speculation is on");
@@ -2963,7 +2970,7 @@ mod tests {
         let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
         agent.session.push(Message::user("say hello"));
 
-        agent.cfg.speculate = true;
+        agent.cfg.guess_with = Some("test".into());
         let (handle, _stop) = agent
             .start_guess(&CancellationToken::new())
             .expect("speculation is on");
@@ -2981,7 +2988,7 @@ mod tests {
         .await;
         let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
         agent.session.push(Message::user("have a look"));
-        agent.cfg.speculate = true;
+        agent.cfg.guess_with = Some("test".into());
         let (handle, _stop) = agent
             .start_guess(&CancellationToken::new())
             .expect("speculation is on");

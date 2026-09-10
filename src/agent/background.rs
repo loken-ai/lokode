@@ -180,6 +180,7 @@ impl Discovery {
         let mut agent = crate::agent::agent_loop::Agent {
             this_turn: Default::default(),
             repairs: Default::default(),
+            background: None,
             checked_this_step: Default::default(),
             barren: Default::default(),
             failures: Default::default(),
@@ -204,7 +205,7 @@ impl Discovery {
                 model: self.model.clone(),
                 mode: crate::agent::agent_loop::Mode::Plan,
                 preload: false,
-                speculate: false,
+                guess_with: None,
                 roles: Default::default(),
                 hooks: Default::default(),
                 instructions: None,

@@ -94,6 +94,7 @@ impl Tool for Delegate {
         let mut sub = crate::agent::agent_loop::Agent {
             this_turn: Default::default(),
             repairs: Default::default(),
+            background: None,
             checked_this_step: Default::default(),
             barren: Default::default(),
             failures: Default::default(),
@@ -119,7 +120,7 @@ impl Tool for Delegate {
                 // The sub-session is short and its model is already chosen; nothing after
                 // it is known, so there is nothing to hold ready.
                 preload: false,
-                speculate: false,
+                guess_with: None,
                 roles: w.roles.clone(),
                 mode: crate::agent::agent_loop::Mode::Act,
                 hooks: Default::default(),

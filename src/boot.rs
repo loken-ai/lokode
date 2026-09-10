@@ -327,6 +327,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let agent = Agent {
         this_turn: Default::default(),
         repairs: crate::agent::repairs::Repairs::open(crate::paths::state_dir(), &cfg.root),
+        background: background_provider(cfg).ok(),
         checked_this_step: Default::default(),
         barren: Default::default(),
         failures: Default::default(),
@@ -351,7 +352,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             // Only worth doing, and only harmless, against a server whose weights are
             // near: a hosted endpoint has nothing to warm and would bill the attempt.
             preload: cfg.preload && crate::config::backend_is_nearby(&cfg.backend_url),
-            speculate: cfg.speculate && crate::config::backend_is_nearby(&cfg.backend_url),
+            guess_with: guess_model(cfg, &model),
             roles: cfg.roles.clone(),
             hooks: cfg.hooks.clone(),
             remember_model_in: crate::config::user_config_path(),
@@ -405,6 +406,25 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
 /// unknown header, which is the right outcome: the work still happens, just without the
 /// courtesy. Only the OpenAI-compatible client carries it, because that is the one whose
 /// server is on this machine.
+/// Which model guesses the next read, or `None` for a session that does not guess.
+///
+/// Only against a backend on this machine or this network: a hosted endpoint bills for a
+/// guess the same as for an answer. Which model is the project's business - what it names
+/// for searching, or the one already answering - and where that model runs is the
+/// server's: the request goes out at a priority that yields, so a cluster is free to put
+/// it on another node and a single machine is free to make it wait.
+fn guess_model(cfg: &AppConfig, answering: &str) -> Option<String> {
+    if !cfg.speculate || !crate::config::backend_is_nearby(&cfg.backend_url) {
+        return None;
+    }
+    Some(
+        cfg.roles
+            .get(crate::agent::roles::Role::Search)
+            .unwrap_or(answering)
+            .to_string(),
+    )
+}
+
 fn background_provider(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Provider>> {
     if cfg.backend_kind == crate::config::BackendKind::Anthropic {
         return provider_for(cfg);
