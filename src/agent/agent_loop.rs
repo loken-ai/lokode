@@ -143,6 +143,37 @@ pub enum AgentEvent {
     TurnDone,
 }
 
+/// The files a write tool says it changed, read from the result rather than the arguments:
+/// what was written is what the tool says it wrote, and a call that was refused or failed
+/// says nothing to parse.
+///
+/// The four shapes the write tools produce: "wrote P (N bytes)", "edited P", "patched P"
+/// once per file, and "applied N edit(s) to P".
+fn changed_paths(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let path = if let Some(rest) = line.strip_prefix("wrote ") {
+            rest.rsplit_once(" (").map(|(p, _)| p).unwrap_or(rest)
+        } else if let Some(rest) = line.strip_prefix("edited ") {
+            rest
+        } else if let Some(rest) = line.strip_prefix("patched ") {
+            rest
+        } else if line.starts_with("applied ") {
+            match line.split_once(" to ") {
+                Some((_, rest)) => rest,
+                None => continue,
+            }
+        } else {
+            continue;
+        };
+        let path = path.trim();
+        if !path.is_empty() {
+            out.push(path.to_string());
+        }
+    }
+    out
+}
+
 /// What a write result says when the language server found something.
 ///
 /// One string, because two places depend on it: the model reads it as part of the result,
@@ -238,6 +269,62 @@ pub struct AgentConfig {
     pub allow_fallback: bool,
 }
 
+/// What one turn did, for the line that closes it.
+///
+/// A turn ends with the model's answer and nothing about the turn: how long it took, what
+/// it changed, what it cost. Those are the three things a person checks before deciding
+/// whether to look at the diff, and all three were already known and thrown away.
+#[derive(Debug, Clone, Default)]
+pub struct TurnTally {
+    pub files: Vec<String>,
+    pub steps: u32,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub started: Option<std::time::Instant>,
+}
+
+impl TurnTally {
+    fn begin() -> Self {
+        Self {
+            started: Some(std::time::Instant::now()),
+            ..Default::default()
+        }
+    }
+
+    fn touched(&mut self, path: &str) {
+        let path = path.to_string();
+        if !self.files.contains(&path) {
+            self.files.push(path);
+        }
+    }
+
+    /// The closing line, or nothing when there is nothing worth saying.
+    pub fn describe(&self) -> Option<String> {
+        let seconds = self.started?.elapsed().as_secs_f64();
+        // A turn that answered in a moment and changed nothing does not need a receipt.
+        if self.steps <= 1 && self.files.is_empty() && seconds < 10.0 {
+            return None;
+        }
+        let mut parts = vec![format!("{:.0}s", seconds)];
+        if self.steps > 0 {
+            parts.push(format!("{} step(s)", self.steps));
+        }
+        if self.tokens_in + self.tokens_out > 0 {
+            parts.push(format!("{} in, {} out", self.tokens_in, self.tokens_out));
+        }
+        match self.files.len() {
+            0 => parts.push("nothing changed".to_string()),
+            n if n <= 3 => parts.push(format!("changed {}", self.files.join(", "))),
+            n => parts.push(format!(
+                "changed {} files: {}, …",
+                n,
+                self.files[..2].join(", ")
+            )),
+        }
+        Some(parts.join("  ·  "))
+    }
+}
+
 /// What a session has spent, so far.
 ///
 /// The server already counts the tokens and nothing showed them: a person deciding
@@ -276,6 +363,8 @@ impl Spend {
 }
 
 pub struct Agent {
+    /// What this turn changed and what it cost, for the line that closes it.
+    pub this_turn: TurnTally,
     /// The model the session was on when planning began, to be given back on leaving it.
     pub before_plan: Option<String>,
     /// What each model has managed in this project, learned from the writes that did and
@@ -739,6 +828,8 @@ impl Agent {
             }
         }
 
+        self.this_turn = TurnTally::begin();
+
         // The cap on what a policy may grant is about one piece of work, so it starts
         // again with each turn rather than running out over a session.
         self.ctx
@@ -883,10 +974,13 @@ impl Agent {
             // The server's count is the only tokenizer this client can reach, so it is
             // what the chars-per-token estimate is corrected against.
             self.spend.steps += 1;
+            self.this_turn.steps += 1;
             record.after.finish_reason = completion.finish_reason.clone();
             if let Some(usage) = completion.usage {
                 record.after.prompt_tokens = usage.prompt_tokens;
                 record.after.completion_tokens = usage.completion_tokens;
+                self.this_turn.tokens_in += usage.prompt_tokens as u64;
+                self.this_turn.tokens_out += usage.completion_tokens as u64;
                 self.spend.prompt_tokens += usage.prompt_tokens as u64;
                 self.spend.completion_tokens += usage.completion_tokens as u64;
                 if let Some(note) = self.session.observe(sent_chars, usage.prompt_tokens) {
@@ -1036,6 +1130,9 @@ impl Agent {
                         .map(|t| t.mutates())
                         .unwrap_or(false);
                     if mutating && !result.is_error {
+                        for path in changed_paths(&result.content) {
+                            self.this_turn.touched(&path);
+                        }
                         record.after.wrote = true;
                         // The objective signal a cascade would escalate on. Recorded now,
                         // used by nothing yet.
@@ -1184,6 +1281,11 @@ impl Agent {
     /// over, so there is nothing left for the model to do about it, and the person is the
     /// one who has to read that the formatter rewrote three files.
     async fn end_turn(&self, events: &mpsc::Sender<AgentEvent>) {
+        // What the turn came to, in one line: how long, how many steps, what it cost and
+        // what it changed. All four were known and thrown away.
+        if let Some(tally) = self.this_turn.describe() {
+            let _ = events.send(AgentEvent::Notice(tally)).await;
+        }
         // Written at the end of a turn rather than after every step: losing it costs a
         // memory, not a session, and a turn is the unit a person would call a piece of
         // work anyway.
@@ -1564,6 +1666,58 @@ impl Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turn_counts_every_file_its_write_tools_named() {
+        let mut tally = TurnTally::begin();
+        for path in changed_paths("wrote src/a.rs (120 bytes)\nsome diagnostic") {
+            tally.touched(&path);
+        }
+        for path in changed_paths("edited src/b.rs\n@@ -1 +1 @@") {
+            tally.touched(&path);
+        }
+        for path in changed_paths("applied 3 edit(s) to src/a.rs") {
+            tally.touched(&path);
+        }
+        for path in changed_paths("patched src/c.rs\npatched src/d.rs") {
+            tally.touched(&path);
+        }
+        // A file written twice is one file, and a diagnostic line is not a file.
+        assert_eq!(
+            tally.files,
+            vec!["src/a.rs", "src/b.rs", "src/c.rs", "src/d.rs"]
+        );
+    }
+
+    #[test]
+    fn a_refused_write_names_nothing() {
+        assert!(changed_paths("refused: src/a.rs is outside the workspace").is_empty());
+        assert!(changed_paths("src/a.rs: write failed: permission denied").is_empty());
+    }
+
+    #[test]
+    fn a_quick_answer_that_changed_nothing_gets_no_receipt() {
+        let tally = TurnTally {
+            steps: 1,
+            started: Some(std::time::Instant::now()),
+            ..Default::default()
+        };
+        assert_eq!(tally.describe(), None);
+    }
+
+    #[test]
+    fn a_turn_that_changed_a_file_says_so() {
+        let mut tally = TurnTally::begin();
+        tally.steps = 3;
+        tally.tokens_in = 900;
+        tally.tokens_out = 40;
+        tally.touched("src/a.rs");
+        let line = tally.describe().expect("a turn with work reports it");
+        assert!(line.contains("3 step(s)"), "{line}");
+        assert!(line.contains("900 in, 40 out"), "{line}");
+        assert!(line.contains("changed src/a.rs"), "{line}");
+    }
+
     use crate::tools::fs_read::ListDir;
     use crate::tools::harness::{Answer, Harness};
     use std::sync::{Arc as StdArc, Mutex};
@@ -1679,6 +1833,7 @@ mod tests {
         let registry = Arc::new(reg);
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
+            this_turn: Default::default(),
             before_plan: None,
             history: Default::default(),
             escalated_from: None,
