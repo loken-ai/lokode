@@ -30,7 +30,7 @@ pub struct Delegation {
     pub roles: crate::agent::roles::Roles,
     pub context_tokens: usize,
     pub max_answer_tokens: usize,
-    pub protocol: crate::agent::protocol::ToolProtocol,
+    pub protocol: crate::agent::protocol::SharedProtocol,
     pub grammar_enabled: bool,
     /// Fewer than a full turn's: a delegated piece of work that needs twenty steps was
     /// not self-contained, and the caller should have been told rather than waited.
@@ -83,7 +83,7 @@ impl Tool for Delegate {
         // not read the project could not answer anything about it.
         let system = crate::agent::agent_loop::Agent::build_system_prompt(
             &w.registry,
-            w.protocol,
+            w.protocol.get(),
             crate::agent::agent_loop::Mode::Act,
             Some(
                 "You are answering one question for another agent. Use the tools to find \
@@ -124,8 +124,9 @@ impl Tool for Delegate {
                 grammar_enabled: w.grammar_enabled,
                 max_steps: w.max_steps,
                 max_answer_tokens: w.max_answer_tokens,
-                protocol: w.protocol,
+                protocol: w.protocol.get(),
                 allow_fallback: false,
+                shared_protocol: None,
             },
             // The caller's context, so its approvals, its cancellation and its root are
             // the sub-session's too: this is the same user's work, delegated.

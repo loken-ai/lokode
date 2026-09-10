@@ -27,7 +27,7 @@ pub struct Discovery {
     pub registry: Arc<crate::tools::registry::Registry>,
     pub ctx: crate::tools::registry::ToolCtx,
     pub model: String,
-    pub protocol: crate::agent::protocol::ToolProtocol,
+    pub protocol: crate::agent::protocol::SharedProtocol,
     pub context_tokens: usize,
     pub max_answer_tokens: usize,
     /// Shared with the session, because what is learned has to be there for the next turn
@@ -160,7 +160,8 @@ impl Discovery {
         // turn runs in plan mode, which is what makes every tool that changes anything
         // refuse before it runs, but a model told to finish with numbered steps writes
         // them instead of looking anything up.
-        let mut system = crate::agent::agent_loop::Agent::contract(&self.registry, self.protocol);
+        let mut system =
+            crate::agent::agent_loop::Agent::contract(&self.registry, self.protocol.get());
         system.push_str(
             "\n\nYou are looking into a project so that later work does not have to. Read \
              and search only: every tool that writes, runs a command or reaches the \
@@ -206,8 +207,9 @@ impl Discovery {
                 grammar_enabled: false,
                 max_steps: STEPS_PER_QUESTION,
                 max_answer_tokens: self.max_answer_tokens,
-                protocol: self.protocol,
+                protocol: self.protocol.get(),
                 allow_fallback: false,
+                shared_protocol: None,
             },
             ctx: self.ctx.clone(),
             checkpoints: None,
@@ -291,7 +293,7 @@ mod tests {
             registry: Arc::new(crate::tools::registry::Registry::new()),
             ctx: crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes).ctx,
             model: "test".into(),
-            protocol: crate::agent::protocol::ToolProtocol::Native,
+            protocol: Default::default(),
             context_tokens: 8192,
             max_answer_tokens: 512,
             digest,

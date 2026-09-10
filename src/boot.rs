@@ -39,6 +39,8 @@ pub struct Booted {
     /// What reading the standing instructions, and settling on a model, had to say.
     pub instruction_notes: Vec<String>,
     pub protocol: ToolProtocol,
+    /// What the sessions started later read, once something has settled it.
+    pub protocol_cell: crate::agent::protocol::SharedProtocol,
     /// How many messages came back from a resumed session.
     pub restored: usize,
     /// The change history, if one could be opened.
@@ -157,6 +159,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         ProtocolChoice::Envelope => ToolProtocol::Envelope,
         ProtocolChoice::Auto | ProtocolChoice::Native => ToolProtocol::Native,
     };
+    let protocol_cell = crate::agent::protocol::SharedProtocol::new(protocol);
     // A window belongs to a model: the one named for this session takes what the
     // configuration says it needs, and the default only when it says nothing.
     let per_model = cfg.models.get(&model);
@@ -285,7 +288,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             roles: cfg.roles.clone(),
             context_tokens,
             max_answer_tokens,
-            protocol,
+            protocol: protocol_cell.clone(),
             grammar_enabled: cfg.grammar_enabled,
             // More than this and the work was not self-contained, which is worth saying
             // rather than waiting through.
@@ -310,7 +313,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
                     .get(crate::agent::roles::Role::Search)
                     .map(str::to_string)
                     .unwrap_or_else(|| model.clone()),
-                protocol,
+                protocol: protocol_cell.clone(),
                 context_tokens,
                 max_answer_tokens,
                 digest: digest.clone(),
@@ -353,6 +356,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             max_answer_tokens: cfg.max_answer_tokens,
             protocol,
             allow_fallback: cfg.tool_protocol == ProtocolChoice::Auto,
+            shared_protocol: Some(protocol_cell.clone()),
         },
         ctx,
         checkpoints: checkpoints.clone(),
@@ -364,6 +368,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // given the same tools, this one included - a delegated turn that delegates again is
     // bounded by its own step limit.
     Ok(Booted {
+        protocol_cell,
         agent,
         lsp,
         approval_rx,

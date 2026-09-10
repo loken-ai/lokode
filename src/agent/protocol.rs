@@ -30,6 +30,44 @@ impl ToolProtocol {
     }
 }
 
+/// The protocol in force, shared by everything that opens a session of its own.
+///
+/// Which protocol works is a property of the backend, not of one session, and it is not
+/// known until something has asked. A delegated turn or a background question started
+/// after the answer came in has to speak what the main session settled on, or it does its
+/// work with tools the server never passes on.
+#[derive(Clone)]
+pub struct SharedProtocol(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl SharedProtocol {
+    pub fn new(protocol: ToolProtocol) -> Self {
+        let shared = Self(Default::default());
+        shared.set(protocol);
+        shared
+    }
+
+    pub fn get(&self) -> ToolProtocol {
+        if self.0.load(std::sync::atomic::Ordering::Relaxed) {
+            ToolProtocol::Envelope
+        } else {
+            ToolProtocol::Native
+        }
+    }
+
+    pub fn set(&self, protocol: ToolProtocol) {
+        self.0.store(
+            protocol == ToolProtocol::Envelope,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+}
+
+impl Default for SharedProtocol {
+    fn default() -> Self {
+        Self::new(ToolProtocol::Native)
+    }
+}
+
 /// What the model asked for this turn, however it was asked.
 #[derive(Debug, Clone, Default)]
 pub struct ModelTurn {

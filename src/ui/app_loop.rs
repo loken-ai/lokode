@@ -53,6 +53,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         session_id,
         model,
         protocol,
+        protocol_cell,
         restored,
         checkpoints,
         checkpoint_error,
@@ -84,8 +85,10 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         let tx = control_tx.clone();
         let token = shutdown.child_token();
         let notices = agent_evt_tx.clone();
+        let cell = protocol_cell.clone();
         tokio::spawn(async move {
             if crate::backend::probe::ignores_native_tools(backend, &model_probed, token).await {
+                cell.set(crate::agent::protocol::ToolProtocol::Envelope);
                 let _ = tx
                     .send(crate::agent::agent_loop::Control::Protocol(
                         crate::agent::protocol::ToolProtocol::Envelope,

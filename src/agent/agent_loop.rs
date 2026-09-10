@@ -292,6 +292,11 @@ pub struct AgentConfig {
     /// False when the user pinned a protocol: asking for one and silently getting the
     /// other is worse than being told the backend cannot do what was asked.
     pub allow_fallback: bool,
+    /// The protocol cell a delegated or background session reads when it starts.
+    ///
+    /// Which protocol works is the backend's property, so a session that finds out has to
+    /// put the answer somewhere the sessions started after it will look.
+    pub shared_protocol: Option<crate::agent::protocol::SharedProtocol>,
 }
 
 /// What one turn did, for the line that closes it.
@@ -492,6 +497,9 @@ impl Agent {
     /// without changing it would leave the model reading instructions for the other one.
     fn fall_back_to_envelope(&mut self) {
         self.cfg.protocol = ToolProtocol::Envelope;
+        if let Some(shared) = &self.cfg.shared_protocol {
+            shared.set(ToolProtocol::Envelope);
+        }
         self.rebuild_preamble();
     }
 
@@ -657,6 +665,9 @@ impl Agent {
                 // speak keeps speaking it, and is told when the backend disagrees.
                 if self.cfg.allow_fallback && self.cfg.protocol != protocol {
                     self.cfg.protocol = protocol;
+                    if let Some(shared) = &self.cfg.shared_protocol {
+                        shared.set(protocol);
+                    }
                     self.rebuild_preamble();
                 }
             }
@@ -1951,6 +1962,7 @@ mod tests {
                 max_answer_tokens: 256,
                 protocol,
                 allow_fallback: true,
+                shared_protocol: None,
             },
             ctx: h.ctx.clone(),
             checkpoints: None,
@@ -2073,7 +2085,7 @@ mod tests {
                 roles: Default::default(),
                 context_tokens: 8192,
                 max_answer_tokens: 4096,
-                protocol: ToolProtocol::Native,
+                protocol: Default::default(),
                 grammar_enabled: false,
                 max_steps: 4,
             }),
@@ -2190,7 +2202,7 @@ mod tests {
                 roles: Default::default(),
                 context_tokens: 8192,
                 max_answer_tokens: 4096,
-                protocol: ToolProtocol::Native,
+                protocol: Default::default(),
                 grammar_enabled: false,
                 max_steps: 4,
             }),
