@@ -240,7 +240,14 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         what: Arc::new(crate::tools::delegate::Delegation {
             backend: backend.clone(),
             registry: registry_for_delegation,
-            model: model.clone(),
+            // A delegated question is a search: its own model when the project names one,
+            // and the session's otherwise.
+            model: cfg
+                .roles
+                .get(crate::agent::roles::Role::Search)
+                .map(str::to_string)
+                .unwrap_or_else(|| model.clone()),
+            roles: cfg.roles.clone(),
             context_tokens,
             max_answer_tokens,
             protocol,
@@ -263,6 +270,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         cfg: AgentConfig {
             model: model.clone(),
             mode,
+            roles: cfg.roles.clone(),
             hooks: cfg.hooks.clone(),
             remember_model_in: crate::config::user_config_path(),
             context_tokens: cfg.context_tokens,

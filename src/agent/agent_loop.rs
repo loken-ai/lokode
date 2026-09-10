@@ -195,6 +195,8 @@ struct Completion {
 pub struct AgentConfig {
     pub model: String,
     pub mode: Mode,
+    /// Which model does which kind of work, when the project says.
+    pub roles: crate::agent::roles::Roles,
     /// Commands to run at the edges of a tool call and a turn.
     pub hooks: crate::config::HooksSection,
     /// The window to use for a model the configuration says nothing about.
@@ -383,11 +385,47 @@ impl Agent {
         }
         self.cfg.mode = mode;
         self.rebuild_preamble();
+        // Planning is where reasoning is worth paying for and acting is where being over
+        // quickly is, so the mode carries its model with it when the project named one.
+        // Said out loud, because a model that changed without anyone announcing it would
+        // make the next answer's character unexplainable.
+        let role = match mode {
+            Mode::Plan => crate::agent::roles::Role::Plan,
+            Mode::Act => crate::agent::roles::Role::Chat,
+        };
+        let switched = match self.cfg.roles.get(role) {
+            Some(named) if named != self.cfg.model => {
+                let to = named.to_string();
+                let from = std::mem::replace(&mut self.cfg.model, to.clone());
+                self.forget_model_calibration(&to);
+                if let Some(t) = self.session.transcript() {
+                    t.append(crate::agent::transcript::Record::Model { name: to.clone() });
+                }
+                tracing::info!(from = %from, to = %to, role = role.key(), "model followed the mode");
+                format!(", on {to}")
+            }
+            _ => String::new(),
+        };
         tracing::info!(mode = mode.label(), "mode changed");
         match mode {
-            Mode::Plan => "planning: nothing will be changed until /act".to_string(),
-            Mode::Act => "acting: the agent may change things again, asking as it goes".to_string(),
+            Mode::Plan => format!("planning{switched}: nothing will be changed until /act"),
+            Mode::Act => {
+                format!("acting{switched}: the agent may change things again, asking as it goes")
+            }
         }
+    }
+
+    /// Take the window a model needs and forget what the last one taught, which every
+    /// model change has to do whether a person asked for it or a role did.
+    fn forget_model_calibration(&mut self, model: &str) {
+        let per_model = self.cfg.models.get(model);
+        let context = per_model
+            .and_then(|m| m.context_tokens)
+            .unwrap_or(self.cfg.context_tokens);
+        let reserve = per_model
+            .and_then(|m| m.max_answer_tokens)
+            .unwrap_or(self.cfg.max_answer_tokens);
+        self.session.set_window(context, reserve);
     }
 
     /// Answer one control request. Between turns, which is where the session can change
@@ -427,6 +465,21 @@ impl Agent {
         }
     }
 
+    /// What the project says each kind of work should use.
+    fn describe_roles(&self) -> String {
+        if self.cfg.roles.is_empty() {
+            return String::new();
+        }
+        let rows: Vec<String> = self
+            .cfg
+            .roles
+            .named()
+            .into_iter()
+            .map(|(role, model)| format!("  {role}: {model}"))
+            .collect();
+        format!("\nby kind of work:\n{}", rows.join("\n"))
+    }
+
     /// Switch to `name`, or describe what is on offer when there is none.
     ///
     /// A backend that cannot list its models is not a backend that cannot serve one, so a
@@ -449,7 +502,11 @@ impl Agent {
                             format!("{mark}{m}")
                         })
                         .collect();
-                    format!("/model <name> to switch:\n{}", lines.join("\n"))
+                    format!(
+                        "/model <name> to switch:\n{}{}",
+                        lines.join("\n"),
+                        self.describe_roles()
+                    )
                 }
             };
         };
@@ -468,14 +525,8 @@ impl Agent {
         // A window belongs to a model, and so does the tokenizer the budget was
         // calibrated against; carrying either over is carrying a measurement of the
         // model that just left.
-        let per_model = self.cfg.models.get(&name);
-        let context = per_model
-            .and_then(|m| m.context_tokens)
-            .unwrap_or(self.cfg.context_tokens);
-        let reserve = per_model
-            .and_then(|m| m.max_answer_tokens)
-            .unwrap_or(self.cfg.max_answer_tokens);
-        self.session.set_window(context, reserve);
+        self.forget_model_calibration(&name);
+        let context = self.session.budget_chars();
         if let Some(t) = self.session.transcript() {
             t.append(crate::agent::transcript::Record::Model { name: name.clone() });
         }
@@ -501,6 +552,17 @@ impl Agent {
     /// has to react to a keystroke already holds the handle it needs. It is stored on the
     /// tool context for the length of the turn, which is how a tool waiting on a
     /// subprocess learns that the user has stopped caring about the answer.
+    /// The model for one kind of work: what the project named for that role, else the
+    /// session's own model. Nothing here decides anything - it answers what is available
+    /// to whoever is deciding.
+    pub fn model_for(&self, role: crate::agent::roles::Role) -> String {
+        self.cfg
+            .roles
+            .get(role)
+            .map(str::to_string)
+            .unwrap_or_else(|| self.cfg.model.clone())
+    }
+
     /// Whether a turn can run at all.
     fn model_is_set(&self) -> bool {
         !self.cfg.model.trim().is_empty()
@@ -1072,7 +1134,9 @@ impl Agent {
             );
             let prompt = repair::repair_prompt(&last_err.to_string(), &current);
             let repair_req = TurnRequest {
-                model: self.cfg.model.clone(),
+                // A malformed reply has to be reshaped, not thought about, so this is the
+                // one call in the loop whose model can be the smallest one available.
+                model: self.model_for(crate::agent::roles::Role::Repair),
                 messages: vec![
                     Message::system("You are a strict JSON formatter. Output a single JSON object only — no prose, no fences."),
                     Message::user(prompt),
@@ -1296,6 +1360,7 @@ mod tests {
             registry,
             cfg: AgentConfig {
                 mode: Mode::Act,
+                roles: Default::default(),
                 hooks: Default::default(),
                 instructions: None,
                 // A test must never write into the person's own configuration.
@@ -1368,6 +1433,7 @@ mod tests {
                 )),
                 registry: sub,
                 model: "test".into(),
+                roles: Default::default(),
                 context_tokens: 8192,
                 max_answer_tokens: 4096,
                 protocol: ToolProtocol::Native,

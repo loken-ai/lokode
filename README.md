@@ -293,6 +293,31 @@ not have to decline fifteen prompts to find out, and an agent that must ask befo
 step cannot describe the plan. Planning pairs with the model choice: plan on the model that
 reasons best, switch to a smaller one, then act.
 
+## One model per kind of work
+
+A turn asks for very different things: a plan, a patch, a search through files, a small
+JSON object to repair a malformed reply. One model for all of them is one compromise for
+each. A project can say which does what:
+
+```toml
+model = "qwen3:8b"              # everything not named below
+
+[roles]
+plan = "qwen3.5:35b"            # reasoning is worth paying for here
+edit = "qwen3-coder:30b"
+search = "qwen3:1.7b"           # answered by a delegated session
+repair = "qwen3:0.6b"           # reshaping a reply, nothing to reason about
+```
+
+Three of these are in force today. The repair round trip takes the repair model, since a
+malformed reply has to be reshaped rather than thought about. A delegated question takes
+the search model, which is the safest routing decision there is: a wrong choice costs one
+sub-turn, not the conversation. And `/plan` moves to the plan model and `/act` back to the
+chat one, saying so, because a model that changed without anyone announcing it makes the
+next answer's character unexplainable.
+
+`/model` lists them beside what the backend serves.
+
 ## Choosing a model
 
 The model flag is optional. What is asked for wins, then what a resumed session was last

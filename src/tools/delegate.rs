@@ -25,7 +25,9 @@ use crate::tools::registry::{Registry, Tool, ToolCtx, ToolOutput};
 pub struct Delegation {
     pub backend: Arc<dyn crate::backend::provider::Provider>,
     pub registry: Arc<Registry>,
+    /// The model a delegated turn uses: the search role when the project named one.
     pub model: String,
+    pub roles: crate::agent::roles::Roles,
     pub context_tokens: usize,
     pub max_answer_tokens: usize,
     pub protocol: crate::agent::protocol::ToolProtocol,
@@ -102,6 +104,7 @@ impl Tool for Delegate {
             ),
             cfg: crate::agent::agent_loop::AgentConfig {
                 model: w.model.clone(),
+                roles: w.roles.clone(),
                 mode: crate::agent::agent_loop::Mode::Act,
                 hooks: Default::default(),
                 instructions: None,

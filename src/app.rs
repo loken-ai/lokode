@@ -46,6 +46,8 @@ pub struct AppConfig {
     pub policy: crate::sandbox::policy::Policy,
     /// Commands to run at the edges of a tool call and a turn.
     pub hooks: crate::config::HooksSection,
+    /// Which model does which kind of work.
+    pub roles: crate::agent::roles::Roles,
     /// Whether this run is driven by a script rather than by a person at a screen.
     pub headless: bool,
     /// Directories an approved shell command may write to, or `None` to leave it

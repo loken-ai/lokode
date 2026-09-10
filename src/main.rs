@@ -284,6 +284,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             models: file.models.clone(),
             policy: file.approve.clone(),
             hooks: file.hooks.clone(),
+            roles: file.roles.clone(),
             headless: cli.prompt.is_some(),
             mode: if cli.plan || file.mode.as_deref() == Some("plan") {
                 verve::agent::agent_loop::Mode::Plan

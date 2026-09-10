@@ -210,6 +210,9 @@ pub struct FileConfig {
     /// Commands to run at the edges of a tool call and a turn.
     #[serde(default)]
     pub hooks: HooksSection,
+    /// Which model does which kind of work.
+    #[serde(default)]
+    pub roles: crate::agent::roles::Roles,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -430,6 +433,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 w
             },
         },
+        roles: crate::agent::roles::Roles::merge(base.roles, over.roles),
         hooks: HooksSection {
             pre_tool: over.hooks.pre_tool.or(base.hooks.pre_tool),
             post_tool: over.hooks.post_tool.or(base.hooks.post_tool),
