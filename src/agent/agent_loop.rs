@@ -270,6 +270,10 @@ impl Spend {
 }
 
 pub struct Agent {
+    /// The model this session was on before a failed check raised it, and how many clean
+    /// steps have passed since. `None` when nothing has been raised.
+    pub escalated_from: Option<String>,
+    pub clean_steps: usize,
     /// Whether a model is being held ready right now, so a second request cannot queue
     /// behind the first.
     pub warming: Arc<std::sync::atomic::AtomicBool>,
@@ -948,6 +952,7 @@ impl Agent {
                     }
                 }
             }
+            self.reconsider_model(&record, &events).await;
             self.close_step(record);
         }
 
@@ -959,6 +964,77 @@ impl Agent {
             .await;
         self.end_turn(&events).await;
         Ok(())
+    }
+
+    /// Raise or lower the model from what the last step actually did.
+    ///
+    /// The signal is objective: the language server read the file the agent had just
+    /// written and found something wrong with it. A router in a chat can only ask a model
+    /// how confident it feels; a coding agent can compile. So the cheap path is tried
+    /// first and the expensive one is paid for only where it has been shown to be needed.
+    ///
+    /// One rung, and down again after two clean steps. Two rungs would need evidence
+    /// about which of them helps, and nothing here has that evidence yet.
+    async fn reconsider_model(
+        &mut self,
+        last: &crate::agent::steps::StepRecord,
+        events: &mpsc::Sender<AgentEvent>,
+    ) {
+        // Nothing writes while planning, so nothing there can fail a check.
+        if self.cfg.mode == Mode::Plan {
+            return;
+        }
+        let Some(stronger) = self.cfg.roles.get(crate::agent::roles::Role::Escalate) else {
+            return;
+        };
+        let stronger = stronger.to_string();
+
+        if last.after.check_passed == Some(false) && self.escalated_from.is_none() {
+            if stronger == self.cfg.model {
+                return;
+            }
+            let from = std::mem::replace(&mut self.cfg.model, stronger.clone());
+            self.forget_model_calibration(&stronger);
+            self.escalated_from = Some(from.clone());
+            self.clean_steps = 0;
+            if let Some(t) = self.session.transcript() {
+                t.append(crate::agent::transcript::Record::Model {
+                    name: stronger.clone(),
+                });
+            }
+            tracing::info!(from = %from, to = %stronger, "raised after a failed check");
+            let _ = events
+                .send(AgentEvent::Notice(format!(
+                    "the change did not check out; carrying on with {stronger}"
+                )))
+                .await;
+            return;
+        }
+
+        // Down again once the work is going well, so the expensive model is paid for
+        // where it was needed and not for the rest of the turn. Only a write that checked
+        // out counts: a step that read a file says nothing about whether the cheaper
+        // model can produce a change that compiles, and taking it as evidence would send
+        // the session back down on the strength of two searches.
+        if self.escalated_from.is_some() && last.after.check_passed == Some(true) {
+            self.clean_steps += 1;
+            if self.clean_steps < 2 {
+                return;
+            }
+            let Some(back) = self.escalated_from.take() else {
+                return;
+            };
+            self.clean_steps = 0;
+            let from = std::mem::replace(&mut self.cfg.model, back.clone());
+            self.forget_model_calibration(&back);
+            if let Some(t) = self.session.transcript() {
+                t.append(crate::agent::transcript::Record::Model { name: back.clone() });
+            }
+            tracing::info!(from = %from, to = %back, "lowered after two clean steps");
+            let _ = events
+                .send(AgentEvent::Notice(format!("back on {back}")))
+                .await;
+        }
     }
 
     /// Keep one step's measurement, and write it where a later session can read it.
@@ -1502,6 +1578,8 @@ mod tests {
         let registry = Arc::new(reg);
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
+            escalated_from: None,
+            clean_steps: 0,
             warming: Default::default(),
             spend: Spend::default(),
             steps: Vec::new(),
@@ -2124,6 +2202,89 @@ mod tests {
             !seen[0]["response_format"].is_null(),
             "the grammar was not applied"
         );
+    }
+
+    use crate::agent::steps::{After, Before, StepRecord};
+
+    fn step(check: Option<bool>) -> StepRecord {
+        StepRecord {
+            turn: 1,
+            model: "small".into(),
+            before: Before::default(),
+            after: After {
+                check_passed: check,
+                wrote: check.is_some(),
+                ..Default::default()
+            },
+        }
+    }
+
+    async fn agent_at(model: &str) -> (Agent, mpsc::Receiver<AgentEvent>) {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![]).await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        agent.cfg.model = model.into();
+        agent.cfg.roles.escalate = Some("big".into());
+        let (_tx, rx) = mpsc::channel(16);
+        (agent, rx)
+    }
+
+    /// The whole point: the model is raised because a compiler said the change was wrong,
+    /// not because anything guessed that the task looked hard.
+    #[tokio::test]
+    async fn a_failed_check_raises_the_model_and_two_clean_steps_lower_it() {
+        let (mut agent, _rx) = agent_at("small").await;
+        let (tx, _keep) = mpsc::channel(16);
+
+        agent.reconsider_model(&step(Some(true)), &tx).await;
+        assert_eq!(agent.cfg.model, "small", "a clean step raised the model");
+
+        agent.reconsider_model(&step(Some(false)), &tx).await;
+        assert_eq!(agent.cfg.model, "big");
+        assert_eq!(agent.escalated_from.as_deref(), Some("small"));
+
+        // One clean step is not enough: the next thing it writes may be the rest of the
+        // same mistake.
+        agent.reconsider_model(&step(Some(true)), &tx).await;
+        assert_eq!(agent.cfg.model, "big");
+        agent.reconsider_model(&step(Some(true)), &tx).await;
+        assert_eq!(agent.cfg.model, "small");
+        assert!(agent.escalated_from.is_none());
+    }
+
+    /// One rung. A second failure while already raised does not look for a third model,
+    /// because nothing here knows whether a third would help.
+    #[tokio::test]
+    async fn a_second_failure_does_not_raise_again() {
+        let (mut agent, _rx) = agent_at("small").await;
+        let (tx, _keep) = mpsc::channel(16);
+        agent.reconsider_model(&step(Some(false)), &tx).await;
+        agent.reconsider_model(&step(Some(false)), &tx).await;
+        assert_eq!(agent.cfg.model, "big");
+        assert_eq!(agent.escalated_from.as_deref(), Some("small"));
+    }
+
+    /// Nothing writes while planning, so nothing there can have failed a check.
+    #[tokio::test]
+    async fn planning_never_raises() {
+        let (mut agent, _rx) = agent_at("small").await;
+        agent.cfg.mode = Mode::Plan;
+        let (tx, _keep) = mpsc::channel(16);
+        agent.reconsider_model(&step(Some(false)), &tx).await;
+        assert_eq!(agent.cfg.model, "small");
+    }
+
+    /// A step that changed nothing says nothing about the model, so it neither raises nor
+    /// counts towards coming back down.
+    #[tokio::test]
+    async fn a_step_that_wrote_nothing_moves_nothing() {
+        let (mut agent, _rx) = agent_at("small").await;
+        let (tx, _keep) = mpsc::channel(16);
+        agent.reconsider_model(&step(Some(false)), &tx).await;
+        assert_eq!(agent.cfg.model, "big");
+        agent.reconsider_model(&step(None), &tx).await;
+        agent.reconsider_model(&step(None), &tx).await;
+        assert_eq!(agent.cfg.model, "big", "reads brought it down");
     }
 }
 

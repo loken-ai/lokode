@@ -26,6 +26,9 @@ pub enum Role {
     /// Turning a malformed reply into the shape that was asked for. A small, mechanical
     /// job with nothing to reason about.
     Repair,
+    /// Where to go when the cheap path has been shown to be wrong: the model asked to
+    /// clean up after a step whose change did not compile.
+    Escalate,
 }
 
 impl Role {
@@ -36,15 +39,17 @@ impl Role {
             Role::Edit => "edit",
             Role::Search => "search",
             Role::Repair => "repair",
+            Role::Escalate => "escalate",
         }
     }
 
-    pub const ALL: [Role; 5] = [
+    pub const ALL: [Role; 6] = [
         Role::Chat,
         Role::Plan,
         Role::Edit,
         Role::Search,
         Role::Repair,
+        Role::Escalate,
     ];
 }
 
@@ -61,6 +66,7 @@ pub struct Roles {
     pub edit: Option<String>,
     pub search: Option<String>,
     pub repair: Option<String>,
+    pub escalate: Option<String>,
 }
 
 impl Roles {
@@ -71,6 +77,7 @@ impl Roles {
             Role::Edit => self.edit.as_deref(),
             Role::Search => self.search.as_deref(),
             Role::Repair => self.repair.as_deref(),
+            Role::Escalate => self.escalate.as_deref(),
         }
     }
 
@@ -82,6 +89,7 @@ impl Roles {
             edit: over.edit.or(base.edit),
             search: over.search.or(base.search),
             repair: over.repair.or(base.repair),
+            escalate: over.escalate.or(base.escalate),
         }
     }
 

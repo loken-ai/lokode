@@ -92,6 +92,8 @@ impl Tool for Delegate {
             ),
         );
         let mut sub = crate::agent::agent_loop::Agent {
+            escalated_from: None,
+            clean_steps: 0,
             warming: Default::default(),
             spend: Default::default(),
             steps: Vec::new(),

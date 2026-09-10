@@ -261,6 +261,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
 
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
+        escalated_from: None,
+        clean_steps: 0,
         warming: Default::default(),
         spend: Default::default(),
         steps: Vec::new(),

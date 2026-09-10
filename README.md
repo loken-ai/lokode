@@ -321,6 +321,17 @@ sub-turn, not the conversation. And `/plan` moves to the plan model and `/act` b
 chat one, saying so, because a model that changed without anyone announcing it makes the
 next answer's character unexplainable.
 
+`escalate` is the model to raise to when the cheap path has been shown to be wrong. After a
+write the language server is asked about the file, and a step whose change did not check
+out raises the session to that model for the steps that follow, saying so. Two writes that
+do check out bring it back down. A step that only read something moves nothing either way,
+because a search says nothing about whether a model can produce a change that compiles.
+
+That signal is the difference between this and a router in a chat window. A chat router can
+only ask a model how confident it feels; a coding agent can compile. So the cheap model is
+tried first and the expensive one is paid for where it has been shown to be needed, rather
+than wherever a guess said the task looked hard.
+
 `/model` lists them beside what the backend serves.
 
 While a plan is being written, and while a tool runs during planning, the model that acting
