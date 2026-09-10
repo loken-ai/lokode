@@ -245,6 +245,16 @@ const BARREN_STEPS: u32 = 3;
 /// fails often enough in a row to be stopped by the other rule.
 const FAILED_CALLS: u32 = 6;
 
+/// Whether the text is a failure the server wrote into the stream rather than an answer.
+///
+/// A server that fails part-way through generation reports it in the content, where it
+/// arrives shaped exactly like what the model said: same field, same stream, no error
+/// status. Nothing distinguishes it except that it is a bracketed error and nothing else.
+pub fn is_backend_failure(text: &str) -> bool {
+    let text = text.trim();
+    text.starts_with('[') && text.to_lowercase().contains("error")
+}
+
 /// What makes two calls the same call: the tool, and the arguments it was given.
 fn repeat_key(call: &ResolvedCall) -> String {
     format!("{}\u{0}{}", call.name, call.arguments)
@@ -1202,6 +1212,18 @@ impl Agent {
                 let _ = events
                     .send(AgentEvent::AssistantText(turn.text.clone()))
                     .await;
+                // A server that fails part-way through generation puts the failure in the
+                // content, where it reads as the model's answer. Said plainly, because a
+                // turn that ends on one has not been answered.
+                if is_backend_failure(&turn.text) {
+                    let _ = events
+                        .send(AgentEvent::Notice(
+                            "that answer is the backend reporting a failure, not the \
+                             model: ask again."
+                                .into(),
+                        ))
+                        .await;
+                }
             }
 
             self.record_assistant_turn(&turn)?;
@@ -2390,6 +2412,16 @@ mod tests {
                 if n.contains("nothing has changed"))),
             "the turn ran to the step limit"
         );
+    }
+
+    #[test]
+    fn a_bracketed_failure_is_not_an_answer() {
+        assert!(is_backend_failure(
+            "[Error: STREAMING PREFILL: Forward failed: cannot broadcast]"
+        ));
+        assert!(!is_backend_failure(
+            "The error you are seeing comes from the parser."
+        ));
     }
 
     /// A model asking the same question every step learns nothing each time. The memo

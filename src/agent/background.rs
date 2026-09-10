@@ -19,6 +19,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::agent::agent_loop::is_backend_failure;
 use crate::agent::digest::{Digest, Kind};
 
 /// What the background worker needs to answer one question.
@@ -101,16 +102,6 @@ fn shorten(answer: &str) -> Option<String> {
     let short = short.trim();
     // Two sentences that run past this are not two sentences.
     (!short.is_empty() && short.len() <= MAX_ANSWER_CHARS).then(|| short.to_string())
-}
-
-/// Whether the text is a failure the server wrote into the stream rather than an answer.
-///
-/// A server that fails part-way through generation reports it in the content, where it
-/// arrives shaped exactly like what the model said. Nothing was asked and answered, so the
-/// question is not spent on it, and it never becomes a fact the later turns are handed.
-fn is_backend_failure(text: &str) -> bool {
-    let text = text.trim();
-    text.starts_with('[') && text.to_lowercase().contains("error")
 }
 
 /// How long an answer may be and still read as a statement of fact.
