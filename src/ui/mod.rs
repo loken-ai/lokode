@@ -1,5 +1,4 @@
 pub mod app_loop;
-pub mod approval;
 pub mod chat;
 pub mod clipboard;
 pub mod picker;

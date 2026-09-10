@@ -22,7 +22,6 @@ use crate::app::AppConfig;
 use crate::boot;
 use crate::checkpoint::Checkpoints;
 use crate::sandbox::approval::{ApprovalDecision, ApprovalPrompt};
-use crate::ui::approval::ApprovalView;
 use crate::ui::chat::Entry;
 use crate::ui::status::Status;
 use crate::ui::term;
@@ -534,14 +533,6 @@ async fn run_ui(
             if let Some(sheet) = state.sheet.as_mut() {
                 sheet.render(f, chunks[0]);
             }
-
-            if let Some(prompt) = state.pending_approval.as_ref() {
-                ApprovalView {
-                    req: &prompt.req,
-                    root: &cfg.root,
-                }
-                .render(f, f.area());
-            }
         })?;
 
         // Nothing is happening, there is something to find out, and nobody is waiting:
@@ -583,6 +574,17 @@ async fn run_ui(
             }
 
             Some(prompt) = approval_rx.recv() => {
+                // In the thread, where the conversation the change has to be judged
+                // against is still visible, and where it scrolls with everything else.
+                state.entries.push(Entry::Approval {
+                    tool: prompt.req.tool.clone(),
+                    summary: prompt.req.summary.clone(),
+                    diff: prompt.req.diff_preview.clone(),
+                    scope: prompt.req.scope.describe_under(&cfg.root),
+                });
+                // Pointing at it, so space opens the rest of the diff without anyone
+                // having to go looking for it.
+                state.at_entry = Some(state.entries.len() - 1);
                 state.pending_approval = Some(prompt);
                 // The turn is not running anything: it is waiting on the person. Saying
                 // "running write_file" for the minutes a prompt sits there is the one
@@ -723,11 +725,31 @@ async fn run_ui(
                     }
 
                     if state.pending_approval.is_some() {
+                        // Space still opens the rest of the diff: the question is in the
+                        // thread now, and what is under it is what it is about.
+                        if key.code == KeyCode::Char(' ') {
+                            if let Some(i) = state.at_entry {
+                                if !state.unfolded.remove(&i) {
+                                    state.unfolded.insert(i);
+                                }
+                            }
+                            continue;
+                        }
                         if let Some(decision) = approval_key(&key) {
                             if let Some(prompt) = state.pending_approval.take() {
                                 let _ = prompt.reply.send(decision);
                             }
                             state.waiting_since = None;
+                            state.at_entry = None;
+                            // The question is answered; what is left is what was done.
+                            if let Some(i) = state
+                                .entries
+                                .iter()
+                                .rposition(|e| matches!(e, Entry::Approval { .. }))
+                            {
+                                state.entries.remove(i);
+                                state.unfolded.remove(&i);
+                            }
                         }
                         continue;
                     }

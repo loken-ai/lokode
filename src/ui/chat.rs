@@ -22,6 +22,17 @@ pub enum Entry {
         body: String,
     },
     Notice(String),
+    /// A change waiting to be agreed to, in the thread where the rest of the turn is.
+    ///
+    /// In the thread rather than over it: a modal hides the conversation the change has to
+    /// be judged against, and the diff it covers is the one thing a reader wants beside
+    /// it. It scrolls with everything else, and is replaced by what the tool did.
+    Approval {
+        tool: String,
+        summary: String,
+        diff: Option<String>,
+        scope: String,
+    },
     /// The model's scratchpad, accumulated while it streams.
     ///
     /// Shown dimmed and set apart, because it is the one thing in the pane the user must
@@ -60,6 +71,10 @@ impl Entry {
             Entry::ToolOutput { name, body } => format!("{name} …\n{body}"),
             Entry::Reasoning(s) => s.clone(),
             Entry::Notice(s) => format!("· {s}"),
+            Entry::Approval { summary, diff, .. } => match diff {
+                Some(d) => format!("? {summary}\n{d}"),
+                None => format!("? {summary}"),
+            },
         }
     }
 
@@ -167,6 +182,45 @@ impl Entry {
                         Style::default().fg(Color::DarkGray),
                     ))
                 }));
+                out
+            }
+            // The one thing on screen that is waiting for the reader, so it is the one
+            // thing that is neither dim nor the colour of an answer.
+            Entry::Approval {
+                summary,
+                diff,
+                scope,
+                ..
+            } => {
+                let ask = Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD);
+                let mut out = vec![Line::from(vec![
+                    Span::styled("? ", ask),
+                    Span::styled(summary.clone(), ask),
+                ])];
+                if let Some(d) = diff {
+                    out.extend(
+                        d.lines()
+                            .take(match open {
+                                true => usize::MAX,
+                                false => DIFF_LINES,
+                            })
+                            .map(|l| indent(diff_line(l))),
+                    );
+                    let more = d.lines().count().saturating_sub(DIFF_LINES);
+                    if more > 0 && !open {
+                        out.push(Line::from(Span::styled(
+                            format!("    … {more} more line(s), space to see them"),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                }
+                out.push(Line::from(Span::styled(
+                    format!("  y once   a always ({scope})   n or esc no"),
+                    Style::default().fg(Color::Yellow),
+                )));
+                out.push(Line::from(""));
                 out
             }
             // What the program says about itself, not what the model said. Two weights:
@@ -319,6 +373,13 @@ const SUBJECT_CHARS: usize = 96;
 
 /// How much evidence is shown under an answer before it is counted instead.
 const BODY_LINES: usize = 8;
+
+/// How much of a diff is shown beside the question about it.
+///
+/// More than a result, because this is the one a person has to judge rather than read, and
+/// less than the pane, because the conversation it is judged against has to stay visible
+/// behind it.
+const DIFF_LINES: usize = 16;
 
 /// Whether a body is a unified diff.
 ///
