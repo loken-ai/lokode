@@ -101,6 +101,17 @@ alive. Most of a turn is spent in those phases: the request has gone out and the
 reading a context of thousands of tokens, or a command is running under a tool. Without
 them the screen is identical to one that has stopped.
 
+A turn closes with what it came to: how long it took, how many steps, what it spent and
+which files it changed. A turn that answered in a moment and changed nothing says nothing,
+because a receipt for that is noise.
+
+Three things the loop declines to do twice. A read the model already made in this turn,
+with nothing written since, is answered with what it returned and told it is repeating
+itself. A whole-file write over a file that has changed on disk since the model read it is
+refused, because that write would discard whatever you did in your own editor. And a path
+that is not there is answered with where the file actually is, rather than with a refusal
+that costs a search to act on.
+
 At an approval prompt: `y` accepts once, `a` accepts everything in the stated scope for this
 session, `n` or `Esc` declines. `Enter` deliberately does nothing there - it is the send key,
 and a prompt appearing mid-sentence should not be able to approve a command you have not read.
