@@ -228,6 +228,8 @@ struct UiState {
     waiting_since: Option<Instant>,
     /// The list open over the input, when the token being typed has one.
     picker: Option<crate::ui::picker::Picker>,
+    /// A command's answer, on a page over the conversation until it is closed.
+    sheet: Option<crate::ui::sheet::Sheet>,
     /// The task list as it was last drawn.
     tasks: Vec<crate::tools::plan::Task>,
     /// The model answering now. It changes under the interface - by a command, by the
@@ -504,6 +506,10 @@ async fn run_ui(
             );
             f.render_widget(Paragraph::new(status.keys()), chunks[4]);
 
+            if let Some(sheet) = state.sheet.as_mut() {
+                sheet.render(f, chunks[0]);
+            }
+
             if let Some(prompt) = state.pending_approval.as_ref() {
                 ApprovalView {
                     req: &prompt.req,
@@ -701,6 +707,40 @@ async fn run_ui(
                         continue;
                     }
 
+                    // A page over the conversation takes the keys until it is closed: it
+                    // is the only thing on screen and anything else would act on what it
+                    // is covering.
+                    if key.kind == KeyEventKind::Press && state.sheet.is_some() {
+                        let height = state.view_height.saturating_sub(2);
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                                state.sheet = None;
+                            }
+                            KeyCode::Up => {
+                                if let Some(s) = state.sheet.as_mut() {
+                                    s.scroll(-1, height);
+                                }
+                            }
+                            KeyCode::Down => {
+                                if let Some(s) = state.sheet.as_mut() {
+                                    s.scroll(1, height);
+                                }
+                            }
+                            KeyCode::PageUp => {
+                                if let Some(s) = state.sheet.as_mut() {
+                                    s.scroll(-(height as isize), height);
+                                }
+                            }
+                            KeyCode::PageDown => {
+                                if let Some(s) = state.sheet.as_mut() {
+                                    s.scroll(height as isize, height);
+                                }
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     // The list over the input takes the keys that move and choose, and
                     // nothing else: everything typed still reaches the input, which is
                     // what narrows the list.
@@ -722,12 +762,27 @@ async fn run_ui(
                                 }
                                 true
                             }
-                            KeyCode::Tab | KeyCode::Enter => {
+                            // Tab always completes. Enter completes only while there is
+                            // something left to complete: a command typed in full and
+                            // matched exactly is finished, and a key that refuses to send
+                            // it is a key that has to be pressed twice for no reason.
+                            KeyCode::Tab => {
                                 if let Some(text) = accept_choice(&input, state.picker.as_ref()) {
                                     input = fresh_input(&text);
                                 }
                                 state.picker = None;
                                 true
+                            }
+                            KeyCode::Enter if !nothing_left_to_complete(&input, &state.picker) => {
+                                if let Some(text) = accept_choice(&input, state.picker.as_ref()) {
+                                    input = fresh_input(&text);
+                                }
+                                state.picker = None;
+                                true
+                            }
+                            KeyCode::Enter => {
+                                state.picker = None;
+                                false
                             }
                             _ => false,
                         };
@@ -848,7 +903,25 @@ async fn run_ui(
                                             {
                                                 state.planning = false;
                                             }
-                                            state.entries.push(Entry::Notice(reply));
+                                            // A sentence belongs in the thread, where it
+                                            // reads as what just happened. A page of it
+                                            // does not: it is read once, it is not part of
+                                            // the conversation, and left there it sits
+                                            // between two questions for the rest of the
+                                            // session.
+                                            match reply.lines().count() > SHEET_LINES {
+                                                true => {
+                                                    state.sheet = Some(
+                                                        crate::ui::sheet::Sheet::new(
+                                                            format!("/{verb}"),
+                                                            &reply,
+                                                        ),
+                                                    )
+                                                }
+                                                false => {
+                                                    state.entries.push(Entry::Notice(reply))
+                                                }
+                                            }
                                             refresh_status(&control_tx, &mut state).await;
                                             continue;
                                         }
@@ -975,6 +1048,19 @@ fn open_picker(
     (!picker.is_empty()).then_some(picker)
 }
 
+/// Whether what is typed already is what is highlighted.
+///
+/// A command typed in full and matched exactly has nothing left to complete, so the key
+/// that sends should send rather than replace the line with itself.
+fn nothing_left_to_complete(input: &TextArea, picker: &Option<crate::ui::picker::Picker>) -> bool {
+    let Some(picker) = picker else { return true };
+    let line = input.lines().join("\n");
+    let Some((_, _, token)) = crate::ui::picker::token_at(&line) else {
+        return true;
+    };
+    picker.chosen().is_some_and(|c| c == token)
+}
+
 /// The line with the token being completed replaced by what was chosen.
 fn accept_choice(input: &TextArea, picker: Option<&crate::ui::picker::Picker>) -> Option<String> {
     let line = input.lines().join("\n");
@@ -987,6 +1073,14 @@ fn accept_choice(input: &TextArea, picker: Option<&crate::ui::picker::Picker>) -
         _ => format!("{}@{chosen}", &line[..at]),
     })
 }
+
+/// How long an answer may be before it goes on a page of its own rather than into the
+/// conversation.
+///
+/// Three lines is a sentence and its detail, which reads as something that just happened.
+/// More than that is a document, and a document in the thread is in the way of everything
+/// after it.
+const SHEET_LINES: usize = 3;
 
 /// How tall the input may grow before it scrolls inside itself.
 const INPUT_MAX_LINES: usize = 6;

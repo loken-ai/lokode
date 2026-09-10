@@ -3,6 +3,7 @@ pub mod approval;
 pub mod chat;
 pub mod clipboard;
 pub mod picker;
+pub mod sheet;
 pub mod status;
 pub mod term;
 pub use app_loop::run;
