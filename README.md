@@ -3,6 +3,13 @@
 A coding agent that runs in your terminal, against a model on your own machine. No account,
 no request leaving the box, no editor to adopt.
 
+> **EXPERIMENTAL.** This is a young component and it is not production ready. It is where
+> ideas about local agents get tried out and where the rest of the stack gets debugged, so
+> its interface, its configuration and its defaults change without ceremony. Point it at
+> work you can afford to lose, read [SECURITY.md](SECURITY.md) before pointing it anywhere
+> else, and keep the change history it writes: `/undo` exists because this is a tool that
+> is still learning its manners.
+
 ```sh
 verve --model qwen3-coder:latest --root .
 ```
@@ -14,9 +21,31 @@ model that is not on your machine.
 
 ## What it does
 
-Reads, searches and edits files under one root, runs commands, and talks to a language server
-for the things a language server is better at than a grep. The loop is bounded: `--max-steps`
-caps how far it will go on a single turn before handing control back.
+Reads, searches and edits files under one root, runs commands, and talks to a language
+server for the things a language server is better at than a grep. The loop is bounded:
+`--max-steps` caps how far it will go on a single turn before handing control back.
+
+Everything below is a section of this page. The ones marked local are things it can do
+because the model is on your machine and the project is on your disk, which is the whole
+reason for building another one of these.
+
+| | |
+|---|---|
+| [The pane](#using-it) | one line per step, completion on `/` and `@`, steps you can move between and unfold |
+| [Approvals](#where-it-is-careful) | a change is a diff to accept or decline, asked in the thread, remembered against what you were shown |
+| [Plan and act](#planning-before-acting) | read without changing anything, then carry it out, on `shift-tab` |
+| [Undo](#taking-something-back) | a change history of its own, beside your git, never touching it |
+| [Sessions](#sessions) | every turn recorded, resumable, and `/retry` to ask the last question again of another model |
+| [Roles](#one-model-per-kind-of-work) *(local)* | a model per kind of work, and a second one reading a change before it is written |
+| [Escalation](#one-model-per-kind-of-work) *(local)* | a change that does not check out raises the session to a stronger model, and what each model manages here is remembered |
+| [Checks](#changing-a-file) | the language server after every write, and the compiler underneath it where there is none |
+| [Background discovery](#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody is waiting, kept between sessions |
+| [Speculation](#using-it) *(local)* | the next read guessed while the model is still writing |
+| [Delegation](#handing-off-a-search) | a search answered in a window of its own, so its results do not fill yours |
+| [Plans](#work-of-several-steps) | work of several steps stated as a list and kept up to date |
+| [Hooks](#hooks) | commands at the edges of a tool call and a turn |
+| [MCP](#tools-from-elsewhere) | tools, documents and prompts from another server |
+| [Headless](#without-the-interface) | one prompt, a JSON report, an exit code |
 
 ## Where it is careful
 
@@ -26,8 +55,9 @@ caps how far it will go on a single turn before handing control back.
   actually land, not to how the path was spelled.
 - **Edits are approved, not applied.** A change arrives as a diff to accept or decline, and
   an agreement is remembered against *what you were shown* - this command, writes under this
-  directory, requests to this host - not against the tool that showed it. The modal says what
-  `[A]lways` will cover before you press it.
+  directory, requests to this host - not against the tool that showed it. The question is
+  asked in the thread, beside the conversation it has to be judged against, and says what
+  `a` will cover before you press it.
 - **A patch is one change or none.** Every file in it is resolved and applied in memory before
   you are asked, and a failure part-way through the commit puts back what was already written.
 - **A model's tool arguments are repaired before they are trusted.** They arrive slightly
@@ -47,10 +77,10 @@ everything outside the project read-only for it.
 ## Install
 
 ```sh
-cargo install --path .     # or: cargo build --release  → target/release/verve
+cargo install --path .     # or: cargo build --release  -> target/release/verve
 ```
 
-Needs Rust 1.82 or later, and a Unix-like system - the shell tool runs `/bin/sh`.
+Needs Rust 1.92 or later, and a Unix-like system - the shell tool runs `/bin/sh`.
 
 One thing it uses if it is there, and one it needs:
 
@@ -86,17 +116,30 @@ stated.
 | Key | |
 |---|---|
 | `Shift-Tab` | plan and act, the one setting you change several times an hour |
-| `Enter` | send |
+| `Enter` | send, or take what the list offers while it is open |
+| `Tab` | take what the list offers |
 | `Shift-Enter` | newline |
-| `Esc` | interrupt the running turn |
-| `/plan`, `/act` | plan without changing anything, then carry it out |
+| `Esc` | interrupt the running turn, close a list or a page, stop pointing |
+| `Alt-Up` / `Alt-Down` | move between the steps of the session |
+| `Space` | open a block that was counted, while pointing at it |
+| `y` / `a` / `n` | answer a change: once, always in the stated scope, no |
 | `Enter` while it works | hand the line to the turn in flight |
-| `@path` in a prompt | send that file, or that directory's listing, with the question |
-| `↑` / `↓` | walk what you have already sent (from an empty input) |
-| `/retry`, `/retry <model>` | ask the last question again, of the same model or another |
-| `/copy`, `/copy last` | the conversation to the clipboard and to a file |
+| `Up` / `Down` | walk what you have already sent (from an empty input) |
 | `PageUp` / `PageDown`, wheel | scroll |
 | `Ctrl-C`, `Ctrl-Q` | quit |
+
+| Command | |
+|---|---|
+| `/plan`, `/act` | plan without changing anything, then carry it out |
+| `/model`, `/model <name>` | what the backend serves, or switch and remember it |
+| `/retry`, `/retry <model>` | ask the last question again, of the same model or another |
+| `/copy`, `/copy last` | the conversation to the clipboard and to a file |
+| `/undo`, `/diff` | put back the last turn that changed something, or see it all |
+| `/context`, `/compact`, `/cost` | where the window stands, elide now, what it spent |
+| `/why`, `/digest`, `/tools`, `/mcp` | what is in force, what is known, what can be called |
+| `@path` in a prompt | send that file, or that directory's listing, with the question |
+
+`/help` lists them all, and the commands a project ships beside them.
 
 The model's prose is rendered as the light markdown it tends to write - fenced code,
 headings, `code` and **bold** - and anything that is a diff is coloured as one. A tool call
@@ -104,10 +147,11 @@ is one line, the verb and the thing it acts on, and its result is the answer wit
 lines of evidence under it: printing every argument and every line turned each step into a
 wall of JSON nobody read.
 
-The mouse is left to the terminal. Capturing it buys a scroll wheel and costs the thing a
-terminal is for, since a captured pane cannot be selected and a conversation cannot be
-copied out of it. `PageUp` and `PageDown` scroll, and `/copy` puts the conversation on the
-terminal's own clipboard - through ssh and tmux, no daemon - and writes it to a file
+There are no borders. They cost four columns and two lines, they land in every selection
+made with the mouse, and they separate nothing that a blank line and a prompt mark do not
+separate better. The wheel scrolls the pane, which is what taking the mouse buys; most
+terminals give drag-to-select back when Shift is held, and `/copy` puts the conversation on
+the terminal's own clipboard - through ssh and tmux, no daemon - and writes it to a file
 besides, because a terminal that ignores the sequence says so to nobody.
 
 The shape of the project goes in with the contract, and the contract says never to ask for
@@ -175,37 +219,36 @@ At an approval prompt: `y` accepts once, `a` accepts everything in the stated sc
 session, `n` or `Esc` declines. `Enter` deliberately does nothing there - it is the send key,
 and a prompt appearing mid-sentence should not be able to approve a command you have not read.
 
-## Working it out while you are not waiting
+## Planning before acting
 
-`--discover`, or `discover = true` in the configuration, gives the session a second thread
-of work: while nothing else is running, one question about the project is taken off a
-queue, answered by a read-only session of its own, and what it found is written down. The
-queue and what has been learned both outlive the session, so the finding out is done once
-rather than at the start of every day.
+`/plan` puts the agent in a mode where every tool that writes, runs a command or reaches
+the network is refused before it runs, and the model is told so: it reads, searches and
+finishes with the plan as numbered steps. `/act` leaves it. `--plan` starts there, and a
+mode key in the configuration makes that the default for a project.
 
-It is held in place by three rules. It runs only while nothing else does and stops the
-instant you press Enter. It asks the server at a priority that yields, so the answer you
-are waiting for is never behind it. And it plans rather than acts, which means every tool
-that writes, runs a command or reaches the network refuses before it runs.
+This is not a stricter set of approvals. Someone who wants to know what would happen should
+not have to decline fifteen prompts to find out, and an agent that must ask before every
+step cannot describe the plan. Planning pairs with the model choice: plan on the model that
+reasons best, switch to a smaller one, then act.
 
-What it learns goes in front of the model next session, as a short paragraph of statements
-rather than the dozen searches that produced them. That is the point: the searching is what
-fills a window, and a window spent on rediscovery is a window not spent on the work.
-`/digest` shows what is known and where each statement came from, `/digest forget` clears
-it, and what is worth keeping belongs in `.verve.md` where the rest of the team gets it.
+## Changing a file
 
-## What the project tells the agent
+`write_file` replaces a file, `edit_file` replaces one unique substring, `edit_lines`
+applies several of those to one file in order, all or none, and `apply_patch` takes a
+unified diff across several files. Prefer `edit_lines` over repeated single edits: on a
+local model each round trip is seconds, and an edit that cannot be placed leaves the file
+as it was rather than half of two versions.
 
-`.verve.md` at the root of a project, and `~/.config/verve/verve.md` for yourself, are read
-at the start of every session and appended to the system message: the conventions, the
-command that checks a change, what must not be touched. The user's file comes first and the
-project's second, each named, so the model can tell whose rule it is reading.
+After a write the language server is asked about that file, and anything it reports comes
+back in the same tool result: the model corrects its own syntax error on the spot instead
+of learning about it a turn later. Where the project has no language server for that file,
+the compiler answers underneath it, asked to compile and nothing else, once per step and on
+a bounded wait. The suite is the right thing to run when the work is done; after one edit it
+is minutes spent to learn what a type check says in seconds.
 
-`/init` writes a first draft from what the repository shows - the language, the test
-command, the layout - for you to edit. Keep it short: this text is in the system message,
-which compaction never drops, so it holds the window for the whole session. What does not
-fit is trimmed at a line boundary and said out loud, because an instruction the agent never
-received would otherwise look like one it ignored.
+What fixed a complaint here is remembered. When a change does not check out, what the check
+said is held; when a later change makes the same complaint go away, what that change did is
+filed against it, and the next occurrence arrives with the note.
 
 ## Taking something back
 
@@ -241,121 +284,6 @@ model, so `--model` becomes optional.
 Logs go to `$XDG_STATE_HOME/verve/verve.log`, never to the terminal - the interface owns that
 screen. `RUST_LOG=verve=debug` turns the volume up; `--log-file` puts it somewhere else.
 
-## Without the interface
-
-`-p` runs one turn and exits, for a git hook, a pipeline, or anything else with nobody sitting
-in front of it.
-
-```sh
-verve -p "fix the clippy warnings" --approve edits --output json
-```
-
-Since there is nobody to answer an approval, the policy is stated up front. `--approve none`
-is the default and declines everything that would change anything - the agent can still read
-and search. `edits` allows writes, edits and patches, and not the shell, the test suite or the
-network. `all` allows everything. Each call is judged on its own; a policy never grants a
-standing agreement.
-
-`--output text` streams the model's prose to stdout and progress to stderr, so a caller can
-take the answer and discard the narration. `--output json` writes one object at the end, with
-the result, every tool call and its output, and whether anything was refused.
-
-The exit code says what happened without anything having to be parsed: `0` finished, `1`
-something failed - a backend error, or the step limit - and `2` a tool was refused by the
-policy, which is a different thing from the model deciding not to use one.
-
-## Handing off a search
-
-`delegate` gives one self-contained question a session of its own, with its own window and
-the same tools, and brings back only what it answered. A search that reads six files to
-settle one question otherwise spends the conversation's budget on text nobody needs
-afterwards, and once compaction drops it what is left is the middle of a hunt with no
-beginning.
-
-The sub-session cannot delegate again, and its step limit is lower than a turn's: work that
-needs more than a few steps was not self-contained, and saying so is more use than waiting
-through it. It runs under the caller's approvals and the caller's cancellation, because it
-is the same person's work.
-
-## Work of several steps
-
-`update_plan` is a tool the model calls to keep a task list: what is done, what is being
-worked on, what is left. It appears as a pane above the input while there is a list, and
-disappears when there is not. Nothing is written to disk and nothing is approved, since it
-changes nothing outside the session.
-
-It is for the person first: a step counter says how far a turn has gone and nothing about
-what it is doing. It helps a small model too, whose window drops the oldest messages first
-and with them the goal it was given.
-
-## Changing a file
-
-`write_file` replaces a file, `edit_file` replaces one unique substring, `edit_lines`
-applies several of those to one file in order, all or none, and `apply_patch` takes a
-unified diff across several files. Prefer `edit_lines` over repeated single edits: on a
-local model each round trip is seconds, and an edit that cannot be placed leaves the file
-as it was rather than half of two versions.
-
-After a write, the language server is asked about that file and anything it reports comes
-back in the same tool result. The model corrects its own syntax error on the spot instead
-of learning about it a turn later, if it thinks to ask.
-
-## Hooks
-
-A project can put its own commands at the edges of the loop:
-
-```toml
-[hooks]
-pre-tool = "./scripts/guard.sh"
-post-tool = "cargo fmt"
-turn-end = "cargo test --quiet"
-```
-
-They run only around a tool that changes something, because a hook on every read would run
-on the searches an agent does by the dozen. A non-zero exit from the pre-tool hook refuses
-the call and what it printed is handed to the model, which is the only form of guidance an
-agent cannot skip. The post-tool hook's output is handed over too, since a formatter that
-rewrote the file has something the model needs to know. The turn-end hook reports to you,
-and runs for an abandoned turn as well, because that is exactly when files have been left
-half-changed.
-
-The hook is given the tool's name, the project root and which edge it is at, in the
-environment. It is bounded in time and its output is bounded in length, since both land
-inside a turn.
-
-## Commands a project ships
-
-A Markdown file under `.verve/commands` is a command: `review.md` makes `/review`, and what
-it holds becomes that turn's prompt. Anything typed after the name replaces `$ARGS`, or is
-appended when the file does not name it, so one command serves a family of tasks. `/help`
-lists the project's alongside the built-ins.
-
-That is how a team ships its way of working - a review checklist, a release routine -
-without anyone writing Rust, and it is in version control with the code it is about.
-
-## What it cost
-
-`/cost` says what the session has spent: steps, tokens in and out, the rate the answers
-arrived at, and how much of the time went to the model rather than to tools, then the last
-few steps one by one. The server was already counting the tokens and nothing showed them,
-so the question "was that worth it" had no answer.
-
-Every step is also written to the transcript with what was knowable before it - the size of
-the history, what the previous step called, whether its write came back clean, the mode -
-and what it cost. Nothing routes on any of it yet. A claim that one arrangement of models
-is faster than another needs both measured, and that needs the measurement to exist first.
-
-## Where the window stands
-
-The status line carries how full the history budget is, in per cent, amber past three
-quarters and red at the line where the oldest steps start being elided. `/context` says
-what is holding it - the standing instructions and the tool manifest, what you said, what
-the model said, the tool results - largest first. `/compact` elides now rather than waiting
-for the window to fill, which is what you want before handing the agent a large file.
-
-Compaction announcing itself after the fact was the only signal there had ever been, and by
-then the session had already forgotten something.
-
 ## Settling approvals in advance
 
 An agreement given at the prompt lasts as long as the session, so working the same way
@@ -386,18 +314,6 @@ is in force.
 A run driven by a script does not take the file's word for what may go ahead: the policy on
 its command line is the narrower statement and the one its author made for that run. The
 file's refusals still apply, because nothing may widen one.
-
-## Planning before acting
-
-`/plan` puts the agent in a mode where every tool that writes, runs a command or reaches
-the network is refused before it runs, and the model is told so: it reads, searches and
-finishes with the plan as numbered steps. `/act` leaves it. `--plan` starts there, and a
-mode key in the configuration makes that the default for a project.
-
-This is not a stricter set of approvals. Someone who wants to know what would happen should
-not have to decline fifteen prompts to find out, and an agent that must ask before every
-step cannot describe the plan. Planning pairs with the model choice: plan on the model that
-reasons best, switch to a smaller one, then act.
 
 ## One model per kind of work
 
@@ -481,6 +397,207 @@ table in the configuration when there is one, because a budget inherited from an
 model either wastes the window or overruns it. What the last model taught about its
 tokenizer is forgotten at the same time, and measured again from the first reply.
 
+## Working it out while you are not waiting
+
+`--discover`, or `discover = true` in the configuration, gives the session a second thread
+of work: while nothing else is running, one question about the project is taken off a
+queue, answered by a read-only session of its own, and what it found is written down. The
+queue and what has been learned both outlive the session, so the finding out is done once
+rather than at the start of every day.
+
+It is held in place by three rules. It runs only while nothing else does and stops the
+instant you press Enter. It asks the server at a priority that yields, so the answer you
+are waiting for is never behind it. And it plans rather than acts, which means every tool
+that writes, runs a command or reaches the network refuses before it runs.
+
+What it learns goes in front of the model next session, as a short paragraph of statements
+rather than the dozen searches that produced them. That is the point: the searching is what
+fills a window, and a window spent on rediscovery is a window not spent on the work.
+`/digest` shows what is known and where each statement came from, `/digest forget` clears
+it, and what is worth keeping belongs in `.verve.md` where the rest of the team gets it.
+
+## What the project tells the agent
+
+`.verve.md` at the root of a project, and `~/.config/verve/verve.md` for yourself, are read
+at the start of every session and appended to the system message: the conventions, the
+command that checks a change, what must not be touched. The user's file comes first and the
+project's second, each named, so the model can tell whose rule it is reading.
+
+`/init` writes a first draft from what the repository shows - the language, the test
+command, the layout - for you to edit. Keep it short: this text is in the system message,
+which compaction never drops, so it holds the window for the whole session. What does not
+fit is trimmed at a line boundary and said out loud, because an instruction the agent never
+received would otherwise look like one it ignored.
+
+## Where the window stands
+
+The status line carries how full the history budget is, in per cent, amber past three
+quarters and red at the line where the oldest steps start being elided. `/context` says
+what is holding it - the standing instructions and the tool manifest, what you said, what
+the model said, the tool results - largest first. `/compact` elides now rather than waiting
+for the window to fill, which is what you want before handing the agent a large file.
+
+Compaction announcing itself after the fact was the only signal there had ever been, and by
+then the session had already forgotten something.
+
+## What it cost
+
+`/cost` says what the session has spent: steps, tokens in and out, the rate the answers
+arrived at, and how much of the time went to the model rather than to tools, then the last
+few steps one by one. The server was already counting the tokens and nothing showed them,
+so the question "was that worth it" had no answer.
+
+Every step is also written to the transcript with what was knowable before it - the size of
+the history, what the previous step called, whether its write came back clean, the mode -
+and what it cost. Nothing routes on any of it yet. A claim that one arrangement of models
+is faster than another needs both measured, and that needs the measurement to exist first.
+
+## Handing off a search
+
+`delegate` gives one self-contained question a session of its own, with its own window and
+the same tools, and brings back only what it answered. A search that reads six files to
+settle one question otherwise spends the conversation's budget on text nobody needs
+afterwards, and once compaction drops it what is left is the middle of a hunt with no
+beginning.
+
+The sub-session cannot delegate again, and its step limit is lower than a turn's: work that
+needs more than a few steps was not self-contained, and saying so is more use than waiting
+through it. It runs under the caller's approvals and the caller's cancellation, because it
+is the same person's work.
+
+## Work of several steps
+
+`update_plan` is a tool the model calls to keep a task list: what is done, what is being
+worked on, what is left. It appears as a pane above the input while there is a list, and
+disappears when there is not. Nothing is written to disk and nothing is approved, since it
+changes nothing outside the session.
+
+It is for the person first: a step counter says how far a turn has gone and nothing about
+what it is doing. It helps a small model too, whose window drops the oldest messages first
+and with them the goal it was given.
+
+## Hooks
+
+A project can put its own commands at the edges of the loop:
+
+```toml
+[hooks]
+pre-tool = "./scripts/guard.sh"
+post-tool = "cargo fmt"
+turn-end = "cargo test --quiet"
+```
+
+They run only around a tool that changes something, because a hook on every read would run
+on the searches an agent does by the dozen. A non-zero exit from the pre-tool hook refuses
+the call and what it printed is handed to the model, which is the only form of guidance an
+agent cannot skip. The post-tool hook's output is handed over too, since a formatter that
+rewrote the file has something the model needs to know. The turn-end hook reports to you,
+and runs for an abandoned turn as well, because that is exactly when files have been left
+half-changed.
+
+The hook is given the tool's name, the project root and which edge it is at, in the
+environment. It is bounded in time and its output is bounded in length, since both land
+inside a turn.
+
+## Commands a project ships
+
+A Markdown file under `.verve/commands` is a command: `review.md` makes `/review`, and what
+it holds becomes that turn's prompt. Anything typed after the name replaces `$ARGS`, or is
+appended when the file does not name it, so one command serves a family of tasks. `/help`
+lists the project's alongside the built-ins.
+
+That is how a team ships its way of working - a review checklist, a release routine -
+without anyone writing Rust, and it is in version control with the code it is about.
+
+## Tools from elsewhere
+
+A Model Context Protocol server is a program you configure; whatever it offers becomes tools
+the model can call, named `<server>__<tool>` so nothing can take the name of a built-in.
+
+```toml
+[mcp.servers.github]
+command = "mcp-server-github"
+args = []
+env = { GITHUB_TOKEN = "..." }     # prefer naming a variable your shell already has
+```
+
+They are not trusted the way the built-in tools are. A built-in is trusted because its
+behaviour is in this repository; one of these is somebody else's program, and the root
+confines it no more than it confines a shell. So every call is approved, every call is
+treated as able to change the project, and the schema a server advertises is checked before
+it is allowed to shape the grammar the model is held to - a schema this code cannot compile
+would not break one tool, it would break the turn. A tool that fails that check is refused by
+name and said so, and a server that will not start takes only itself down.
+
+A server's documents are reached the same way: its resources become one tool that reads
+them, `<server>__read_resource`, with what the server listed at startup named in the tool's
+own description so the model can ask for one without a round trip to discover it. Reaching
+them through a tool rather than a surface of their own is what keeps the approval flow, the
+checkpoints and the transcript working on them unchanged.
+
+`/mcp` says which servers are running and which prompts they offer; `/mcp <server>
+<prompt>` fetches one and makes it this turn's prompt.
+
+## Without the interface
+
+`-p` runs one turn and exits, for a git hook, a pipeline, or anything else with nobody sitting
+in front of it.
+
+```sh
+verve -p "fix the clippy warnings" --approve edits --output json
+```
+
+Since there is nobody to answer an approval, the policy is stated up front. `--approve none`
+is the default and declines everything that would change anything - the agent can still read
+and search. `edits` allows writes, edits and patches, and not the shell, the test suite or the
+network. `all` allows everything. Each call is judged on its own; a policy never grants a
+standing agreement.
+
+`--output text` streams the model's prose to stdout and progress to stderr, so a caller can
+take the answer and discard the narration. `--output json` writes one object at the end, with
+the result, every tool call and its output, and whether anything was refused.
+
+The exit code says what happened without anything having to be parsed: `0` finished, `1`
+something failed - a backend error, or the step limit - and `2` a tool was refused by the
+policy, which is a different thing from the model deciding not to use one.
+
+## Which API
+
+`kind = "auto"` reads it off the URL and is right for every ordinary case: `api.anthropic.com`
+is the Messages API, everything else is OpenAI-compatible. Name one explicitly to reach a
+proxy that speaks Anthropic's format on your own host.
+
+The credential is resolved the same way either way: the environment, then a named variable,
+then a file only you can read. Only where it goes on the wire differs: `Authorization: Bearer`
+for the OpenAI family, `x-api-key` for Anthropic. Converting a working configuration between
+them is a header change, not a value change, and verve makes it for you.
+
+What differs beyond that is absorbed at the boundary. Anthropic's system prompt is a top-level
+field rather than a message, its tool results are blocks inside a user turn rather than their
+own role, and its stream speaks a different alphabet. None of that reaches the loop, the
+transcript or the screen. Reasoning is the same story from the other direction: `<think>` tags
+inline, a `reasoning` field, a `reasoning_content` field and Anthropic's thinking blocks are
+four spellings of one thing, and verve shows all four the same way, set apart and never fed
+back to the model.
+
+## How tools are called
+
+Two protocols, and `--tool-protocol auto` picks between them.
+
+**Native** uses the server's own `tools` field and the `tool_calls` it returns, so results are
+answered against ids the server actually issued. **Envelope** has the model emit one JSON
+object per turn, constrained by a grammar generated from the tool schemas; it needs nothing
+from the server beyond a completion, which is why it is what a small local model behind a
+plain backend still works against.
+
+`auto` asks the backend once, at startup, for a call it is told to make. A server that
+honours the `tools` field returns one; a server that takes the field and drops it returns
+prose, which is the failure that costs the most and reports nothing - the model is never
+told it has tools and every turn ends in a description of the call it could not make. The
+session drops to the envelope either way, and also the first time a backend refuses the
+field outright, finishing the turn either way. The status line says which protocol is in
+force. Pin `--tool-protocol native` or `envelope` to skip the question.
+
 ## Configuring it
 
 Settings come from four places. The narrower statement wins, because it is the one made
@@ -520,72 +637,6 @@ unencrypted is warned about.
 
 Everything also has an environment variable: `VERVE_MODEL`, `VERVE_BACKEND_URL`,
 `VERVE_LOG_FILE`, `VERVE_API_KEY`.
-
-## Tools from elsewhere
-
-A Model Context Protocol server is a program you configure; whatever it offers becomes tools
-the model can call, named `<server>__<tool>` so nothing can take the name of a built-in.
-
-```toml
-[mcp.servers.github]
-command = "mcp-server-github"
-args = []
-env = { GITHUB_TOKEN = "…" }     # prefer naming a variable your shell already has
-```
-
-They are not trusted the way the built-in tools are. A built-in is trusted because its
-behaviour is in this repository; one of these is somebody else's program, and the root
-confines it no more than it confines a shell. So every call is approved, every call is
-treated as able to change the project, and the schema a server advertises is checked before
-it is allowed to shape the grammar the model is held to - a schema this code cannot compile
-would not break one tool, it would break the turn. A tool that fails that check is refused by
-name and said so, and a server that will not start takes only itself down.
-
-A server's documents are reached the same way: its resources become one tool that reads
-them, `<server>__read_resource`, with what the server listed at startup named in the tool's
-own description so the model can ask for one without a round trip to discover it. Reaching
-them through a tool rather than a surface of their own is what keeps the approval flow, the
-checkpoints and the transcript working on them unchanged.
-
-`/mcp` says which servers are running and which prompts they offer; `/mcp <server>
-<prompt>` fetches one and makes it this turn's prompt.
-
-## Which API
-
-`kind = "auto"` reads it off the URL and is right for every ordinary case: `api.anthropic.com`
-is the Messages API, everything else is OpenAI-compatible. Name one explicitly to reach a
-proxy that speaks Anthropic's format on your own host.
-
-The credential is resolved the same way either way — the environment, then a named variable,
-then a file only you can read. Only where it goes on the wire differs: `Authorization: Bearer`
-for the OpenAI family, `x-api-key` for Anthropic. Converting a working configuration between
-them is a header change, not a value change, and verve makes it for you.
-
-What differs beyond that is absorbed at the boundary. Anthropic's system prompt is a top-level
-field rather than a message, its tool results are blocks inside a user turn rather than their
-own role, and its stream speaks a different alphabet. None of that reaches the loop, the
-transcript or the screen. Reasoning is the same story from the other direction: `<think>` tags
-inline, a `reasoning` field, a `reasoning_content` field and Anthropic's thinking blocks are
-four spellings of one thing, and verve shows all four the same way — set apart, and never fed
-back to the model.
-
-## How tools are called
-
-Two protocols, and `--tool-protocol auto` picks between them.
-
-**Native** uses the server's own `tools` field and the `tool_calls` it returns, so results are
-answered against ids the server actually issued. **Envelope** has the model emit one JSON
-object per turn, constrained by a grammar generated from the tool schemas; it needs nothing
-from the server beyond a completion, which is why it is what a small local model behind a
-plain backend still works against.
-
-`auto` asks the backend once, at startup, for a call it is told to make. A server that
-honours the `tools` field returns one; a server that takes the field and drops it returns
-prose, which is the failure that costs the most and reports nothing - the model is never
-told it has tools and every turn ends in a description of the call it could not make. The
-session drops to the envelope either way, and also the first time a backend refuses the
-field outright, finishing the turn either way. The status line says which protocol is in
-force. Pin `--tool-protocol native` or `envelope` to skip the question.
 
 ## Development
 
