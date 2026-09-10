@@ -105,7 +105,7 @@ pub async fn run(
         model,
         protocol,
         checkpoint_error,
-        mcp,
+        mut mcp,
         ..
     } = boot::boot(&cfg).await?;
 
@@ -132,6 +132,30 @@ pub async fn run(
             let _ = prompt.reply.send(decision);
         }
     });
+
+    // Asked before the turn rather than discovered during it. A run with one prompt has
+    // no second chance: a step spent finding out that the backend drops the tool
+    // definitions is a step of the budget, and its answer is a fragment of a tool call
+    // presented as prose.
+    if cfg.tool_protocol == crate::app::ProtocolChoice::Auto
+        && crate::backend::probe::ignores_native_tools(
+            agent.backend.clone(),
+            &agent.cfg.model.clone(),
+            shutdown.child_token(),
+        )
+        .await
+    {
+        agent
+            .control(crate::agent::agent_loop::Control::Protocol(
+                crate::agent::protocol::ToolProtocol::Envelope,
+            ))
+            .await;
+        mcp.notices.push(
+            "the backend accepts tool definitions and ignores them; tool calls travel as \
+             the JSON envelope"
+                .to_string(),
+        );
+    }
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(128);
     let cancel = shutdown.child_token();
