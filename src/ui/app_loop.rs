@@ -226,6 +226,8 @@ struct UiState {
     protocol: crate::agent::protocol::ToolProtocol,
     /// When the approval now on screen was asked for. `None` when nothing is waiting.
     waiting_since: Option<Instant>,
+    /// The list open over the input, when the token being typed has one.
+    picker: Option<crate::ui::picker::Picker>,
     /// The task list as it was last drawn.
     tasks: Vec<crate::tools::plan::Task>,
     /// The model answering now. It changes under the interface - by a command, by the
@@ -310,8 +312,17 @@ fn at_start(input: &TextArea) -> bool {
     input.cursor() == (0, 0)
 }
 
+/// An input holding `text`, with the cursor after it.
+///
+/// After it, because everything that puts text here puts it there to be carried on with:
+/// a recalled line to be edited, a command just completed to be given an argument. A
+/// cursor left at the start makes the next keystroke insert in front of what is there and
+/// backspace do nothing at all.
 fn fresh_input(text: &str) -> TextArea<'static> {
-    let input = TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
+    let mut input = TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
+    input.move_cursor(tui_textarea::CursorMove::End);
+    input.move_cursor(tui_textarea::CursorMove::Bottom);
+    input.move_cursor(tui_textarea::CursorMove::End);
     input
 }
 
@@ -456,6 +467,9 @@ async fn run_ui(
                 typing[0],
             );
             f.render_widget(&input, typing[1]);
+            if let Some(picker) = state.picker.as_ref() {
+                picker.render(f, typing[1]);
+            }
 
             let waiting = state.pending_approval.is_some();
             let status = Status {
@@ -687,6 +701,41 @@ async fn run_ui(
                         continue;
                     }
 
+                    // The list over the input takes the keys that move and choose, and
+                    // nothing else: everything typed still reaches the input, which is
+                    // what narrows the list.
+                    if key.kind == KeyEventKind::Press && state.picker.is_some() {
+                        let done = match key.code {
+                            KeyCode::Esc => {
+                                state.picker = None;
+                                true
+                            }
+                            KeyCode::Up => {
+                                if let Some(p) = state.picker.as_mut() {
+                                    p.move_by(-1);
+                                }
+                                true
+                            }
+                            KeyCode::Down => {
+                                if let Some(p) = state.picker.as_mut() {
+                                    p.move_by(1);
+                                }
+                                true
+                            }
+                            KeyCode::Tab | KeyCode::Enter => {
+                                if let Some(text) = accept_choice(&input, state.picker.as_ref()) {
+                                    input = fresh_input(&text);
+                                }
+                                state.picker = None;
+                                true
+                            }
+                            _ => false,
+                        };
+                        if done {
+                            continue;
+                        }
+                    }
+
                     if key.kind == KeyEventKind::Press {
                         match key.code {
                             // The one setting a person changes several times an hour, on
@@ -840,6 +889,9 @@ async fn run_ui(
                         }
                     }
                     input.input(key);
+                    // Opened, narrowed or closed by what is now on the line, rather than
+                    // by the key that was pressed: the two cannot disagree that way.
+                    state.picker = open_picker(&input, state.picker.take(), &cfg.root);
                 }
             }
 
@@ -896,6 +948,44 @@ fn copy_out(entries: &[Entry], last_only: bool, root: &std::path::Path) -> Strin
         Err(e) => said.push(format!("could not be written ({e})")),
     }
     format!("{} line(s): {}", text.lines().count(), said.join(", "))
+}
+
+/// The list the line being typed calls for, carrying over the one already open.
+///
+/// Rebuilt from the line rather than driven by keystrokes, so the list and the text can
+/// never disagree about what is being completed.
+fn open_picker(
+    input: &TextArea,
+    open: Option<crate::ui::picker::Picker>,
+    root: &std::path::Path,
+) -> Option<crate::ui::picker::Picker> {
+    let line = input.lines().join("\n");
+    let (sigil, _, token) = crate::ui::picker::token_at(&line)?;
+    let mut picker = match open {
+        Some(p) if p.sigil() == sigil => p,
+        _ => crate::ui::picker::Picker::new(
+            sigil,
+            match sigil {
+                '/' => command_choices(root),
+                _ => path_choices(root),
+            },
+        ),
+    };
+    picker.narrow(&token);
+    (!picker.is_empty()).then_some(picker)
+}
+
+/// The line with the token being completed replaced by what was chosen.
+fn accept_choice(input: &TextArea, picker: Option<&crate::ui::picker::Picker>) -> Option<String> {
+    let line = input.lines().join("\n");
+    let chosen = picker?.chosen()?;
+    let (sigil, at, _) = crate::ui::picker::token_at(&line)?;
+    // A command is the whole line and is ready to send; a file is one word in a sentence
+    // and the sentence carries on after it.
+    Some(match sigil {
+        '/' => format!("/{chosen}"),
+        _ => format!("{}@{chosen}", &line[..at]),
+    })
 }
 
 /// How tall the input may grow before it scrolls inside itself.
@@ -1193,6 +1283,62 @@ fn help(root: &std::path::Path) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     )
+}
+
+/// The commands, as a list to choose from.
+///
+/// Read off the same text the help prints, so a command cannot be offered by one and
+/// missing from the other.
+fn command_choices(root: &std::path::Path) -> Vec<crate::ui::picker::Choice> {
+    let mut out: Vec<crate::ui::picker::Choice> = HELP
+        .lines()
+        .filter_map(|l| l.strip_prefix('/'))
+        .map(|l| match l.split_once(char::is_whitespace) {
+            Some((name, about)) => crate::ui::picker::Choice::new(name.trim(), about.trim()),
+            None => crate::ui::picker::Choice::new(l.trim(), ""),
+        })
+        .collect();
+    for name in crate::config::user_commands(root) {
+        out.push(crate::ui::picker::Choice::new(name, "this project's own"));
+    }
+    out.sort_by(|a, b| a.value.cmp(&b.value));
+    out
+}
+
+/// The files and directories under the root, for naming one with `@`.
+///
+/// Bounded and gitignore-aware, like everything else that walks the project: a list is for
+/// choosing from, and a list of every file in a large repository is for scrolling through.
+fn path_choices(root: &std::path::Path) -> Vec<crate::ui::picker::Choice> {
+    const MOST: usize = 400;
+    let mut out = Vec::new();
+    for entry in ignore::WalkBuilder::new(root)
+        .git_ignore(true)
+        .require_git(false)
+        .hidden(true)
+        .build()
+        .flatten()
+    {
+        if entry.depth() == 0 {
+            continue;
+        }
+        let Ok(rel) = entry.path().strip_prefix(root) else {
+            continue;
+        };
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        out.push(crate::ui::picker::Choice::new(
+            match is_dir {
+                true => format!("{}/", rel.display()),
+                false => rel.display().to_string(),
+            },
+            "",
+        ));
+        if out.len() >= MOST {
+            break;
+        }
+    }
+    out.sort_by(|a, b| a.value.cmp(&b.value));
+    out
 }
 
 const HELP: &str = "\
