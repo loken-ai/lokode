@@ -1375,9 +1375,16 @@ impl Agent {
                 None
             };
             if let Some(why) = stuck {
+                // A turn that changed something before it lost its way left the change
+                // behind, and the way back is worth naming while it is still the last one.
+                let back = if self.this_turn.files.is_empty() {
+                    String::new()
+                } else {
+                    " /undo puts back what it changed.".to_string()
+                };
                 let _ = events
                     .send(AgentEvent::Notice(format!(
-                        "stopped: {why} (last: {tools}). Say what to do differently."
+                        "stopped: {why} (last: {tools}). Say what to do differently.{back}"
                     )))
                     .await;
                 self.end_turn(&events).await;
