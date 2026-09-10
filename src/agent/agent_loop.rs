@@ -108,6 +108,10 @@ pub enum Control {
     Fullness {
         reply: tokio::sync::oneshot::Sender<u8>,
     },
+    /// What the session has spent.
+    Spend {
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
 }
 
 /// Events the agent loop emits so the UI can render progress.
@@ -216,7 +220,46 @@ pub struct AgentConfig {
     pub allow_fallback: bool,
 }
 
+/// What a session has spent, so far.
+///
+/// The server already counts the tokens and nothing showed them: a person deciding
+/// whether to hand the agent a large file has no way to know what the last one cost.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Spend {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub steps: u64,
+    /// Time between the request going out and the answer being complete, summed.
+    pub model_ms: u64,
+    /// Time spent inside tools, summed.
+    pub tool_ms: u64,
+}
+
+impl Spend {
+    /// The line a status bar or a command can show.
+    pub fn describe(&self) -> String {
+        if self.steps == 0 {
+            return "nothing spent yet this session".to_string();
+        }
+        let rate = if self.model_ms == 0 {
+            0.0
+        } else {
+            self.completion_tokens as f64 * 1000.0 / self.model_ms as f64
+        };
+        format!(
+            "{} steps: {} tokens in, {} out at {rate:.1}/s; {:.1}s in the model, {:.1}s in tools",
+            self.steps,
+            self.prompt_tokens,
+            self.completion_tokens,
+            self.model_ms as f64 / 1000.0,
+            self.tool_ms as f64 / 1000.0
+        )
+    }
+}
+
 pub struct Agent {
+    /// What this session has spent.
+    pub spend: Spend,
     /// Lines the user typed while a turn was running. Drained at a step boundary, which
     /// is where the history can take a user message without moving a boundary the
     /// compactor reasons about.
@@ -375,6 +418,9 @@ impl Agent {
             Control::Fullness { reply } => {
                 let _ = reply.send(self.session.fullness_percent());
             }
+            Control::Spend { reply } => {
+                let _ = reply.send(self.spend.describe());
+            }
         }
     }
 
@@ -522,7 +568,9 @@ impl Agent {
             }
             let sent_chars = self.session.size_chars();
             let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
+            let asked_at = std::time::Instant::now();
             let mut attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+            self.spend.model_ms += asked_at.elapsed().as_millis() as u64;
 
             // A backend that will not take native tool calls says so by refusing the
             // request. Nothing has been said to the user yet, so the same step can be run
@@ -540,7 +588,9 @@ impl Agent {
                         ))
                         .await;
                     let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
+                    let asked_at = std::time::Instant::now();
                     attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+                    self.spend.model_ms += asked_at.elapsed().as_millis() as u64;
                 }
             }
 
@@ -562,7 +612,10 @@ impl Agent {
 
             // The server's count is the only tokenizer this client can reach, so it is
             // what the chars-per-token estimate is corrected against.
+            self.spend.steps += 1;
             if let Some(usage) = completion.usage {
+                self.spend.prompt_tokens += usage.prompt_tokens as u64;
+                self.spend.completion_tokens += usage.completion_tokens as u64;
                 if let Some(note) = self.session.observe(sent_chars, usage.prompt_tokens) {
                     let _ = events.send(AgentEvent::Notice(note)).await;
                 }
@@ -663,12 +716,14 @@ impl Agent {
                         run.iter().map(|c| c.name.clone()).collect(),
                     )))
                     .await;
+                let ran_at = std::time::Instant::now();
                 let results = futures::future::join_all(
                     run.iter()
                         .map(|call| self.dispatch_tool(&call.name, call.arguments.clone())),
                 )
                 .await;
 
+                self.spend.tool_ms += ran_at.elapsed().as_millis() as u64;
                 for (call, result) in run.into_iter().zip(results) {
                     let _ = events
                         .send(AgentEvent::ToolResult {
@@ -1191,6 +1246,7 @@ mod tests {
         let registry = Arc::new(reg);
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
+            spend: Spend::default(),
             steer: steer_rx,
             backend: Arc::new(crate::backend::client::BackendClient::new(
                 backend.url.clone(),
@@ -1701,5 +1757,37 @@ mod tests {
             !seen[0]["response_format"].is_null(),
             "the grammar was not applied"
         );
+    }
+}
+
+#[cfg(test)]
+mod spend_tests {
+    use super::Spend;
+
+    #[test]
+    fn a_session_that_has_done_nothing_says_so() {
+        assert_eq!(
+            Spend::default().describe(),
+            "nothing spent yet this session"
+        );
+    }
+
+    /// The rate is the answer's tokens over the time spent waiting for the model, not
+    /// over the whole turn: time in a tool is not the model being slow.
+    #[test]
+    fn the_rate_is_measured_against_the_time_in_the_model() {
+        let s = Spend {
+            prompt_tokens: 4000,
+            completion_tokens: 200,
+            steps: 3,
+            model_ms: 10_000,
+            tool_ms: 5_000,
+        };
+        let said = s.describe();
+        assert!(said.contains("3 steps"), "{said}");
+        assert!(said.contains("4000 tokens in"), "{said}");
+        assert!(said.contains("200 out at 20.0/s"), "{said}");
+        assert!(said.contains("10.0s in the model"), "{said}");
+        assert!(said.contains("5.0s in tools"), "{said}");
     }
 }

@@ -196,6 +196,13 @@ lists the project's alongside the built-ins.
 That is how a team ships its way of working - a review checklist, a release routine -
 without anyone writing Rust, and it is in version control with the code it is about.
 
+## What it cost
+
+`/cost` says what the session has spent: steps, tokens in and out, the rate the answers
+arrived at, and how much of the time went to the model rather than to tools. The server was
+already counting the tokens and nothing showed them, so the question "was that worth it"
+had no answer.
+
 ## Where the window stands
 
 The status line carries how full the history budget is, in per cent, amber past three

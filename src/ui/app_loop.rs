@@ -659,6 +659,20 @@ async fn run_command(
         };
         return Ran::Prompt(text);
     }
+    if verb == "cost" {
+        if busy {
+            return Ran::Said("the agent is working; ask again when the turn is over".into());
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if control
+            .send(crate::agent::agent_loop::Control::Spend { reply: tx })
+            .await
+            .is_err()
+        {
+            return Ran::Said("the agent is not listening".into());
+        }
+        return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
+    }
     if verb == "context" || verb == "compact" {
         if busy {
             return Ran::Said("the agent is working; ask again when the turn is over".into());
@@ -783,6 +797,7 @@ fn help(root: &std::path::Path) -> String {
 }
 
 const HELP: &str = "\
+/cost   what this session has spent, in tokens and time
 /context how full the window is, and what is holding it
 /compact elide the oldest steps now rather than when it fills
 /approve what the configuration settles without asking
