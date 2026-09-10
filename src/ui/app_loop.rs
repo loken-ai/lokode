@@ -95,10 +95,8 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                     ))
                     .await;
                 let _ = notices
-                    .send(AgentEvent::Notice(
-                        "this backend accepts tool definitions and does not use them; \
-                         the session speaks the JSON envelope instead"
-                            .into(),
+                    .send(AgentEvent::Protocol(
+                        crate::agent::protocol::ToolProtocol::Envelope,
                     ))
                     .await;
             }
@@ -223,6 +221,9 @@ struct UiState {
     /// How full the window was when it was last asked, which is at the end of a turn:
     /// the figure only moves when the conversation does.
     context_percent: u8,
+    /// How tool calls travel, as the agent has it: settled by asking the backend, so the
+    /// interface can only know it by asking.
+    protocol: crate::agent::protocol::ToolProtocol,
     /// The task list as it was last drawn.
     tasks: Vec<crate::tools::plan::Task>,
     /// The model answering now. It changes under the interface - by a command, by the
@@ -356,14 +357,16 @@ async fn run_ui(
     let mut state = UiState {
         planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
         model: model.to_string(),
+        protocol,
         ..Default::default()
     };
+    // The protocol is not stated here: it is settled by asking the backend, which has not
+    // answered yet, and the status line carries whatever it turns out to be.
     state.entries.push(Entry::Notice(format!(
         "Welcome. Enter sends, Shift-Enter is a newline, Esc interrupts a running turn, \
          PageUp/PageDown scroll, Ctrl-C or Ctrl-Q quits.\n\
-         Backend: {} · tool calls: {}",
-        cfg.backend_url,
-        protocol.label()
+         Backend: {}",
+        cfg.backend_url
     )));
     if restored > 0 {
         state.entries.push(Entry::Notice(format!(
@@ -434,6 +437,7 @@ async fn run_ui(
                 root: cfg.root.display().to_string(),
                 session: session_id.clone(),
                 grammar: cfg.grammar_enabled,
+                protocol: state.protocol.label(),
                 planning: state.planning,
                 context_percent: state.context_percent,
                 step: state.step,
@@ -579,6 +583,14 @@ async fn run_ui(
                         state.step + 1,
                         s.lines().next().unwrap_or_default()
                     ))),
+                    AgentEvent::Protocol(protocol) => {
+                        state.protocol = protocol;
+                        state.entries.push(Entry::Notice(format!(
+                            "this backend does not use the tool definitions it accepts; \
+                             tool calls now travel as the {} instead",
+                            protocol.label()
+                        )));
+                    }
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
                     AgentEvent::TurnDone => {
                         // Asked once a turn is over, which is when the conversation has
@@ -777,9 +789,10 @@ async fn refresh_status(
     {
         return;
     }
-    if let Ok((model, percent)) = rx.await {
-        state.model = model;
-        state.context_percent = percent;
+    if let Ok(report) = rx.await {
+        state.model = report.model;
+        state.context_percent = report.context_percent;
+        state.protocol = report.protocol;
     }
 }
 

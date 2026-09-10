@@ -13,9 +13,10 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// Which way this session talks to the model about tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToolProtocol {
     /// The server's `tools` field and `tool_calls` in the reply.
+    #[default]
     Native,
     /// A single JSON object per turn, constrained by a generated grammar.
     Envelope,

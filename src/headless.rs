@@ -207,6 +207,13 @@ pub async fn run(
                     eprintln!("» {}", one_line(&s));
                 }
             }
+            // What the backend turned out to do, which changes how the turn was run and
+            // belongs with the rest of what the run has to say for itself.
+            AgentEvent::Protocol(protocol) => {
+                report
+                    .notices
+                    .push(format!("tool calls travel as the {}", protocol.label()));
+            }
             AgentEvent::Notice(s) => {
                 if text_output {
                     eprintln!("· {s}");

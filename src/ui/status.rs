@@ -9,6 +9,9 @@ pub struct Status {
     pub root: String,
     pub session: String,
     pub grammar: bool,
+    /// How tool calls travel. Shown because it is settled by asking the backend, not by
+    /// the flags, and a session can change it part-way through.
+    pub protocol: &'static str,
     /// Shown only while planning: acting is the ordinary state and does not need saying.
     pub planning: bool,
     /// How full the history budget is. Coloured once it is close, because the first
@@ -67,7 +70,10 @@ impl Status {
                 "session={}…  ",
                 &self.session[..self.session.len().min(8)]
             )),
-            Span::styled(format!("{grammar}  "), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("{}  {grammar}  ", self.protocol),
+                Style::default().fg(Color::Cyan),
+            ),
             Span::raw(format!("step {}/{}", self.step, self.max_steps)),
             Span::styled(
                 format!("  ctx {}%", self.context_percent),
@@ -112,6 +118,7 @@ mod tests {
             root: "/p".into(),
             session: "0123456789".into(),
             grammar: true,
+            protocol: "native",
             planning: false,
             context_percent: 40,
             step: 2,

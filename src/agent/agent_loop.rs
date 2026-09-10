@@ -110,7 +110,7 @@ pub enum Control {
     /// full the window is. Both can change under it - by a command, by the mode, by a
     /// failed check - so it asks rather than remembering what it was told at startup.
     Status {
-        reply: tokio::sync::oneshot::Sender<(String, u8)>,
+        reply: tokio::sync::oneshot::Sender<StatusReport>,
     },
     /// What the session has spent.
     Spend {
@@ -142,6 +142,8 @@ pub enum AgentEvent {
     Notice(String),
     /// A line the user typed while the turn was running, now in the conversation.
     Steered(String),
+    /// How tool calls travel, once something has found out what the backend does.
+    Protocol(ToolProtocol),
     TurnDone,
 }
 
@@ -373,6 +375,17 @@ impl TurnTally {
         }
         Some(parts.join("  ·  "))
     }
+}
+
+/// What the status line asks the agent for between turns.
+///
+/// Everything here can change under the interface while a turn runs - a role switch, a
+/// backend that turned out not to do native tool calls - and none of it is readable from
+/// the interface's side, because the agent owns the session.
+pub struct StatusReport {
+    pub model: String,
+    pub context_percent: u8,
+    pub protocol: ToolProtocol,
 }
 
 /// What a session has spent, so far.
@@ -718,7 +731,11 @@ impl Agent {
                 });
             }
             Control::Status { reply } => {
-                let _ = reply.send((self.cfg.model.clone(), self.session.fullness_percent()));
+                let _ = reply.send(StatusReport {
+                    model: self.cfg.model.clone(),
+                    context_percent: self.session.fullness_percent(),
+                    protocol: self.cfg.protocol,
+                });
             }
             Control::Why { reply } => {
                 let _ = reply.send(self.explain_choice());
