@@ -175,6 +175,9 @@ struct UiState {
     /// Whether the agent is planning. Held here because the mode lives with the agent,
     /// and the interface only learns of a change by having asked for it.
     planning: bool,
+    /// How full the window was when it was last asked, which is at the end of a turn:
+    /// the figure only moves when the conversation does.
+    context_percent: u8,
     /// Abandons the turn in flight. `None` between turns.
     turn_cancel: Option<CancellationToken>,
     /// What the chat pane last drew, so scrolling can be bounded by what exists.
@@ -360,6 +363,7 @@ async fn run_ui(
                 session: session_id.clone(),
                 grammar: cfg.grammar_enabled,
                 planning: state.planning,
+                context_percent: state.context_percent,
                 step: state.step,
                 max_steps: cfg.max_steps,
                 busy: state.busy,
@@ -439,6 +443,18 @@ async fn run_ui(
                     ))),
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
                     AgentEvent::TurnDone => {
+                        // Asked once a turn is over, which is when the conversation has
+                        // changed and the agent is free to answer.
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        if control_tx
+                            .send(crate::agent::agent_loop::Control::Fullness { reply: tx })
+                            .await
+                            .is_ok()
+                        {
+                            if let Ok(percent) = rx.await {
+                                state.context_percent = percent;
+                            }
+                        }
                         state.busy = false;
                         state.step = 0;
                         state.phase = None;
@@ -604,6 +620,21 @@ async fn run_command(
         Some((v, r)) => (v, r.trim()),
         None => (command, ""),
     };
+    if verb == "context" || verb == "compact" {
+        if busy {
+            return "the agent is working; ask again when the turn is over".into();
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let request = if verb == "context" {
+            crate::agent::agent_loop::Control::Context { reply: tx }
+        } else {
+            crate::agent::agent_loop::Control::Compact { reply: tx }
+        };
+        if control.send(request).await.is_err() {
+            return "the agent is not listening".into();
+        }
+        return rx.await.unwrap_or_else(|_| "the agent said nothing".into());
+    }
     if verb == "approve" {
         return policy.describe();
     }
@@ -695,6 +726,8 @@ async fn run_command(
 }
 
 const HELP: &str = "\
+/context how full the window is, and what is holding it
+/compact elide the oldest steps now rather than when it fills
 /approve what the configuration settles without asking
 /plan   read and search, change nothing
 /act    leave planning, change things again

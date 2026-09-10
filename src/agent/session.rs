@@ -167,6 +167,51 @@ impl Session {
         self.budget_chars
     }
 
+    /// How full the window is, as a percentage of the budget.
+    ///
+    /// Against the budget rather than the raw window, because the budget is what
+    /// compaction defends: at a hundred per cent the next step starts dropping messages,
+    /// which is the number worth watching.
+    pub fn fullness_percent(&self) -> u8 {
+        if self.budget_chars == 0 {
+            return 0;
+        }
+        ((self.size_chars() * 100 / self.budget_chars) as u64).min(255) as u8
+    }
+
+    /// What is holding the window, by kind, largest first.
+    pub fn occupancy(&self) -> Vec<(String, usize)> {
+        let mut by_kind: std::collections::BTreeMap<&str, usize> = Default::default();
+        for m in &self.history {
+            let kind = match m.role.as_str() {
+                "system" => "standing instructions and the tool manifest",
+                "user" => "what you said",
+                "assistant" => "what the model said",
+                "tool" => "tool results",
+                other => other,
+            };
+            *by_kind.entry(kind).or_default() += m.content.len();
+        }
+        let mut rows: Vec<(String, usize)> = by_kind
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        rows.sort_by_key(|(_, chars)| std::cmp::Reverse(*chars));
+        rows
+    }
+
+    /// Compact now, whatever the budget says, down to the same target a full window
+    /// would be taken to. Returns how many messages went.
+    pub fn compact_now(&mut self) -> usize {
+        let budget = self.budget_chars;
+        // Compaction is a comparison against the budget, so asking for it early is
+        // saying the budget is smaller than it is, for one pass.
+        self.budget_chars = (self.size_chars() as f64 * COMPACT_TO) as usize;
+        let dropped = self.compact();
+        self.budget_chars = budget;
+        dropped
+    }
+
     /// Correct the estimate from what the server actually counted.
     ///
     /// `sent_chars` is what this client measured before the request; `prompt_tokens` is
@@ -463,5 +508,57 @@ mod tests {
         s.compact();
         assert!(s.history.iter().any(|m| m.role == "user"));
         assert!(s.history.iter().any(|m| m.role == "assistant"));
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    fn filled() -> Session {
+        let mut s = Session::new("CONTRACT".into(), 8192, 4096);
+        s.push(Message::user("a question".repeat(20)));
+        s.push(Message::tool("a result".repeat(80), "c1"));
+        s
+    }
+
+    /// The figure is against the budget, because the budget is what compaction defends:
+    /// a hundred per cent is the step at which the session starts forgetting.
+    #[test]
+    fn fullness_is_measured_against_the_budget() {
+        let s = filled();
+        let expected = (s.size_chars() * 100 / s.budget_chars()) as u8;
+        assert_eq!(s.fullness_percent(), expected);
+        assert!(s.fullness_percent() < 100);
+    }
+
+    #[test]
+    fn occupancy_names_what_holds_the_window_largest_first() {
+        let rows = filled().occupancy();
+        assert_eq!(rows[0].0, "tool results");
+        assert!(rows.iter().any(|(k, _)| k == "what you said"));
+        assert!(rows
+            .iter()
+            .any(|(k, _)| k.contains("standing instructions")));
+        assert!(rows.windows(2).all(|w| w[0].1 >= w[1].1));
+    }
+
+    /// Asked for early, compaction does what a full window would have made it do, and
+    /// leaves the budget as it found it.
+    #[test]
+    fn compacting_early_elides_and_restores_the_budget() {
+        let mut s = filled();
+        for i in 0..8 {
+            s.push(Message::user(format!("step {i}")));
+            s.push(Message::tool("bulk".repeat(200), format!("c{i}")));
+        }
+        let budget = s.budget_chars();
+        let before = s.size_chars();
+        let dropped = s.compact_now();
+        assert!(dropped > 0, "nothing was elided");
+        assert!(s.size_chars() < before);
+        assert_eq!(s.budget_chars(), budget);
+        // The contract is never what goes.
+        assert_eq!(s.history[0].role, "system");
     }
 }

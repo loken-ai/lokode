@@ -163,6 +163,17 @@ The exit code says what happened without anything having to be parsed: `0` finis
 something failed - a backend error, or the step limit - and `2` a tool was refused by the
 policy, which is a different thing from the model deciding not to use one.
 
+## Where the window stands
+
+The status line carries how full the history budget is, in per cent, amber past three
+quarters and red at the line where the oldest steps start being elided. `/context` says
+what is holding it - the standing instructions and the tool manifest, what you said, what
+the model said, the tool results - largest first. `/compact` elides now rather than waiting
+for the window to fill, which is what you want before handing the agent a large file.
+
+Compaction announcing itself after the fact was the only signal there had ever been, and by
+then the session had already forgotten something.
+
 ## Settling approvals in advance
 
 An agreement given at the prompt lasts as long as the session, so working the same way

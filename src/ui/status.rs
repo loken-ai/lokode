@@ -11,6 +11,9 @@ pub struct Status {
     pub grammar: bool,
     /// Shown only while planning: acting is the ordinary state and does not need saying.
     pub planning: bool,
+    /// How full the history budget is. Coloured once it is close, because the first
+    /// elision is the moment a session starts forgetting what it was told.
+    pub context_percent: u8,
     pub step: usize,
     pub max_steps: usize,
     pub busy: bool,
@@ -66,6 +69,14 @@ impl Status {
             )),
             Span::styled(format!("{grammar}  "), Style::default().fg(Color::Cyan)),
             Span::raw(format!("step {}/{}", self.step, self.max_steps)),
+            Span::styled(
+                format!("  ctx {}%", self.context_percent),
+                Style::default().fg(match self.context_percent {
+                    0..=74 => Color::Gray,
+                    75..=99 => Color::Yellow,
+                    _ => Color::Red,
+                }),
+            ),
         ];
         if self.planning {
             spans.insert(
@@ -102,6 +113,7 @@ mod tests {
             session: "0123456789".into(),
             grammar: true,
             planning: false,
+            context_percent: 40,
             step: 2,
             max_steps: 16,
             busy,

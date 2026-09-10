@@ -96,6 +96,18 @@ pub enum Control {
         mode: Mode,
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// What is holding the window.
+    Context {
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
+    /// Compact now rather than when the window is full.
+    Compact {
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
+    /// How full the window is, asked for the status line rather than for a person.
+    Fullness {
+        reply: tokio::sync::oneshot::Sender<u8>,
+    },
 }
 
 /// Events the agent loop emits so the UI can render progress.
@@ -298,6 +310,24 @@ impl Agent {
         self.session.set_system_prompt(preamble);
     }
 
+    /// What is holding the window, and how close it is to eliding.
+    fn describe_context(&self) -> String {
+        let size = self.session.size_chars();
+        let budget = self.session.budget_chars();
+        let mut lines = vec![format!(
+            "{}% of the history budget, {size} characters of {budget}",
+            self.session.fullness_percent()
+        )];
+        for (kind, chars) in self.session.occupancy() {
+            let share = (chars * 100).checked_div(size).unwrap_or(0);
+            lines.push(format!("  {share:>3}%  {kind}"));
+        }
+        lines.push(
+            "past a hundred per cent the oldest steps are elided; /compact does it now".to_string(),
+        );
+        lines.join("\n")
+    }
+
     /// Plan or act, from now on.
     fn set_mode(&mut self, mode: Mode) -> String {
         if self.cfg.mode == mode {
@@ -322,6 +352,26 @@ impl Agent {
             }
             Control::Mode { mode, reply } => {
                 let _ = reply.send(self.set_mode(mode));
+            }
+            Control::Context { reply } => {
+                let _ = reply.send(self.describe_context());
+            }
+            Control::Compact { reply } => {
+                let before = self.session.size_chars();
+                let dropped = self.session.compact_now();
+                let after = self.session.size_chars();
+                let _ = reply.send(if dropped == 0 {
+                    "nothing to elide: the window holds what is in it".to_string()
+                } else {
+                    format!(
+                        "{dropped} message(s) elided; the window went from {}% to {}% full",
+                        before * 100 / self.session.budget_chars().max(1),
+                        after * 100 / self.session.budget_chars().max(1)
+                    )
+                });
+            }
+            Control::Fullness { reply } => {
+                let _ = reply.send(self.session.fullness_percent());
             }
         }
     }
