@@ -256,14 +256,14 @@ fn repeat_key(call: &ResolvedCall) -> String {
 /// only thing that changes that is being told.
 fn said_before(known: &ToolOutput) -> ToolOutput {
     ToolOutput {
-        content: format!(
-            "you already ran this and nothing has been written since, so the answer is \
-             the one you had:\n{}",
-            known.content
-        ),
+        content: format!("{SAID_BEFORE}\n{}", known.content),
         is_error: known.is_error,
     }
 }
+
+/// How a repeated answer opens, so the loop can tell one when it sees it again.
+const SAID_BEFORE: &str = "you already ran this and nothing has been written since, so \
+                           the answer is the one you had:";
 
 /// Whether an answer is a tool call the model had to write out because it was never
 /// given the tools.
@@ -1213,11 +1213,12 @@ impl Agent {
             }
             record.after.tools = turn.calls.iter().map(|c| c.name.clone()).collect();
 
-            // Whether this step got anywhere: a step whose every call failed, over and
-            // over, is a model that has lost the thread, and each further step costs a
-            // full context read to fail the same way.
+            // Whether this step got anywhere. A call that failed learned nothing, and a
+            // call already answered this turn learned nothing either: the memo saves the
+            // work but not the round trip, and a model asking the same question every
+            // step will do it until the step limit.
             let mut called = 0usize;
-            let mut failed = 0usize;
+            let mut fruitless = 0usize;
             // Read-only calls in a run go together. A turn that asks to read three files
             // waits for three round trips otherwise, one after another, for no reason -
             // none of them can see what the others did. A mutating call ends the run: what
@@ -1306,7 +1307,8 @@ impl Agent {
                 self.spend.tool_ms += ran_at.elapsed().as_millis() as u64;
                 for (call, result) in run.into_iter().zip(results) {
                     called += 1;
-                    failed += usize::from(result.is_error);
+                    let repeated = result.content.starts_with(SAID_BEFORE);
+                    fruitless += usize::from(result.is_error || repeated);
                     self.failures += u32::from(result.is_error);
                     let key = repeat_key(&call);
                     let _ = events
@@ -1349,7 +1351,7 @@ impl Agent {
                     }
                 }
             }
-            if called > 0 && called == failed {
+            if called > 0 && called == fruitless {
                 self.barren += 1;
             } else {
                 self.barren = 0;
@@ -1363,7 +1365,7 @@ impl Agent {
             // anything: the second is what a model that corrupts its own arguments looks
             // like, and it never trips the first.
             let stuck = if barren >= BARREN_STEPS {
-                Some(format!("{barren} steps in a row where every call failed"))
+                Some(format!("{barren} steps in a row that got nowhere"))
             } else if self.failures >= FAILED_CALLS && self.this_turn.files.is_empty() {
                 Some(format!(
                     "{} calls failed and nothing has changed",
@@ -2347,50 +2349,64 @@ mod tests {
     }
 
     /// A model that corrupts its own arguments alternates between calls that work and
-    /// calls that cannot, so it never fails enough times in a row to be stopped by the
-    /// consecutive rule. What it never does is change anything.
+    /// calls that cannot, so it never gets nowhere three steps running. What it never
+    /// does is change anything.
     #[tokio::test]
     async fn a_turn_that_keeps_failing_and_changes_nothing_is_given_back() {
         let h = Harness::new(Answer::Yes);
-        h.write("a.txt", "one");
-        let miss = || {
-            sse(&[
-                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"read_file","arguments":"{\"path\": \"nope.rs\"}"}}]}}]}"#,
-                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
-            ])
-        };
-        let hit = || {
-            sse(&[
-                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
-                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
-            ])
-        };
-        // Alternating, so no three steps in a row are all failures.
-        let backend = fake_backend(vec![
-            miss(),
-            hit(),
-            miss(),
-            hit(),
-            miss(),
-            hit(),
-            miss(),
-            hit(),
-            miss(),
-            hit(),
-            miss(),
-            hit(),
-            miss(),
-            hit(),
-        ])
-        .await;
+        let mut answers = Vec::new();
+        for i in 0..8 {
+            h.write(&format!("f{i}.txt"), "one");
+            // Each miss and each hit is a call of its own, so nothing is a repeat.
+            for path in [format!("nope{i}.rs"), format!("f{i}.txt")] {
+                answers.push(sse(&[
+                    &format!(
+                        r#"{{"choices":[{{"delta":{{"tool_calls":[{{"index":0,"id":"c{i}","function":{{"name":"read_file","arguments":"{{\"path\": \"{path}\"}}"}}}}]}}}}]}}"#
+                    ),
+                    r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+                ]));
+            }
+        }
+        let backend = fake_backend(answers).await;
         let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
-        agent.cfg.max_steps = 16;
+        agent.cfg.max_steps = 20;
         let events = drive(&mut agent, "find it").await;
 
         assert!(
             events.iter().any(|e| matches!(e, AgentEvent::Notice(n)
                 if n.contains("nothing has changed"))),
             "the turn ran to the step limit"
+        );
+    }
+
+    /// A model asking the same question every step learns nothing each time. The memo
+    /// saves the work; only stopping saves the round trip.
+    #[tokio::test]
+    async fn a_turn_that_only_repeats_itself_is_given_back() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one");
+        let again = || {
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ])
+        };
+        let backend =
+            fake_backend(vec![again(), again(), again(), again(), again(), again()]).await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.cfg.max_steps = 16;
+        let events = drive(&mut agent, "read a.txt").await;
+
+        let reads = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::ToolResult { name, .. } if name == "read_file"))
+            .count();
+        // The first read, then three that got nowhere.
+        assert_eq!(reads, 4, "the turn kept asking");
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::Notice(n)
+                if n.contains("got nowhere"))),
+            "the user was not told why it stopped"
         );
     }
 
@@ -2416,7 +2432,7 @@ mod tests {
         assert_eq!(calls, 3, "the turn ran past the point of trying");
         assert!(
             events.iter().any(|e| matches!(e, AgentEvent::Notice(n)
-                if n.contains("every call failed"))),
+                if n.contains("got nowhere"))),
             "the user was not told why it stopped"
         );
     }
