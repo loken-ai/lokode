@@ -179,6 +179,93 @@ impl Tool for McpTool {
     }
 }
 
+/// One server's resources, as a tool that reads them.
+///
+/// A resource is a document a server offers by name. Reaching it through a tool rather
+/// than through a surface of its own is what keeps the approval flow, the checkpoints and
+/// the transcript working on it unchanged: everything already built for a tool applies.
+pub struct McpResources {
+    client: std::sync::Arc<crate::mcp::client::McpClient>,
+    /// What the server said it had, at startup: the list goes in the description so the
+    /// model can name one without a round trip to discover it.
+    catalogue: String,
+}
+
+impl McpResources {
+    pub fn new(
+        client: std::sync::Arc<crate::mcp::client::McpClient>,
+        rows: &[(String, String)],
+    ) -> Self {
+        let catalogue = rows
+            .iter()
+            .map(|(uri, about)| {
+                if about.is_empty() {
+                    uri.clone()
+                } else {
+                    format!("{uri} ({about})")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        Self { client, catalogue }
+    }
+
+    pub fn tool_name(server: &str) -> String {
+        format!("{server}__read_resource")
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for McpResources {
+    fn name(&self) -> &str {
+        // Leaked once at startup, like every other adopted tool's name: the registry
+        // holds names for the life of the process.
+        Box::leak(Self::tool_name(&self.client.server).into_boxed_str())
+    }
+
+    fn mutates(&self) -> bool {
+        false
+    }
+
+    fn description(&self) -> &str {
+        Box::leak(
+            format!(
+                "Read a document offered by the {} server. Available: {}",
+                self.client.server, self.catalogue
+            )
+            .into_boxed_str(),
+        )
+    }
+
+    fn args_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"uri": {"type": "string"}},
+            "required": ["uri"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn run(
+        &self,
+        ctx: &crate::tools::registry::ToolCtx,
+        args: serde_json::Value,
+    ) -> anyhow::Result<ToolOutput> {
+        let uri = args
+            .get("uri")
+            .and_then(|u| u.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if uri.is_empty() {
+            return Ok(ToolOutput::err("name the resource to read"));
+        }
+        match self.client.read_resource(&uri).await {
+            Ok(text) => Ok(ToolOutput::ok(ctx.clamp(text))),
+            Err(e) => Ok(ToolOutput::err(format!("{uri}: {e:#}"))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

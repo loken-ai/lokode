@@ -22,6 +22,8 @@ use crate::tools::registry::{Registry, Tool};
 #[derive(Default)]
 pub struct Loaded {
     pub clients: Vec<Arc<client::McpClient>>,
+    /// The prompts each server offers: its name, the prompt's name, and what it is for.
+    pub prompts: Vec<(String, String, String)>,
     /// Worth telling the user: a server that would not start, or a tool that was refused.
     pub notices: Vec<String>,
     pub tools: usize,
@@ -93,7 +95,40 @@ pub async fn load(
             }
         }
 
-        tracing::info!(server = %name, offered = offered.len(), adopted, "MCP server ready");
+        // A server's documents become one tool that reads them, so the approval flow,
+        // the checkpoints and the transcript apply to them unchanged.
+        let resources = client.list_resources().await;
+        if !resources.is_empty() {
+            let tool = tool::McpResources::new(client.clone(), &resources);
+            if registry.add(Arc::new(tool)) {
+                adopted += 1;
+            }
+        }
+        let prompts = client.list_prompts().await;
+        if !prompts.is_empty() {
+            out.notices.push(format!(
+                "MCP server {name} offers {} prompt(s): {}",
+                prompts.len(),
+                prompts
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        out.prompts.extend(
+            prompts
+                .into_iter()
+                .map(|(p, about)| (name.clone(), p, about)),
+        );
+
+        tracing::info!(
+            server = %name,
+            offered = offered.len(),
+            adopted,
+            resources = resources.len(),
+            "MCP server ready"
+        );
         out.tools += adopted;
         out.clients.push(client);
     }

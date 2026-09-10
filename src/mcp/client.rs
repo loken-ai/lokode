@@ -144,6 +144,89 @@ impl McpClient {
         Ok(out)
     }
 
+    /// What this server offers besides tools: its resources and its prompts.
+    ///
+    /// A server that does not do either answers with an error, which is not a failure of
+    /// the server: the protocol makes both optional. Both come back empty then.
+    pub async fn list_resources(&self) -> Vec<(String, String)> {
+        self.list_named("resources/list", "resources", "uri").await
+    }
+
+    pub async fn list_prompts(&self) -> Vec<(String, String)> {
+        self.list_named("prompts/list", "prompts", "name").await
+    }
+
+    /// The name and description of each row of a listing, whatever it is called there.
+    async fn list_named(&self, method: &str, field: &str, key: &str) -> Vec<(String, String)> {
+        let Ok(page) = self.request(method, json!({})).await else {
+            return Vec::new();
+        };
+        page.get(field)
+            .and_then(|r| r.as_array())
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|r| {
+                        let name = r.get(key).or_else(|| r.get("name"))?.as_str()?;
+                        let about = r
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or_default();
+                        Some((name.to_string(), about.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Read one resource, as text.
+    pub async fn read_resource(&self, uri: &str) -> Result<String> {
+        let reply = self
+            .request("resources/read", json!({ "uri": uri }))
+            .await?;
+        let text = reply
+            .get("contents")
+            .and_then(|c| c.as_array())
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|r| r.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        if text.is_empty() {
+            anyhow::bail!("{uri} came back with nothing this client can read as text");
+        }
+        Ok(text)
+    }
+
+    /// Take one of the server's prompts, rendered with the arguments given.
+    pub async fn get_prompt(&self, name: &str, arguments: Value) -> Result<String> {
+        let reply = self
+            .request(
+                "prompts/get",
+                json!({ "name": name, "arguments": arguments }),
+            )
+            .await?;
+        let text = reply
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|m| {
+                        m.get("content")
+                            .and_then(|c| c.get("text").or(Some(c)))
+                            .and_then(|t| t.as_str())
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        if text.is_empty() {
+            anyhow::bail!("the prompt {name} came back with nothing this client can read");
+        }
+        Ok(text)
+    }
+
     /// Run one of its tools.
     pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<(String, bool)> {
         let reply = self

@@ -350,6 +350,15 @@ it is allowed to shape the grammar the model is held to - a schema this code can
 would not break one tool, it would break the turn. A tool that fails that check is refused by
 name and said so, and a server that will not start takes only itself down.
 
+A server's documents are reached the same way: its resources become one tool that reads
+them, `<server>__read_resource`, with what the server listed at startup named in the tool's
+own description so the model can ask for one without a round trip to discover it. Reaching
+them through a tool rather than a surface of their own is what keeps the approval flow, the
+checkpoints and the transcript working on them unchanged.
+
+`/mcp` says which servers are running and which prompts they offer; `/mcp <server>
+<prompt>` fetches one and makes it this turn's prompt.
+
 ## Which API
 
 `kind = "auto"` reads it off the URL and is right for every ordinary case: `api.anthropic.com`

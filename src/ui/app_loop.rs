@@ -98,6 +98,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         }
     });
 
+    let startup_notices = [instruction_notes, mcp.notices.clone()].concat();
+    let mcp_summary = booted_summary(&mcp);
+
     // The hook goes in before the terminal is taken, so the window in which a panic could
     // escape uncovered never opens.
     term::install_panic_hook();
@@ -111,7 +114,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         protocol,
         checkpoints,
         checkpoint_error,
-        [instruction_notes, mcp.notices.clone()].concat(),
+        startup_notices,
         session_id,
         restored,
         &shutdown,
@@ -120,6 +123,8 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         steer,
         tools,
         tasks,
+        mcp.clients.clone(),
+        mcp_summary,
         &mut agent_evt_rx,
         &mut approval_rx,
     )
@@ -287,8 +292,13 @@ async fn run_ui(
     steer: mpsc::Sender<String>,
     // What this session can call, for /tools.
     tools: Vec<String>,
+
     // The task list the model keeps, drawn while it has anything in it.
     tasks: std::sync::Arc<crate::tools::plan::TaskList>,
+    // The servers, for the prompts /mcp can take. Cloned handles: the process still owns
+    // them and still shuts them down.
+    mcp: Vec<std::sync::Arc<crate::mcp::client::McpClient>>,
+    mcp_summary: String,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
 ) -> Result<()> {
@@ -556,12 +566,16 @@ async fn run_ui(
                                     let verb = command.trim_start_matches('/').trim();
                                     let ran = run_command(
                                         command.trim(),
-                                        checkpoints.as_deref(),
-                                        &cfg.root,
-                                        &control_tx,
-                                        &cfg.policy,
-                                        &tools,
-                                        state.busy,
+                                        CommandCtx {
+                                            checkpoints: checkpoints.as_deref(),
+                                            root: &cfg.root,
+                                            control: &control_tx,
+                                            policy: &cfg.policy,
+                                            tools: &tools,
+                                            mcp: &mcp,
+                                            mcp_summary: &mcp_summary,
+                                            busy: state.busy,
+                                        },
                                     )
                                     .await;
                                     match ran {
@@ -636,6 +650,24 @@ fn is_quit(k: &KeyEvent) -> bool {
 /// These do not reach the model and do not become part of the conversation: they are things
 /// the user is asking of the tool about the session, and putting them in the transcript
 /// would describe a turn that never happened.
+/// What the servers are and what they offer, for `/mcp`.
+fn booted_summary(mcp: &crate::mcp::Loaded) -> String {
+    if mcp.clients.is_empty() {
+        return "no tool servers are configured".to_string();
+    }
+    let mut lines: Vec<String> = mcp
+        .clients
+        .iter()
+        .map(|c| format!("{}: running", c.server))
+        .collect();
+    for (server, prompt, about) in &mcp.prompts {
+        lines.push(format!(
+            "{server}/{prompt}: {about} (/mcp {server} {prompt})"
+        ));
+    }
+    lines.join("\n")
+}
+
 /// What running a command came to.
 enum Ran {
     /// Something to put on screen.
@@ -644,15 +676,32 @@ enum Ran {
     Prompt(String),
 }
 
-async fn run_command(
-    command: &str,
-    checkpoints: Option<&Checkpoints>,
-    root: &std::path::Path,
-    control: &mpsc::Sender<crate::agent::agent_loop::Control>,
-    policy: &crate::sandbox::policy::Policy,
-    tools: &[String],
+/// Everything a command may need. One struct rather than nine arguments, since every new
+/// command was adding another to a call nobody could read.
+struct CommandCtx<'a> {
+    checkpoints: Option<&'a Checkpoints>,
+    root: &'a std::path::Path,
+    control: &'a mpsc::Sender<crate::agent::agent_loop::Control>,
+    policy: &'a crate::sandbox::policy::Policy,
+    tools: &'a [String],
+    mcp: &'a [std::sync::Arc<crate::mcp::client::McpClient>],
+    mcp_summary: &'a str,
+    /// A control request is answered between turns, so a command that needs one has to
+    /// wait rather than sit silent behind a running turn.
     busy: bool,
-) -> Ran {
+}
+
+async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
+    let CommandCtx {
+        checkpoints,
+        root,
+        control,
+        policy,
+        tools,
+        mcp,
+        mcp_summary,
+        busy,
+    } = cx;
     let (verb, rest) = match command.split_once(char::is_whitespace) {
         Some((v, r)) => (v, r.trim()),
         None => (command, ""),
@@ -698,6 +747,23 @@ async fn run_command(
             return Ran::Said("the agent is not listening".into());
         }
         return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
+    }
+    if verb == "mcp" {
+        // With a server and a prompt named, the prompt is fetched and becomes the turn.
+        let mut words = rest.split_whitespace();
+        match (words.next(), words.next()) {
+            (Some(server), Some(prompt)) => {
+                let Some(client) = mcp.iter().find(|c| c.server == server) else {
+                    return Ran::Said(format!("no server called {server}"));
+                };
+                let args: serde_json::Value = serde_json::json!({});
+                return match client.get_prompt(prompt, args).await {
+                    Ok(text) => Ran::Prompt(text),
+                    Err(e) => Ran::Said(format!("{server}/{prompt}: {e:#}")),
+                };
+            }
+            _ => return Ran::Said(mcp_summary.to_string()),
+        }
     }
     if verb == "tools" {
         return Ran::Said(tools.join("\n"));
@@ -819,6 +885,7 @@ const HELP: &str = "\
 /undo   put back the most recent turn that changed something
 /init   write a first draft of this project's instructions
 /tools  the tools this session can call, and where they came from
+/mcp    the tool servers, or /mcp <server> <prompt> to take one of their prompts
 /help   this, and any command the project defines";
 
 /// Which decision a keystroke stands for at the approval modal.
