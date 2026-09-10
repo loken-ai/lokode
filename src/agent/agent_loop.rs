@@ -492,6 +492,9 @@ impl Spend {
 pub struct Agent {
     /// What this turn changed and what it cost, for the line that closes it.
     pub this_turn: TurnTally,
+    /// Whether the compiler has already been asked about this step. Shared rather than
+    /// owned because the calls of one run are dispatched together.
+    pub checked_this_step: std::sync::atomic::AtomicBool,
     /// Steps in a row where every tool call failed and nothing was written.
     pub barren: u32,
     /// Calls that failed in this turn, however they were spread across its steps.
@@ -1053,6 +1056,10 @@ impl Agent {
         let validator = Validator::new(&turn_schema).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         for step in 0..self.cfg.max_steps {
+            // One build per step: a step that writes three files is one change, and asking
+            // three times costs three builds to learn the same thing.
+            self.checked_this_step
+                .store(false, std::sync::atomic::Ordering::Relaxed);
             if cancel.is_cancelled() {
                 self.abandon(&events, "interrupted").await;
                 return Ok(());
@@ -1568,18 +1575,44 @@ impl Agent {
     /// nothing to parse. Never fails a write: a language server that is missing, slow or
     /// silent leaves the result as it was.
     async fn verify_written(&self, tool: &str, out: &ToolOutput) -> Option<String> {
-        let lsp = self.lsp.as_ref()?;
-        if out.is_error || !matches!(tool, "write_file" | "edit_file" | "edit_lines") {
+        if out.is_error
+            || !matches!(
+                tool,
+                "write_file" | "edit_file" | "edit_lines" | "apply_patch"
+            )
+        {
             return None;
         }
-        // "edited <path>", "wrote <path>", "applied N edit(s) to <path>".
-        let first = out.content.lines().next()?;
-        let path = first.rsplit(' ').next()?;
-        let path = std::path::Path::new(path);
-        if !path.exists() {
+        let written = changed_paths(&out.content);
+        // The language server first: it is already running, it knows the file, and it
+        // answers in milliseconds.
+        if let Some(lsp) = self.lsp.as_ref() {
+            for name in &written {
+                let path = self.ctx.root.join(name);
+                if !path.exists() {
+                    continue;
+                }
+                if let Some(said) = crate::tools::lsp::diagnostics_now(
+                    lsp,
+                    &path,
+                    std::time::Duration::from_secs(2),
+                )
+                .await
+                {
+                    return Some(said);
+                }
+            }
+        }
+        // Underneath it, the compiler, asked to compile and nothing else. Once per step,
+        // because a step that writes three files is one change and asking three times
+        // costs three builds to learn the same thing.
+        if self
+            .checked_this_step
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
             return None;
         }
-        crate::tools::lsp::diagnostics_now(lsp, path, std::time::Duration::from_secs(2)).await
+        crate::agent::check::run(&self.ctx.root, &written).await
     }
 
     /// Run the turn-end hook, if there is one, and close the turn.
@@ -2153,6 +2186,7 @@ mod tests {
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
             this_turn: Default::default(),
+            checked_this_step: Default::default(),
             barren: Default::default(),
             failures: Default::default(),
             repeats: Default::default(),
