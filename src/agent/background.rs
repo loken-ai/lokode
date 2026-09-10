@@ -196,6 +196,7 @@ impl Discovery {
             repairs: Default::default(),
             background: None,
             checked_this_step: Default::default(),
+            nudged: false,
             barren: Default::default(),
             failures: Default::default(),
             from_guess: Default::default(),

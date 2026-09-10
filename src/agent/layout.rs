@@ -10,12 +10,16 @@
 
 use std::path::Path;
 
-/// How many entries the map may name. Past this the model has enough to start reading.
-const MOST: usize = 80;
+/// How much of the window the map may take.
+///
+/// Bounded by what it costs rather than by how deep it goes: the point of the map is that
+/// the model can name a file, and a map that stops at directory names cannot be used to
+/// name anything. Naming every source file in a project this size costs a few hundred
+/// tokens, which is what one wrong guess costs anyway.
+const MOST_CHARS: usize = 2000;
 
-/// How deep to go. The top two levels say what kind of project this is and where its code
-/// lives; below that is detail a read call answers better.
-const DEPTH: usize = 2;
+/// How deep to go before a project is being catalogued rather than mapped.
+const DEPTH: usize = 4;
 
 /// The tree as a list of paths, one per line, directories marked.
 ///
@@ -31,23 +35,25 @@ pub fn map(root: &Path) -> String {
         .hidden(true)
         .build();
     let mut names: Vec<String> = Vec::new();
+    let mut used = 0usize;
     for entry in walker.flatten() {
         if entry.depth() == 0 {
+            continue;
+        }
+        // Directories are what the files are under; naming both says the same thing twice.
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
         let Ok(rel) = entry.path().strip_prefix(root) else {
             continue;
         };
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let shown = match is_dir {
-            true => format!("{}/", rel.display()),
-            false => rel.display().to_string(),
-        };
-        names.push(shown);
-        if names.len() >= MOST {
-            names.push("…".to_string());
+        let shown = rel.display().to_string();
+        used += shown.len() + 1;
+        if used > MOST_CHARS {
+            names.push("... and more".to_string());
             break;
         }
+        names.push(shown);
     }
     names.sort();
     names.join("\n")
@@ -69,16 +75,33 @@ pub fn preamble(root: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The map has to be usable to name a file in a read call. One that stops at
+    /// directory names cannot be, so the model names the only file it can see, which is
+    /// the README, and answers from that.
     #[test]
-    fn the_map_names_directories_and_files() {
+    fn the_map_names_files_deep_enough_to_be_read() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("src/agent")).unwrap();
+        std::fs::write(dir.path().join("src/agent/loop.rs"), "").unwrap();
         std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
         let map = map(dir.path());
-        assert!(map.contains("src/"), "{map}");
+        assert!(map.contains("src/agent/loop.rs"), "{map}");
         assert!(map.contains("src/main.rs"), "{map}");
         assert!(map.contains("Cargo.toml"), "{map}");
+    }
+
+    /// Bounded by what it costs, not by how deep it goes.
+    #[test]
+    fn a_project_too_big_to_name_says_there_is_more() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        for i in 0..500 {
+            std::fs::write(dir.path().join(format!("src/file{i:04}.rs")), "").unwrap();
+        }
+        let map = map(dir.path());
+        assert!(map.len() <= MOST_CHARS + 40, "{} chars", map.len());
+        assert!(map.contains("and more"), "{map}");
     }
 
     /// What the project ignores is not part of the project.

@@ -355,6 +355,34 @@ const REVIEW_SAID_CHARS: usize = 400;
 /// fails often enough in a row to be stopped by the other rule.
 const FAILED_CALLS: u32 = 6;
 
+/// Whether the question is one the project itself answers.
+///
+/// Only where the person has said so. A question about Rust, or about what a word means,
+/// is answered from what the model knows and reading the project would be beside the
+/// point; a question about this code is not.
+fn asks_about_the_project(asked: &str) -> bool {
+    const ABOUT_HERE: [&str; 10] = [
+        "the source",
+        "the sources",
+        "the code",
+        "this project",
+        "this repo",
+        "this crate",
+        "the project",
+        "codebase",
+        "in here",
+        "from the file",
+    ];
+    let asked = asked.to_lowercase();
+    ABOUT_HERE.iter().any(|m| asked.contains(m))
+}
+
+/// What the model is told when it answered about the project without opening it.
+const NOT_LOOKED: &str = "You answered without reading anything from the project. The \
+                          question is about this code, the files are listed above and you \
+                          have tools to read and search them. Look first, then answer from \
+                          what is actually there.";
+
 /// Whether a name in the catalogue is something a turn could be had with.
 ///
 /// A server that does more than text lists what it does: voices, transcribers, image
@@ -639,6 +667,9 @@ pub struct Agent {
     /// Whether the compiler has already been asked about this step. Shared rather than
     /// owned because the calls of one run are dispatched together.
     pub checked_this_step: std::sync::atomic::AtomicBool,
+    /// Whether this turn has already been asked to go and look. Once: a nudge that
+    /// repeats is an argument.
+    pub nudged: bool,
     /// Steps in a row where every tool call failed and nothing was written.
     pub barren: u32,
     /// Calls that failed in this turn, however they were spread across its steps.
@@ -1185,6 +1216,8 @@ impl Agent {
         }
 
         self.this_turn = TurnTally::begin();
+        self.nudged = false;
+        let asked = user_input.clone();
         self.repeats.clear();
         self.from_guess.clear();
         self.barren = 0;
@@ -1466,6 +1499,25 @@ impl Agent {
             self.record_assistant_turn(&turn)?;
 
             if turn.calls.is_empty() {
+                // A question about the project, answered without opening the project.
+                //
+                // The loop ends a turn the moment the model stops calling tools, which
+                // takes the model's word for it that the question has been engaged with.
+                // A model that answers about a codebase from its own memory, or from the
+                // one file it happened to read, is answering a different question, and
+                // nothing here noticed. It is told once, and only once: a nudge that
+                // repeats is an argument.
+                if !self.nudged && asks_about_the_project(&asked) && self.this_turn.steps <= 1 {
+                    self.nudged = true;
+                    let _ = events
+                        .send(AgentEvent::Notice(
+                            "answered without reading anything; asking it to look".into(),
+                        ))
+                        .await;
+                    self.session.push(Message::user(NOT_LOOKED));
+                    self.close_step(record);
+                    continue;
+                }
                 self.close_step(record);
                 self.end_turn(&events).await;
                 return Ok(());
@@ -2556,6 +2608,7 @@ mod tests {
             repairs: Default::default(),
             background: None,
             checked_this_step: Default::default(),
+            nudged: false,
             barren: Default::default(),
             failures: Default::default(),
             from_guess: Default::default(),
@@ -3126,6 +3179,64 @@ mod tests {
         for name in ["qwen3-coder:30b", "mistral-small3.2:latest", "boogu"] {
             assert!(can_hold_a_conversation(name), "{name}");
         }
+    }
+
+    /// The loop used to end a turn the moment the model stopped calling tools, which took
+    /// its word for it that the question had been engaged with. A question about the code,
+    /// answered from memory, went out as an answer and nothing noticed.
+    #[tokio::test]
+    async fn a_question_about_the_code_answered_blind_is_sent_back() {
+        let h = Harness::new(Answer::Yes);
+        h.write("src/lib.rs", "pub fn strength() {}");
+        let backend = fake_backend(vec![
+            // Answers straight away, having read nothing.
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"it is a Rust crate for brewing"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            // Told to look, it looks.
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read_file","arguments":"{\"path\": \"src/lib.rs\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"it has one function, strength"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "based on the sources what does this project do").await;
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ToolResult { name, .. }
+                if name == "read_file")),
+            "it was never sent back to look"
+        );
+        let last = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::AssistantText(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .next_back();
+        assert_eq!(last, Some("it has one function, strength"));
+    }
+
+    /// Only where the person said the project. A question about Rust is answered from what
+    /// the model knows, and sending it to read the tree would be beside the point.
+    #[test]
+    fn a_question_that_is_not_about_here_is_left_alone() {
+        assert!(asks_about_the_project(
+            "based on the sources, what does it do"
+        ));
+        assert!(asks_about_the_project(
+            "what are the features of this project"
+        ));
+        assert!(!asks_about_the_project("what does the borrow checker do"));
+        assert!(!asks_about_the_project("write me a haiku"));
     }
 
     /// A model asking the same question every step learns nothing each time. The memo
