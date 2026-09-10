@@ -969,6 +969,10 @@ impl Agent {
                 .unwrap_or(self.cfg.max_answer_tokens),
         );
         self.session.set_window(window, reserve);
+        // What a tool result may contribute is a share of the same window, so it moves
+        // with it: a history resized upward that still reads files in two-kilobyte
+        // pieces has not gained anything worth having.
+        self.ctx.max_output_chars = crate::agent::session::tool_output_chars(window, reserve);
         let _ = events
             .send(AgentEvent::Notice(format!(
                 "the server serves {served} tokens for {}; the history is sized to {window}",
@@ -984,10 +988,16 @@ impl Agent {
         let context = per_model
             .and_then(|m| m.context_tokens)
             .unwrap_or(self.cfg.context_tokens);
-        let reserve = per_model
-            .and_then(|m| m.max_answer_tokens)
-            .unwrap_or(self.cfg.max_answer_tokens);
+        let reserve = crate::agent::session::answer_reserve(
+            context,
+            per_model
+                .and_then(|m| m.max_answer_tokens)
+                .unwrap_or(self.cfg.max_answer_tokens),
+        );
         self.session.set_window(context, reserve);
+        self.ctx.max_output_chars = crate::agent::session::tool_output_chars(context, reserve);
+        // The next answer settles what this model is really served with.
+        self.window_in_use = context;
     }
 
     /// Answer one control request. Between turns, which is where the session can change
