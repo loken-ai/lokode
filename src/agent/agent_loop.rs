@@ -244,6 +244,87 @@ fn last_is_parallel(registry: &Registry, run: &[ResolvedCall]) -> bool {
 /// sixteen.
 const BARREN_STEPS: u32 = 3;
 
+/// A guess in flight: the work, and the token that abandons it.
+type Guessing = (
+    tokio::task::JoinHandle<Option<(String, ToolOutput)>>,
+    CancellationToken,
+);
+
+/// Everything a guess needs, owned, so it can be abandoned without holding the turn.
+struct Guess {
+    backend: Arc<dyn crate::backend::provider::Provider>,
+    registry: Arc<Registry>,
+    ctx: crate::tools::registry::ToolCtx,
+    model: String,
+    session: String,
+    recent: String,
+    known: std::collections::HashSet<String>,
+}
+
+impl Guess {
+    /// Ask which read is coming, make it, and hand back what a repeat of it would find.
+    ///
+    /// Read-only by construction: a guess that would change something is dropped rather
+    /// than run, because the point is that being wrong is free.
+    async fn run(self, cancel: CancellationToken) -> Option<(String, ToolOutput)> {
+        let names: Vec<&str> = self
+            .registry
+            .iter()
+            .filter(|(_, t)| !t.mutates())
+            .map(|(n, _)| n.as_str())
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        let req = TurnRequest {
+            model: self.model.clone(),
+            messages: vec![
+                Message::system(format!(
+                    "You are guessing which single read-only call an agent is about to \
+                     make next, so its answer can be ready. Reply with one JSON object and \
+                     nothing else: {{\"name\": ..., \"arguments\": {{...}}}}. The name must \
+                     be one of: {}. Reply with {{}} when you cannot tell.",
+                    names.join(", ")
+                )),
+                Message::user(format!("The conversation so far:\n{}", self.recent)),
+            ],
+            tools: None,
+            grammar: None,
+            max_tokens: 160,
+            temperature: 0.0,
+            user: Some(format!("{}-guess", self.session)),
+        };
+        let answer = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return None,
+            r = self.backend.complete(req) => r.ok()?,
+        };
+        let parsed = crate::backend::repair::tolerant_parse(&answer).ok()?;
+        let name = parsed.get("name")?.as_str()?.to_string();
+        let arguments = parsed.get("arguments").cloned().unwrap_or(Value::Null);
+        let tool = self.registry.get(&name)?;
+        if tool.mutates() {
+            return None;
+        }
+        let key = repeat_key(&ResolvedCall {
+            id: String::new(),
+            name: name.clone(),
+            arguments: arguments.clone(),
+        });
+        if self.known.contains(&key) {
+            return None;
+        }
+        let out = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return None,
+            out = tool.run(&self.ctx, arguments) => out.ok()?,
+        };
+        // A guess that failed teaches the next step nothing and would be served as an
+        // answer. Only what worked is worth keeping.
+        (!out.is_error).then_some((key, out))
+    }
+}
+
 /// How much of a call's arguments a reviewer is shown.
 ///
 /// Enough to see what the change is, bounded because a whole-file write is the whole file
@@ -1166,16 +1247,18 @@ impl Agent {
             // The card is busy with one model and idle for everything else. A small model
             // can spend that time guessing which file the answer is going to ask for, and
             // a read has no effect to undo when the guess is wrong.
-            let (attempt, guessed) =
-                tokio::join!(self.stream_one(&turn_schema, &cancel, &events), async {
-                    match self.cfg.speculate {
-                        true => self.speculate(&cancel).await,
-                        false => None,
-                    }
-                });
-            let mut attempt = attempt;
-            if let Some((key, out)) = guessed {
-                self.repeats.entry(key).or_insert(out);
+            //
+            // Abandoned the moment the answer arrives. A guess is worth having only if it
+            // lands first, and one that has not must never be something the turn waits on:
+            // a server busy loading the model it was asked about would otherwise hold up
+            // the very turn it was meant to shorten.
+            let guessing = self.start_guess(&cancel);
+            let mut attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+            if let Some((handle, stop)) = guessing {
+                stop.cancel();
+                if let Ok(Some((key, out))) = handle.await {
+                    self.repeats.entry(key).or_insert(out);
+                }
             }
             record.after.model_ms = asked_at.elapsed().as_millis() as u64;
             self.spend.model_ms += record.after.model_ms;
@@ -1677,18 +1760,27 @@ impl Agent {
     ///
     /// Read-only by construction: a guess that would change something is dropped rather
     /// than run, because the point is that being wrong is free.
-    async fn speculate(&self, cancel: &CancellationToken) -> Option<(String, ToolOutput)> {
-        let names: Vec<&str> = self
-            .registry
-            .iter()
-            .filter(|(_, t)| !t.mutates())
-            .map(|(n, _)| n.as_str())
-            .collect();
-        if names.is_empty() {
+    fn start_guess(&self, cancel: &CancellationToken) -> Option<Guessing> {
+        if !self.cfg.speculate {
             return None;
         }
-        let recent: String = self
-            .session
+        let stop = cancel.child_token();
+        let asked = Guess {
+            backend: self.backend.clone(),
+            registry: self.registry.clone(),
+            ctx: self.ctx.clone(),
+            model: self.model_for(crate::agent::roles::Role::Search),
+            session: self.session.id.clone(),
+            recent: self.recent_for_guess(),
+            known: self.repeats.keys().cloned().collect(),
+        };
+        let token = stop.clone();
+        Some((tokio::spawn(async move { asked.run(token).await }), stop))
+    }
+
+    /// The tail of the conversation a guess is made from.
+    fn recent_for_guess(&self) -> String {
+        self.session
             .history
             .iter()
             .rev()
@@ -1701,55 +1793,7 @@ impl Agent {
             .join("\n")
             .chars()
             .take(REVIEW_ARG_CHARS)
-            .collect();
-        let req = TurnRequest {
-            model: self.model_for(crate::agent::roles::Role::Search),
-            messages: vec![
-                Message::system(format!(
-                    "You are guessing which single read-only call an agent is about to \
-                     make next, so its answer can be ready. Reply with one JSON object and \
-                     nothing else: {{\"name\": ..., \"arguments\": {{...}}}}. The name must \
-                     be one of: {}. Reply with {{}} when you cannot tell.",
-                    names.join(", ")
-                )),
-                Message::user(format!("The conversation so far:\n{recent}")),
-            ],
-            tools: None,
-            grammar: None,
-            max_tokens: 160,
-            temperature: 0.0,
-            user: Some(format!("{}-guess", self.session.id)),
-        };
-        let answer = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return None,
-            r = self.backend.complete(req) => r.ok()?,
-        };
-        let parsed = crate::backend::repair::tolerant_parse(&answer).ok()?;
-        let name = parsed.get("name")?.as_str()?.to_string();
-        let arguments = parsed.get("arguments").cloned().unwrap_or(Value::Null);
-        // Only a tool this session has, and only one that changes nothing.
-        let tool = self.registry.get(&name)?;
-        if tool.mutates() {
-            return None;
-        }
-        let call = ResolvedCall {
-            id: String::new(),
-            name: name.clone(),
-            arguments: arguments.clone(),
-        };
-        let key = repeat_key(&call);
-        if self.repeats.contains_key(&key) {
-            return None;
-        }
-        let out = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return None,
-            out = self.dispatch_tool(&name, arguments) => out,
-        };
-        // A guess that failed teaches the next step nothing and would be served as an
-        // answer. Only what worked is worth keeping.
-        (!out.is_error).then_some((key, out))
+            .collect()
     }
 
     /// What a second model says about a change, before it is written.
@@ -2895,10 +2939,11 @@ mod tests {
         let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
         agent.session.push(Message::user("what does a.txt say"));
 
-        let (key, out) = agent
-            .speculate(&CancellationToken::new())
-            .await
-            .expect("the guess was not made");
+        agent.cfg.speculate = true;
+        let (handle, _stop) = agent
+            .start_guess(&CancellationToken::new())
+            .expect("speculation is on");
+        let (key, out) = handle.await.unwrap().expect("the guess was not made");
         assert!(out.content.contains("forty two"), "{out:?}");
         // Filed where a repeat of the same call would find it.
         assert!(key.contains("read_file"), "{key}");
@@ -2918,7 +2963,11 @@ mod tests {
         let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
         agent.session.push(Message::user("say hello"));
 
-        assert!(agent.speculate(&CancellationToken::new()).await.is_none());
+        agent.cfg.speculate = true;
+        let (handle, _stop) = agent
+            .start_guess(&CancellationToken::new())
+            .expect("speculation is on");
+        assert!(handle.await.unwrap().is_none());
         assert_eq!(h.read("a.txt"), "one");
     }
 
@@ -2932,7 +2981,11 @@ mod tests {
         .await;
         let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
         agent.session.push(Message::user("have a look"));
-        assert!(agent.speculate(&CancellationToken::new()).await.is_none());
+        agent.cfg.speculate = true;
+        let (handle, _stop) = agent
+            .start_guess(&CancellationToken::new())
+            .expect("speculation is on");
+        assert!(handle.await.unwrap().is_none());
     }
 
     /// A model asking the same question every step learns nothing each time. The memo

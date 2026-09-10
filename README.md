@@ -104,9 +104,10 @@ them the screen is identical to one that has stopped.
 
 While the model writes its answer the card is busy and the rest of the machine is not. A
 small model spends that time guessing which read is coming next, the read is made, and the
-step that asks for it is answered without a round trip. Read-only by construction: a guess
-that would change something is dropped rather than run, because being wrong has to stay
-free. It happens only against a backend on this machine or this network, where an idle card
+step that asks for it is answered without a round trip. It is abandoned the moment the
+answer arrives: a guess is worth having only if it lands first, and one that has not must
+never be something the turn waits on. Read-only by construction too, so a guess that would
+change something is dropped rather than run, because being wrong has to stay free. It happens only against a backend on this machine or this network, where an idle card
 is the whole cost, and `speculate = false` turns it off.
 
 A turn closes with what it came to: how long it took, how many steps, what it spent and
