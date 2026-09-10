@@ -63,6 +63,40 @@ pub fn opening_questions() -> Vec<String> {
     ]
 }
 
+/// The first two sentences of an answer, or nothing when there is no answer in it.
+///
+/// A model that was asked for two sentences and wrote a page still found something out.
+/// What follows the first two sentences is its reasoning, and the digest is read as fact.
+fn shorten(answer: &str) -> Option<String> {
+    let answer = answer.trim();
+    // The reasoning a thinking model shows is not part of what it found out.
+    let answer = match answer.rsplit_once("</think>") {
+        Some((_, rest)) => rest.trim(),
+        None => answer,
+    };
+    if answer.is_empty() {
+        return None;
+    }
+    let mut end = 0;
+    let mut sentences = 0;
+    for (i, c) in answer.char_indices() {
+        if matches!(c, '.' | '!' | '?') {
+            end = i + c.len_utf8();
+            sentences += 1;
+            if sentences == 2 {
+                break;
+            }
+        }
+    }
+    let short = if end > 0 { &answer[..end] } else { answer };
+    let short = short.trim();
+    // Two sentences that run past this are not two sentences.
+    (!short.is_empty() && short.len() <= MAX_ANSWER_CHARS).then(|| short.to_string())
+}
+
+/// How long an answer may be and still read as a statement of fact.
+const MAX_ANSWER_CHARS: usize = 400;
+
 /// Which part of the digest an answer belongs in, guessed from the question.
 ///
 /// Guessed rather than asked, for the same reason: a round trip to classify a sentence
@@ -159,20 +193,32 @@ impl Discovery {
             return None;
         }
         let mut answer = String::new();
+        let mut looked = false;
         for event in outcome.unwrap_or_default() {
-            if let crate::agent::agent_loop::AgentEvent::AssistantText(s) = event {
-                if !s.trim().is_empty() {
-                    answer = s;
+            match event {
+                crate::agent::agent_loop::AgentEvent::AssistantText(s) => {
+                    if !s.trim().is_empty() {
+                        answer = s;
+                    }
                 }
+                crate::agent::agent_loop::AgentEvent::ToolResult { output, .. } => {
+                    looked = looked || !output.is_error;
+                }
+                _ => {}
             }
         }
-        let answer = answer.trim().to_string();
-        if answer.is_empty() || answer.len() > 400 {
-            // Nothing usable. Not asked again: a question this model cannot answer in two
-            // sentences will not be answered by asking it a second time.
-            tracing::info!(%question, "background question produced nothing usable");
+        if !looked {
+            // An answer that read nothing is a guess, and a guess in the digest is worse
+            // than an empty digest: everything later in the session is told it as fact.
+            tracing::info!(%question, "background answer read nothing, discarded");
             return None;
         }
+        let Some(answer) = shorten(&answer) else {
+            // Not asked again: a question this model would not answer plainly once will
+            // not be answered by asking it a second time.
+            tracing::info!(%question, "background question produced nothing usable");
+            return None;
+        };
 
         let mut digest = self.digest.lock().await;
         digest.learn(
@@ -197,6 +243,29 @@ impl Discovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_answer_keeps_its_first_two_sentences() {
+        let long = "It builds a CLI. It is written in Rust. Now let me explain how I \
+                    worked that out, at length, over several more sentences that nobody asked for.";
+        assert_eq!(
+            shorten(long).as_deref(),
+            Some("It builds a CLI. It is written in Rust.")
+        );
+    }
+
+    #[test]
+    fn the_reasoning_a_model_shows_is_not_the_answer() {
+        let answer = "<think>Let me look at Cargo.toml, then at src.</think>It builds a CLI.";
+        assert_eq!(shorten(answer).as_deref(), Some("It builds a CLI."));
+    }
+
+    #[test]
+    fn an_answer_with_no_sentence_end_is_kept_when_it_is_short() {
+        assert_eq!(shorten("a Rust CLI").as_deref(), Some("a Rust CLI"));
+        assert_eq!(shorten("   ").as_deref(), None);
+        assert_eq!(shorten(&"x".repeat(MAX_ANSWER_CHARS + 1)), None);
+    }
 
     #[test]
     fn a_question_lands_on_the_shelf_it_belongs_to() {
