@@ -30,6 +30,20 @@ pub enum Entry {
 }
 
 impl Entry {
+    /// Whether there is more to this entry than what is shown.
+    ///
+    /// Only the entries that hold evidence: a result, a command's output, a scratchpad. A
+    /// question and an answer are shown whole because they are what the pane is for.
+    pub fn can_unfold(&self) -> bool {
+        match self {
+            Entry::ToolResult { body, .. } | Entry::ToolOutput { body, .. } => {
+                body.lines().count() > BODY_LINES + 1
+            }
+            Entry::Reasoning(s) => s.lines().count() > BODY_LINES,
+            _ => false,
+        }
+    }
+
     /// The entry as plain text, for taking the conversation out of the pane.
     ///
     /// The same content the screen carries, without the colour and the box drawing: what a
@@ -50,6 +64,34 @@ impl Entry {
     }
 
     pub fn to_lines(&self) -> Vec<Line<'static>> {
+        self.render(false, false)
+    }
+
+    /// The entry's lines, with what is shown decided by the caller.
+    ///
+    /// `open` shows the evidence whole rather than counted; `here` marks the entry the
+    /// keys are pointing at, so moving between them is visible.
+    pub fn render(&self, open: bool, here: bool) -> Vec<Line<'static>> {
+        let mut lines = self.lines_inner(open);
+        if here {
+            // The mark goes in the left margin every line already leaves empty, so
+            // pointing at an entry does not move its text.
+            for line in lines.iter_mut() {
+                let mark = Span::styled("▌", Style::default().fg(Color::Cyan));
+                match line.spans.first_mut() {
+                    Some(first) if first.content.starts_with(' ') => {
+                        let rest: String = first.content.chars().skip(1).collect();
+                        first.content = rest.into();
+                        line.spans.insert(0, mark);
+                    }
+                    _ => line.spans.insert(0, mark),
+                }
+            }
+        }
+        lines
+    }
+
+    fn lines_inner(&self, open: bool) -> Vec<Line<'static>> {
         match self {
             // The person's own words, marked the way a shell marks a prompt rather than
             // with a header of their own: a line that says "you" over what you just typed
@@ -97,7 +139,7 @@ impl Entry {
                 body,
             } => {
                 let _ = name;
-                result_lines(*is_error, body)
+                result_lines(*is_error, body, open)
             }
             // `/diff` answers through a notice, and a wall of uncoloured diff is the thing
             // it is least useful as.
@@ -216,7 +258,7 @@ fn call_subject(name: &str, args: &str) -> String {
 /// The first line of a tool's own result is its answer; what follows is evidence. The
 /// answer is always shown, the evidence up to a few lines, and the rest counted. An error
 /// is shown whole because an error nobody can read is an error nobody can act on.
-fn result_lines(is_error: bool, body: &str) -> Vec<Line<'static>> {
+fn result_lines(is_error: bool, body: &str, open: bool) -> Vec<Line<'static>> {
     let colour = if is_error {
         Color::Red
     } else {
@@ -238,7 +280,7 @@ fn result_lines(is_error: bool, body: &str) -> Vec<Line<'static>> {
         Span::styled(head, Style::default().fg(colour)),
     ])];
     let rest = &lines[lines.len().min(1)..];
-    let shown = if is_error {
+    let shown = if is_error || open {
         rest.len()
     } else {
         rest.len().min(BODY_LINES)

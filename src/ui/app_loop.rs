@@ -230,6 +230,13 @@ struct UiState {
     picker: Option<crate::ui::picker::Picker>,
     /// A command's answer, on a page over the conversation until it is closed.
     sheet: Option<crate::ui::sheet::Sheet>,
+    /// The entry the keys are pointing at, when the user has moved off the newest.
+    ///
+    /// `None` means the bottom of the conversation, where a session spends its time; a
+    /// mark is only worth drawing once somebody has gone looking for something.
+    at_entry: Option<usize>,
+    /// Entries shown whole rather than counted.
+    unfolded: std::collections::HashSet<usize>,
     /// The task list as it was last drawn.
     tasks: Vec<crate::tools::plan::Task>,
     /// The model answering now. It changes under the interface - by a command, by the
@@ -258,6 +265,23 @@ impl UiState {
 
     fn scroll_forward(&mut self, by: usize) {
         self.scroll = (self.scroll as usize).saturating_sub(by) as u16;
+    }
+
+    /// Point at the entry before the one being pointed at, or at the newest.
+    ///
+    /// Only the entries worth stopping on: pointing at every blank remark between two
+    /// steps makes the key useless for finding the step.
+    fn point_back(&mut self) {
+        let before = self.at_entry.unwrap_or(self.entries.len());
+        self.at_entry = (0..before)
+            .rev()
+            .find(|i| worth_pointing_at(&self.entries[*i]));
+    }
+
+    fn point_forward(&mut self) {
+        let Some(after) = self.at_entry else { return };
+        self.at_entry =
+            (after + 1..self.entries.len()).find(|i| worth_pointing_at(&self.entries[*i]));
     }
 
     /// Accumulate a piece of the model's scratchpad into one entry.
@@ -430,8 +454,8 @@ async fn run_ui(
                 .split(f.area());
 
             let mut lines: Vec<Line<'static>> = Vec::new();
-            for e in &state.entries {
-                lines.extend(e.to_lines());
+            for (i, e) in state.entries.iter().enumerate() {
+                lines.extend(e.render(state.unfolded.contains(&i), state.at_entry == Some(i)));
             }
             let inner_h = chunks[0].height as usize;
             let total = lines.len();
@@ -484,6 +508,7 @@ async fn run_ui(
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| cfg.root.display().to_string()),
                 planning: state.planning,
+                pointing: state.at_entry.is_some(),
                 context_percent: state.context_percent,
                 step: state.step,
                 max_steps: cfg.max_steps,
@@ -829,6 +854,29 @@ async fn run_ui(
                                 }
                                 continue;
                             }
+                            // Between the entries rather than between the lines: what a
+                            // person is looking for is a step, not a row.
+                            KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
+                                state.point_back();
+                                continue;
+                            }
+                            KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
+                                state.point_forward();
+                                continue;
+                            }
+                            // What was counted, shown whole, and back again.
+                            KeyCode::Char(' ') if state.at_entry.is_some() => {
+                                if let Some(i) = state.at_entry {
+                                    if !state.unfolded.remove(&i) {
+                                        state.unfolded.insert(i);
+                                    }
+                                }
+                                continue;
+                            }
+                            KeyCode::Esc if state.at_entry.is_some() && !state.busy => {
+                                state.at_entry = None;
+                                continue;
+                            }
                             KeyCode::PageUp => {
                                 state.scroll_back(state.view_height.max(1));
                                 continue;
@@ -1072,6 +1120,21 @@ fn accept_choice(input: &TextArea, picker: Option<&crate::ui::picker::Picker>) -
         '/' => format!("/{chosen}"),
         _ => format!("{}@{chosen}", &line[..at]),
     })
+}
+
+/// Whether an entry is one somebody would go looking for.
+///
+/// A question, an answer, and a step: the things a session is made of. Not the remarks
+/// between them, which are read as they go by and never sought out.
+fn worth_pointing_at(e: &Entry) -> bool {
+    matches!(
+        e,
+        Entry::User(_)
+            | Entry::Assistant(_)
+            | Entry::AssistantStreaming(_)
+            | Entry::ToolCall { .. }
+            | Entry::ToolResult { .. }
+    )
 }
 
 /// How long an answer may be before it goes on a page of its own rather than into the

@@ -9,6 +9,8 @@ pub struct Status {
     pub root: String,
     /// Shown only while planning: acting is the ordinary state and does not need saying.
     pub planning: bool,
+    /// Whether the user is looking through the conversation rather than typing into it.
+    pub pointing: bool,
     /// How much of the history budget the conversation occupies, as a percentage.
     ///
     /// Against the budget rather than the model's whole window: the budget is what
@@ -118,6 +120,9 @@ impl Status {
 
     /// The keys, on their own line, because a shortcut nobody can see is a shortcut nobody
     /// uses. Only the ones that change what happens next.
+    ///
+    /// `pointing` is true once the user has gone looking through the conversation, where
+    /// a different set of keys is in force and the ones for typing are not.
     pub fn keys(&self) -> Line<'static> {
         let key = |k: &str, what: &str| {
             vec![
@@ -141,8 +146,13 @@ impl Status {
         if self.busy {
             spans.extend(key("esc", "stop"));
             spans.extend(key("enter", "steer"));
+        } else if self.pointing {
+            spans.extend(key("alt-↑↓", "steps"));
+            spans.extend(key("space", "unfold"));
+            spans.extend(key("esc", "back"));
         } else {
             spans.extend(key("enter", "send"));
+            spans.extend(key("alt-↑", "steps"));
             spans.extend(key("/copy", "take it"));
             spans.extend(key("/help", "more"));
         }
@@ -160,6 +170,7 @@ mod tests {
             model: "qwen3:8b".into(),
             root: "/p".into(),
             planning: false,
+            pointing: false,
             context_percent: 40,
             step: 2,
             max_steps: 16,
