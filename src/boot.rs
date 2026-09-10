@@ -327,6 +327,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let agent = Agent {
         this_turn: Default::default(),
         barren: Default::default(),
+        failures: Default::default(),
         repeats: Default::default(),
         before_plan: None,
         // What this project has taught about each model, from the writes that did and did

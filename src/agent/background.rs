@@ -189,6 +189,7 @@ impl Discovery {
         let mut agent = crate::agent::agent_loop::Agent {
             this_turn: Default::default(),
             barren: Default::default(),
+            failures: Default::default(),
             repeats: Default::default(),
             before_plan: None,
             history: Default::default(),

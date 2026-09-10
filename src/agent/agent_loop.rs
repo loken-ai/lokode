@@ -238,6 +238,13 @@ fn last_is_parallel(registry: &Registry, run: &[ResolvedCall]) -> bool {
 /// sixteen.
 const BARREN_STEPS: u32 = 3;
 
+/// How many calls may fail in a turn that has changed nothing before it is given back.
+///
+/// Counted across the turn rather than in a row, because a model that gets its own
+/// arguments wrong alternates between calls that work and calls that cannot, and never
+/// fails often enough in a row to be stopped by the other rule.
+const FAILED_CALLS: u32 = 6;
+
 /// What makes two calls the same call: the tool, and the arguments it was given.
 fn repeat_key(call: &ResolvedCall) -> String {
     format!("{}\u{0}{}", call.name, call.arguments)
@@ -439,6 +446,8 @@ pub struct Agent {
     pub this_turn: TurnTally,
     /// Steps in a row where every tool call failed and nothing was written.
     pub barren: u32,
+    /// Calls that failed in this turn, however they were spread across its steps.
+    pub failures: u32,
     /// Read-only calls already answered in this turn, by tool and arguments.
     ///
     /// A model that has lost its place asks the same question again, and a run can hold
@@ -953,6 +962,7 @@ impl Agent {
         self.this_turn = TurnTally::begin();
         self.repeats.clear();
         self.barren = 0;
+        self.failures = 0;
 
         // The cap on what a policy may grant is about one piece of work, so it starts
         // again with each turn rather than running out over a session.
@@ -1297,6 +1307,7 @@ impl Agent {
                 for (call, result) in run.into_iter().zip(results) {
                     called += 1;
                     failed += usize::from(result.is_error);
+                    self.failures += u32::from(result.is_error);
                     let key = repeat_key(&call);
                     let _ = events
                         .send(AgentEvent::ToolResult {
@@ -1347,11 +1358,24 @@ impl Agent {
             let barren = self.barren;
             let tools = record.after.tools.join(", ");
             self.close_step(record);
-            if barren >= BARREN_STEPS {
+            // Two shapes of the same thing. A run of steps where nothing worked at all,
+            // and a turn that keeps failing here and there without ever changing
+            // anything: the second is what a model that corrupts its own arguments looks
+            // like, and it never trips the first.
+            let stuck = if barren >= BARREN_STEPS {
+                Some(format!("{barren} steps in a row where every call failed"))
+            } else if self.failures >= FAILED_CALLS && self.this_turn.files.is_empty() {
+                Some(format!(
+                    "{} calls failed and nothing has changed",
+                    self.failures
+                ))
+            } else {
+                None
+            };
+            if let Some(why) = stuck {
                 let _ = events
                     .send(AgentEvent::Notice(format!(
-                        "stopped: {barren} steps in a row where every call failed \
-                         (last: {tools}). Say what to do differently, or /undo."
+                        "stopped: {why} (last: {tools}). Say what to do differently."
                     )))
                     .await;
                 self.end_turn(&events).await;
@@ -2049,6 +2073,7 @@ mod tests {
         let agent = Agent {
             this_turn: Default::default(),
             barren: Default::default(),
+            failures: Default::default(),
             repeats: Default::default(),
             before_plan: None,
             history: Default::default(),
@@ -2319,6 +2344,54 @@ mod tests {
             .expect("the file was never read back");
         assert!(last.content.contains("two"), "{last:?}");
         assert!(!last.content.contains("you already ran this"), "{last:?}");
+    }
+
+    /// A model that corrupts its own arguments alternates between calls that work and
+    /// calls that cannot, so it never fails enough times in a row to be stopped by the
+    /// consecutive rule. What it never does is change anything.
+    #[tokio::test]
+    async fn a_turn_that_keeps_failing_and_changes_nothing_is_given_back() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one");
+        let miss = || {
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"read_file","arguments":"{\"path\": \"nope.rs\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ])
+        };
+        let hit = || {
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ])
+        };
+        // Alternating, so no three steps in a row are all failures.
+        let backend = fake_backend(vec![
+            miss(),
+            hit(),
+            miss(),
+            hit(),
+            miss(),
+            hit(),
+            miss(),
+            hit(),
+            miss(),
+            hit(),
+            miss(),
+            hit(),
+            miss(),
+            hit(),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.cfg.max_steps = 16;
+        let events = drive(&mut agent, "find it").await;
+
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::Notice(n)
+                if n.contains("nothing has changed"))),
+            "the turn ran to the step limit"
+        );
     }
 
     /// A model repeating a broken idea costs a full context read per step. Three steps
