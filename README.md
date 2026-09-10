@@ -277,6 +277,10 @@ another machine. The cap is per turn: a standing agreement is for the work a per
 expects, and a loop calling a tool a thousand times is not that work. `/approve` says what
 is in force.
 
+A run driven by a script does not take the file's word for what may go ahead: the policy on
+its command line is the narrower statement and the one its author made for that run. The
+file's refusals still apply, because nothing may widen one.
+
 ## Planning before acting
 
 `/plan` puts the agent in a mode where every tool that writes, runs a command or reaches

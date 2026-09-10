@@ -64,6 +64,7 @@ impl Harness {
         let ctx = ToolCtx {
             policy: Arc::new(Default::default()),
             auto_used: Arc::new(Default::default()),
+            honour_allow: true,
             root: root.clone(),
             approval: tx,
             session_approvals: Arc::new(SessionApprovals::new()),

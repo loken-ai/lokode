@@ -20,6 +20,12 @@ pub struct ToolCtx {
     /// Requests the policy has granted this turn. Reset when a turn starts, because a cap
     /// is about one piece of work rather than about a session.
     pub auto_used: Arc<AtomicUsize>,
+    /// Whether the configuration's allow list applies.
+    ///
+    /// False for a run driven by a script, where the policy stated on the command line is
+    /// the narrower statement and the one its author made for that run. A refusal in the
+    /// configuration still applies either way: nothing may widen one.
+    pub honour_allow: bool,
     pub root: PathBuf,
     pub approval: ApprovalSender,
     pub session_approvals: Arc<SessionApprovals>,
@@ -81,11 +87,12 @@ impl ToolCtx {
                 tracing::info!(tool = %req.tool, scope = ?req.scope, %why, "refused by policy");
                 return Approval::Denied;
             }
-            crate::sandbox::policy::Verdict::Allowed => {
+            crate::sandbox::policy::Verdict::Allowed if self.honour_allow => {
                 self.auto_used.fetch_add(1, Ordering::Relaxed);
                 tracing::info!(tool = %req.tool, scope = ?req.scope, "allowed by policy");
                 return Approval::Proceed;
             }
+            crate::sandbox::policy::Verdict::Allowed => {}
             crate::sandbox::policy::Verdict::Ask => {}
         }
         if self.session_approvals.is_always(&req.scope).await {

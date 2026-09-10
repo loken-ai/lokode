@@ -294,6 +294,35 @@ mod through_the_context {
         }
     }
 
+    /// A run driven by a script does not take the configuration's word for what may go
+    /// ahead: the policy stated on its command line is the narrower statement, and the
+    /// one its author made for that run. A refusal still holds, because nothing may
+    /// widen one.
+    #[tokio::test]
+    async fn a_script_does_not_inherit_the_configuration_s_agreements() {
+        let h = Harness::new(Answer::No);
+        let mut ctx = h.ctx.clone();
+        ctx.honour_allow = false;
+        ctx.policy = Arc::new(Policy {
+            allow: Rules {
+                bash: vec!["cargo test*".into()],
+                ..Default::default()
+            },
+            deny: Rules {
+                bash: vec!["*rm -rf*".into()],
+                ..Default::default()
+            },
+            max_auto: 50,
+        });
+        // The allow list does not apply, so the question is put to the run's own policy,
+        // which here says no.
+        assert_eq!(ctx.approve(request("cargo test")).await, Approval::Denied);
+        assert_eq!(h.asked().len(), 1);
+        // The refusal still answers on its own.
+        assert_eq!(ctx.approve(request("rm -rf /")).await, Approval::Denied);
+        assert_eq!(h.asked().len(), 1);
+    }
+
     /// What the policy settles never reaches the modal, and what it refuses never reaches
     /// the tool. The harness answers yes to everything, so a denial here can only have
     /// come from the policy.

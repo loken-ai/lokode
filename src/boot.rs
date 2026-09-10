@@ -75,6 +75,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let mut ctx = ToolCtx {
         policy: Arc::new(cfg.policy.clone()),
         auto_used: auto_used.clone(),
+        honour_allow: !cfg.headless,
         root: cfg.root.clone(),
         approval: approval_tx,
         session_approvals: Arc::new(SessionApprovals::new()),
