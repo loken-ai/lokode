@@ -209,6 +209,8 @@ pub async fn run(
             }
             // What the backend turned out to do, which changes how the turn was run and
             // belongs with the rest of what the run has to say for itself.
+            // A number for a status line nobody is watching.
+            AgentEvent::Window(_) => {}
             AgentEvent::Protocol(protocol) => {
                 report
                     .notices

@@ -610,6 +610,7 @@ async fn run_ui(
                             protocol.label()
                         )));
                     }
+                    AgentEvent::Window(percent) => state.context_percent = percent,
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
                     AgentEvent::TurnDone => {
                         // Asked once a turn is over, which is when the conversation has

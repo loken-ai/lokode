@@ -144,6 +144,8 @@ pub enum AgentEvent {
     Steered(String),
     /// How tool calls travel, once something has found out what the backend does.
     Protocol(ToolProtocol),
+    /// How full the window is, as of this step.
+    Window(u8),
     TurnDone,
 }
 
@@ -1038,6 +1040,11 @@ impl Agent {
                 },
                 after: Default::default(),
             };
+            // Sent every step rather than at the end of the turn: a window filling up is
+            // something to see while there is still time to compact, not afterwards.
+            let _ = events
+                .send(AgentEvent::Window(self.session.fullness_percent()))
+                .await;
             let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
             let asked_at = std::time::Instant::now();
             let mut attempt = self.stream_one(&turn_schema, &cancel, &events).await;
