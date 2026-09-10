@@ -42,6 +42,13 @@ const SMOOTHING: f64 = 0.3;
 
 /// Note left in place of what was dropped, so the model can tell that the conversation
 /// it can see is not the whole of it.
+/// Messages at the end of the history that are never dropped.
+///
+/// A turn that cannot see the step it just took cannot carry on from it: it re-reads what
+/// it read, or answers about something it can no longer see. Four is the last call, its
+/// result, and the exchange before them.
+const KEEP_RECENT: usize = 4;
+
 const ELISION: &str = "[earlier steps of this session were elided to fit the context window]";
 
 /// Conversation state for a single TUI session.
@@ -285,8 +292,8 @@ impl Session {
         }
         let target = (self.budget_chars as f64 * COMPACT_TO) as usize;
         let mut dropped = 0;
-        // Everything from index 1 on is fair game; stop while a user turn remains, so
-        // the conversation the model reads still opens on somebody asking for something.
+        // Whole turns first: the conversation the model reads still opens on somebody
+        // asking for something.
         while self.size_chars() > target {
             let Some(next) = self.next_user_boundary() else {
                 break;
@@ -296,11 +303,54 @@ impl Session {
             }
             self.history.drain(1..next);
             dropped += next - 1;
-            if self.history.get(1).map(|m| m.content.as_str()) != Some(ELISION) {
-                self.history.insert(1, Message::user(ELISION));
-            }
+            self.mark_elision();
+        }
+        // Then the steps of the turn still running. One long turn has no second user
+        // message to cut at, so this used to have nothing it was allowed to drop: the
+        // history grew past the budget and stayed there, every request went out too big,
+        // and the figure on the status bar climbed until it hit its own ceiling.
+        if self.size_chars() > target {
+            dropped += self.drop_oldest_steps();
         }
         dropped
+    }
+
+    /// Drop the oldest steps of the turn in one cut, keeping the ask and the last few.
+    ///
+    /// One cut rather than a loop: a turn that has blown the budget is not going to be
+    /// saved by shedding a message at a time, and a loop that has to leave the history
+    /// well formed after every pass is a loop that can fail to make progress.
+    ///
+    /// A tool result whose call has gone is a reply to nothing, which some backends refuse
+    /// outright, so the cut lands where the next message is not one.
+    fn drop_oldest_steps(&mut self) -> usize {
+        // Index 0 is the contract and index 1 is what was asked; neither can go, and the
+        // last few steps are what the turn is carrying on from.
+        const KEEP_FIRST: usize = 2;
+        let keep_from = self.history.len().saturating_sub(KEEP_RECENT);
+        if keep_from <= KEEP_FIRST {
+            return 0;
+        }
+        let mut cut = keep_from;
+        while cut < self.history.len() && self.history[cut].role == "tool" {
+            cut += 1;
+        }
+        if cut <= KEEP_FIRST {
+            return 0;
+        }
+        let dropped = cut - KEEP_FIRST;
+        self.history.drain(KEEP_FIRST..cut);
+        if self.history.get(KEEP_FIRST).map(|m| m.content.as_str()) != Some(ELISION) {
+            self.history.insert(KEEP_FIRST, Message::user(ELISION));
+        }
+        dropped
+    }
+
+    /// Say once, where the cut was made, that something was cut.
+    fn mark_elision(&mut self) {
+        if self.history.get(1).map(|m| m.content.as_str()) != Some(ELISION) {
+            self.history.insert(1, Message::user(ELISION));
+        }
     }
 
     /// Index of the second retained user message, i.e. where the history would resume
@@ -315,6 +365,51 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One long turn has no second user message to cut at. It used to have nothing that
+    /// could be dropped, so the history grew past the budget and stayed there.
+    #[test]
+    fn a_single_long_turn_can_still_be_cut_back() {
+        let mut s = Session::new("system".into(), 2048, 1024);
+        s.push(Message::user("do the thing"));
+        for i in 0..40 {
+            s.push(Message::assistant(format!("step {i}")));
+            s.push(Message::tool("x".repeat(400), format!("c{i}")));
+        }
+        let before = s.size_chars();
+        assert!(
+            before > s.budget_chars(),
+            "the test has to start over budget"
+        );
+
+        let dropped = s.compact();
+        assert!(dropped > 0, "nothing was dropped");
+        assert!(
+            s.size_chars() <= s.budget_chars(),
+            "still over: {} > {}",
+            s.size_chars(),
+            s.budget_chars()
+        );
+        // The system message and the last steps survive, and the cut is said once.
+        assert_eq!(s.history.first().map(|m| m.role.as_str()), Some("system"));
+        assert_eq!(s.history.get(2).map(|m| m.content.as_str()), Some(ELISION));
+        assert!(s.history.len() >= KEEP_RECENT);
+    }
+
+    /// A tool result whose call has been dropped is a reply to nothing, which some
+    /// backends refuse outright.
+    #[test]
+    fn a_cut_never_leaves_a_reply_to_nothing() {
+        let mut s = Session::new("system".into(), 2048, 1024);
+        s.push(Message::user("do the thing"));
+        for i in 0..40 {
+            s.push(Message::assistant(format!("step {i}")));
+            s.push(Message::tool("x".repeat(400), format!("c{i}")));
+        }
+        s.compact();
+        // What follows the marker must not be a reply to a call that has gone.
+        assert_ne!(s.history.get(3).map(|m| m.role.as_str()), Some("tool"));
+    }
 
     /// Asking again means asking from where it was asked, not asking a model that has
     /// already read its own failed attempt.
