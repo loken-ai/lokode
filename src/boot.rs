@@ -61,7 +61,13 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // Third-party tools go in after the built-ins, so a server cannot take a name the agent
     // already relies on.
     let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root).await;
+    // What a delegated turn gets: everything this session has except the delegation
+    // itself. A sub-session that could delegate again would recurse, and one that could
+    // not read the project could answer nothing about it.
+    let registry_for_delegation = Arc::new(registry.clone());
     let registry = Arc::new(registry);
+    // Registered last, because it hands work to a session built like this one. The
+    // delegation is added to the shared registry below, once the backend is known.
     let (approval_tx, approval_rx) = approval::channel();
     let shutdown = CancellationToken::new();
 
@@ -226,6 +232,25 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         rows.sort();
         rows
     };
+    // A turn of its own, with its own window, for a question whose search would
+    // otherwise fill this one. The sub-session takes the same tools minus this one.
+    let mut registry = Arc::try_unwrap(registry).unwrap_or_else(|shared| (*shared).clone());
+    registry.register(crate::tools::delegate::Delegate {
+        what: Arc::new(crate::tools::delegate::Delegation {
+            backend: backend.clone(),
+            registry: registry_for_delegation,
+            model: model.clone(),
+            context_tokens,
+            max_answer_tokens,
+            protocol,
+            grammar_enabled: cfg.grammar_enabled,
+            // More than this and the work was not self-contained, which is worth saying
+            // rather than waiting through.
+            max_steps: cfg.max_steps.min(8),
+        }),
+    });
+    let registry = Arc::new(registry);
+
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
         spend: Default::default(),
@@ -253,6 +278,10 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         turn: 0,
     };
 
+    // Registered after the rest: it hands work to a session built the same way, so it
+    // needs what this one was built from. The registry is shared, and the sub-session is
+    // given the same tools, this one included - a delegated turn that delegates again is
+    // bounded by its own step limit.
     Ok(Booted {
         agent,
         lsp,

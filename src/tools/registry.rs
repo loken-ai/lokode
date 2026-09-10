@@ -173,6 +173,7 @@ pub trait Tool: Send + Sync {
     async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput>;
 }
 
+#[derive(Clone)]
 pub struct Registry {
     tools: HashMap<String, Arc<dyn Tool>>,
 }

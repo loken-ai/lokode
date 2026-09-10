@@ -1,4 +1,5 @@
 pub mod bash;
+pub mod delegate;
 pub mod fs_read;
 pub mod fs_write;
 #[cfg(test)]

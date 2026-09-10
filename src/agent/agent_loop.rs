@@ -1329,6 +1329,77 @@ mod tests {
         out
     }
 
+    /// A delegated question runs in a session of its own and brings back only what it
+    /// said: the caller's window holds the answer, not the search that found it.
+    #[tokio::test]
+    async fn a_delegated_question_returns_its_answer_and_not_its_search() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "the answer is forty two");
+        let backend = fake_backend(vec![
+            // The caller delegates.
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"delegate","arguments":"{\"task\": \"what does a.txt say\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            // The sub-session reads the file.
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"s1","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            // The sub-session answers.
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"it says forty two"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            // The caller answers.
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"forty two"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+
+        let mut reg = crate::boot::build_registry(h.root.clone()).0;
+        let sub = Arc::new(reg.clone());
+        reg.register(crate::tools::delegate::Delegate {
+            what: Arc::new(crate::tools::delegate::Delegation {
+                backend: Arc::new(crate::backend::client::BackendClient::new(
+                    backend.url.clone(),
+                )),
+                registry: sub,
+                model: "test".into(),
+                context_tokens: 8192,
+                max_answer_tokens: 4096,
+                protocol: ToolProtocol::Native,
+                grammar_enabled: false,
+                max_steps: 4,
+            }),
+        });
+        let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+        let events = drive(&mut agent, "what does a.txt say").await;
+
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output } if name == "delegate" => Some(output),
+                _ => None,
+            })
+            .expect("the delegation was never answered");
+        assert!(!result.is_error, "{result:?}");
+        assert_eq!(result.content, "it says forty two");
+        // What the sub-session read is not in the caller's conversation.
+        let history: String = agent
+            .session
+            .history
+            .iter()
+            .map(|m| m.content.clone())
+            .collect();
+        assert!(
+            !history.contains("the answer is forty two"),
+            "the search came back with the answer"
+        );
+    }
+
     /// A pre-tool hook that refuses stops the call, and what it printed is what the model
     /// is told: guidance an agent cannot skip, which is the only kind that holds.
     #[tokio::test]

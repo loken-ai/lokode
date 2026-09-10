@@ -163,6 +163,19 @@ The exit code says what happened without anything having to be parsed: `0` finis
 something failed - a backend error, or the step limit - and `2` a tool was refused by the
 policy, which is a different thing from the model deciding not to use one.
 
+## Handing off a search
+
+`delegate` gives one self-contained question a session of its own, with its own window and
+the same tools, and brings back only what it answered. A search that reads six files to
+settle one question otherwise spends the conversation's budget on text nobody needs
+afterwards, and once compaction drops it what is left is the middle of a hunt with no
+beginning.
+
+The sub-session cannot delegate again, and its step limit is lower than a turn's: work that
+needs more than a few steps was not self-contained, and saying so is more use than waiting
+through it. It runs under the caller's approvals and the caller's cancellation, because it
+is the same person's work.
+
 ## Work of several steps
 
 `update_plan` is a tool the model calls to keep a task list: what is done, what is being
