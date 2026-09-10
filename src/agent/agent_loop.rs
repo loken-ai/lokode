@@ -1621,9 +1621,8 @@ impl Agent {
                 })
             }
             ToolProtocol::Envelope => {
-                let _ = events.send(AgentEvent::Phase(Phase::Repairing)).await;
                 let envelope = self
-                    .parse_with_repair(&completion.text, schema, validator, cancel)
+                    .parse_with_repair(&completion.text, schema, validator, cancel, events)
                     .await?;
                 Ok(ModelTurn {
                     text: envelope.assistant_text,
@@ -1775,12 +1774,18 @@ impl Agent {
         Ok(out)
     }
 
+    /// Parse the envelope, asking the model to reshape it only when it will not parse.
+    ///
+    /// The phase is announced from here rather than before the call: said unconditionally,
+    /// it appeared on every step of every turn, and a screen that says "repairing" when
+    /// nothing is wrong teaches its reader to ignore it.
     async fn parse_with_repair(
         &mut self,
         raw: &str,
         schema: &Value,
         validator: &Validator,
         cancel: &CancellationToken,
+        events: &mpsc::Sender<AgentEvent>,
     ) -> Result<TurnEnvelope> {
         // Layer 2: tolerant parse + schema validate.
         let mut last_err: anyhow::Error;
@@ -1808,6 +1813,7 @@ impl Agent {
             }
 
             // Layer 3: repair round-trip (non-streaming for snappiness).
+            let _ = events.send(AgentEvent::Phase(Phase::Repairing)).await;
             tracing::warn!(
                 attempt = attempt + 1,
                 max = MAX_REPAIR_ATTEMPTS,
