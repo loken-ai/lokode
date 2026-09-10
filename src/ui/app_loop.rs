@@ -189,6 +189,9 @@ struct UiState {
     context_percent: u8,
     /// The task list as it was last drawn.
     tasks: Vec<crate::tools::plan::Task>,
+    /// The model answering now. It changes under the interface - by a command, by the
+    /// mode, by a check that failed - so it is asked for rather than assumed.
+    model: String,
     /// Abandons the turn in flight. `None` between turns.
     turn_cancel: Option<CancellationToken>,
     /// What the chat pane last drew, so scrolling can be bounded by what exists.
@@ -304,6 +307,7 @@ async fn run_ui(
 ) -> Result<()> {
     let mut state = UiState {
         planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
+        model: model.to_string(),
         ..Default::default()
     };
     state.entries.push(Entry::Notice(format!(
@@ -378,7 +382,7 @@ async fn run_ui(
             f.render_widget(&input, chunks[1]);
 
             let status = Status {
-                model: model.to_string(),
+                model: state.model.clone(),
                 root: cfg.root.display().to_string(),
                 session: session_id.clone(),
                 grammar: cfg.grammar_enabled,
@@ -470,16 +474,7 @@ async fn run_ui(
                     AgentEvent::TurnDone => {
                         // Asked once a turn is over, which is when the conversation has
                         // changed and the agent is free to answer.
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        if control_tx
-                            .send(crate::agent::agent_loop::Control::Fullness { reply: tx })
-                            .await
-                            .is_ok()
-                        {
-                            if let Ok(percent) = rx.await {
-                                state.context_percent = percent;
-                            }
-                        }
+                        refresh_status(&control_tx, &mut state).await;
                         state.busy = false;
                         state.step = 0;
                         state.phase = None;
@@ -593,6 +588,7 @@ async fn run_ui(
                                                 state.planning = false;
                                             }
                                             state.entries.push(Entry::Notice(reply));
+                                            refresh_status(&control_tx, &mut state).await;
                                             continue;
                                         }
                                         // A command the project defines is a way of
@@ -650,6 +646,28 @@ fn is_quit(k: &KeyEvent) -> bool {
 /// These do not reach the model and do not become part of the conversation: they are things
 /// the user is asking of the tool about the session, and putting them in the transcript
 /// would describe a turn that never happened.
+/// Ask the agent what it is on and how full the window is.
+///
+/// Both move under the interface, and both are drawn every frame, so they are read back
+/// at the moments they can have changed rather than watched.
+async fn refresh_status(
+    control: &mpsc::Sender<crate::agent::agent_loop::Control>,
+    state: &mut UiState,
+) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if control
+        .send(crate::agent::agent_loop::Control::Status { reply: tx })
+        .await
+        .is_err()
+    {
+        return;
+    }
+    if let Ok((model, percent)) = rx.await {
+        state.model = model;
+        state.context_percent = percent;
+    }
+}
+
 /// What the servers are and what they offer, for `/mcp`.
 fn booted_summary(mcp: &crate::mcp::Loaded) -> String {
     if mcp.clients.is_empty() {

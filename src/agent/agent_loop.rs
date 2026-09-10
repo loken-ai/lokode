@@ -104,9 +104,11 @@ pub enum Control {
     Compact {
         reply: tokio::sync::oneshot::Sender<String>,
     },
-    /// How full the window is, asked for the status line rather than for a person.
-    Fullness {
-        reply: tokio::sync::oneshot::Sender<u8>,
+    /// What the status line has to show and cannot know: the model answering now, and how
+    /// full the window is. Both can change under it - by a command, by the mode, by a
+    /// failed check - so it asks rather than remembering what it was told at startup.
+    Status {
+        reply: tokio::sync::oneshot::Sender<(String, u8)>,
     },
     /// What the session has spent.
     Spend {
@@ -274,6 +276,8 @@ impl Spend {
 }
 
 pub struct Agent {
+    /// The model the session was on when planning began, to be given back on leaving it.
+    pub before_plan: Option<String>,
     /// What each model has managed in this project, learned from the writes that did and
     /// did not check out.
     pub history: crate::agent::history::ModelHistory,
@@ -433,7 +437,25 @@ impl Agent {
                 self.preload(&next);
             }
         }
-        let switched = match self.cfg.roles.get(role) {
+        // Leaving planning gives back the model planning was entered from, whether or not
+        // a chat role names one: a mode that borrows a model has to return it, or the
+        // session quietly finishes the day on the model it planned with.
+        let target = match mode {
+            Mode::Act => self
+                .cfg
+                .roles
+                .get(role)
+                .map(str::to_string)
+                .or_else(|| self.before_plan.take()),
+            Mode::Plan => {
+                let plan_model = self.cfg.roles.get(role).map(str::to_string);
+                if plan_model.is_some() {
+                    self.before_plan = Some(self.cfg.model.clone());
+                }
+                plan_model
+            }
+        };
+        let switched = match target {
             Some(named) if named != self.cfg.model => {
                 let to = named.to_string();
                 let from = std::mem::replace(&mut self.cfg.model, to.clone());
@@ -535,8 +557,8 @@ impl Agent {
                     )
                 });
             }
-            Control::Fullness { reply } => {
-                let _ = reply.send(self.session.fullness_percent());
+            Control::Status { reply } => {
+                let _ = reply.send((self.cfg.model.clone(), self.session.fullness_percent()));
             }
             Control::Why { reply } => {
                 let _ = reply.send(self.explain_choice());
@@ -1644,6 +1666,7 @@ mod tests {
         let registry = Arc::new(reg);
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
+            before_plan: None,
             history: Default::default(),
             escalated_from: None,
             clean_steps: 0,
@@ -2317,6 +2340,22 @@ mod tests {
         agent.reconsider_model(&step(Some(true)), &tx).await;
         assert_eq!(agent.cfg.model, "small");
         assert!(agent.escalated_from.is_none());
+    }
+
+    /// A mode that borrows a model gives it back. Without this a session that planned
+    /// once would finish the day on the planning model, which is the expensive one.
+    #[tokio::test]
+    async fn leaving_planning_gives_back_the_model_it_borrowed() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![]).await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        agent.cfg.model = "working".into();
+        agent.cfg.roles.plan = Some("thinking".into());
+
+        agent.set_mode(Mode::Plan);
+        assert_eq!(agent.cfg.model, "thinking");
+        agent.set_mode(Mode::Act);
+        assert_eq!(agent.cfg.model, "working");
     }
 
     /// What the project taught is applied once, at the start of a turn, so a session does

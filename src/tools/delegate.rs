@@ -92,6 +92,7 @@ impl Tool for Delegate {
             ),
         );
         let mut sub = crate::agent::agent_loop::Agent {
+            before_plan: None,
             history: Default::default(),
             escalated_from: None,
             clean_steps: 0,

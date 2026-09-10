@@ -317,9 +317,10 @@ repair = "qwen3:0.6b"           # reshaping a reply, nothing to reason about
 Three of these are in force today. The repair round trip takes the repair model, since a
 malformed reply has to be reshaped rather than thought about. A delegated question takes
 the search model, which is the safest routing decision there is: a wrong choice costs one
-sub-turn, not the conversation. And `/plan` moves to the plan model and `/act` back to the
-chat one, saying so, because a model that changed without anyone announcing it makes the
-next answer's character unexplainable.
+sub-turn, not the conversation. And `/plan` moves to the plan model and `/act` gives it
+back, saying so, because a model that changed without anyone announcing it makes the next
+answer's character unexplainable. The status line shows the model answering now, which is
+not always the one the session started with.
 
 `escalate` is the model to raise to when the cheap path has been shown to be wrong. After a
 write the language server is asked about the file, and a step whose change did not check
