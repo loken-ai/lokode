@@ -1,4 +1,5 @@
 pub mod agent_loop;
+pub mod history;
 pub mod hooks;
 pub mod protocol;
 pub mod roles;

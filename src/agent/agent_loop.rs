@@ -112,6 +112,10 @@ pub enum Control {
     Spend {
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// Why this model is the one answering.
+    Why {
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
 }
 
 /// Events the agent loop emits so the UI can render progress.
@@ -270,6 +274,9 @@ impl Spend {
 }
 
 pub struct Agent {
+    /// What each model has managed in this project, learned from the writes that did and
+    /// did not check out.
+    pub history: crate::agent::history::ModelHistory,
     /// The model this session was on before a failed check raised it, and how many clean
     /// steps have passed since. `None` when nothing has been raised.
     pub escalated_from: Option<String>,
@@ -531,6 +538,9 @@ impl Agent {
             Control::Fullness { reply } => {
                 let _ = reply.send(self.session.fullness_percent());
             }
+            Control::Why { reply } => {
+                let _ = reply.send(self.explain_choice());
+            }
             Control::Spend { reply } => {
                 // The totals, then the last few steps: a session's cost is a sum, and
                 // where it went is a list.
@@ -549,6 +559,27 @@ impl Agent {
                 let _ = reply.send(out.join("\n"));
             }
         }
+    }
+
+    /// Why this model is the one answering.
+    fn explain_choice(&self) -> String {
+        let mut lines = vec![format!("on {}", self.cfg.model)];
+        if let Some(from) = &self.escalated_from {
+            lines.push(format!(
+                "raised from {from}, back down after two writes that check out"
+            ));
+        }
+        if !self.cfg.roles.is_empty() {
+            lines.push("by kind of work:".to_string());
+            for (role, model) in self.cfg.roles.named() {
+                lines.push(format!("  {role}: {model}"));
+            }
+        }
+        lines.push(format!(
+            "what this project has shown:\n{}",
+            self.history.describe()
+        ));
+        lines.join("\n")
     }
 
     /// What the project says each kind of work should use.
@@ -660,6 +691,32 @@ impl Agent {
         cancel: CancellationToken,
         events: mpsc::Sender<AgentEvent>,
     ) -> Result<()> {
+        // What this project taught, applied once, at the start. The ladder reacts to a
+        // change that has already failed to compile, which costs a bad step every time;
+        // the memory of those steps is what lets a turn start where the last one ended.
+        if let Some(stronger) = self
+            .cfg
+            .roles
+            .get(crate::agent::roles::Role::Escalate)
+            .map(str::to_string)
+        {
+            if self.cfg.mode == Mode::Act
+                && stronger != self.cfg.model
+                && self.history.should_avoid(&self.cfg.model) == Some(true)
+                && self.history.should_avoid(&stronger) != Some(true)
+            {
+                let from = std::mem::replace(&mut self.cfg.model, stronger.clone());
+                self.forget_model_calibration(&stronger);
+                self.escalated_from = Some(from.clone());
+                tracing::info!(from = %from, to = %stronger, "started raised on what this project taught");
+                let _ = events
+                    .send(AgentEvent::Notice(format!(
+                        "{from} has been failing its writes here, so this turn starts on {stronger}"
+                    )))
+                    .await;
+            }
+        }
+
         // The cap on what a policy may grant is about one piece of work, so it starts
         // again with each turn rather than running out over a session.
         self.ctx
@@ -1039,6 +1096,11 @@ impl Agent {
 
     /// Keep one step's measurement, and write it where a later session can read it.
     fn close_step(&mut self, record: crate::agent::steps::StepRecord) {
+        // A write that did or did not check out is the only thing here worth remembering
+        // past the session: it is the evidence the next one starts from.
+        if let Some(passed) = record.after.check_passed {
+            self.history.record(&record.model, passed);
+        }
         tracing::info!(
             turn = record.turn,
             step = record.before.step,
@@ -1087,6 +1149,10 @@ impl Agent {
     /// over, so there is nothing left for the model to do about it, and the person is the
     /// one who has to read that the formatter rewrote three files.
     async fn end_turn(&self, events: &mpsc::Sender<AgentEvent>) {
+        // Written at the end of a turn rather than after every step: losing it costs a
+        // memory, not a session, and a turn is the unit a person would call a piece of
+        // work anyway.
+        self.history.save();
         if let Some(hook) = self.cfg.hooks.turn_end.clone() {
             let ran = crate::agent::hooks::run(&hook, &self.ctx.root, "", "turn-end").await;
             if !ran.output.is_empty() {
@@ -1578,6 +1644,7 @@ mod tests {
         let registry = Arc::new(reg);
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
+            history: Default::default(),
             escalated_from: None,
             clean_steps: 0,
             warming: Default::default(),
@@ -2250,6 +2317,36 @@ mod tests {
         agent.reconsider_model(&step(Some(true)), &tx).await;
         assert_eq!(agent.cfg.model, "small");
         assert!(agent.escalated_from.is_none());
+    }
+
+    /// What the project taught is applied once, at the start of a turn, so a session does
+    /// not pay again for the bad step the last one already paid for.
+    #[tokio::test]
+    async fn a_turn_starts_raised_when_the_cheap_model_keeps_failing_here() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![sse(&[
+            r#"{"choices":[{"delta":{"content":"ok"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ])])
+        .await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        agent.cfg.model = "small".into();
+        agent.cfg.roles.escalate = Some("big".into());
+        for _ in 0..4 {
+            agent.history.record("small", false);
+        }
+
+        let events = drive(&mut agent, "change something").await;
+        assert_eq!(agent.cfg.model, "big");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                AgentEvent::Notice(s) if s.contains("failing its writes here")
+            )),
+            "the turn did not say why it started where it did: {events:?}"
+        );
+        // What it was raised from is remembered, so two clean writes bring it back.
+        assert_eq!(agent.escalated_from.as_deref(), Some("small"));
     }
 
     /// One rung. A second failure while already raised does not look for a third model,

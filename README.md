@@ -327,6 +327,14 @@ out raises the session to that model for the steps that follow, saying so. Two w
 do check out bring it back down. A step that only read something moves nothing either way,
 because a search says nothing about whether a model can produce a change that compiles.
 
+What each model has managed here is remembered between sessions: how many of its writes
+checked out, per model, per project, kept beside the state on this machine and never in the
+repository. When the cheap model has been failing most of its writes in a project, the next
+turn starts on the stronger one and says so, instead of paying again for the bad step the
+last session already paid for. Four writes before it is allowed to decide anything, and only
+the last fifty are remembered, because a project changes. `/why` says what is in force and
+what the evidence is.
+
 That signal is the difference between this and a router in a chat window. A chat router can
 only ask a model how confident it feels; a coding agent can compile. So the cheap model is
 tried first and the expensive one is paid for where it has been shown to be needed, rather

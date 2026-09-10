@@ -719,6 +719,20 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         };
         return Ran::Prompt(text);
     }
+    if verb == "why" {
+        if busy {
+            return Ran::Said("the agent is working; ask again when the turn is over".into());
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if control
+            .send(crate::agent::agent_loop::Control::Why { reply: tx })
+            .await
+            .is_err()
+        {
+            return Ran::Said("the agent is not listening".into());
+        }
+        return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
+    }
     if verb == "cost" {
         if busy {
             return Ran::Said("the agent is working; ask again when the turn is over".into());
@@ -874,6 +888,7 @@ fn help(root: &std::path::Path) -> String {
 }
 
 const HELP: &str = "\
+/why    why this model is the one answering
 /cost   what this session has spent, in tokens and time
 /context how full the window is, and what is holding it
 /compact elide the oldest steps now rather than when it fills

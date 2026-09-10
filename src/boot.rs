@@ -261,6 +261,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
 
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
+        // What this project has taught about each model, from the writes that did and did
+        // not check out. Kept on this machine, beside the state, never in the repository.
+        history: crate::agent::history::ModelHistory::open(crate::paths::state_dir(), &cfg.root),
         escalated_from: None,
         clean_steps: 0,
         warming: Default::default(),
