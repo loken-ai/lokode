@@ -60,6 +60,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         mcp,
         steer,
         tools,
+        tasks,
     } = boot::boot(&cfg).await?;
 
     // Channels:
@@ -118,6 +119,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         control_tx,
         steer,
         tools,
+        tasks,
         &mut agent_evt_rx,
         &mut approval_rx,
     )
@@ -180,6 +182,8 @@ struct UiState {
     /// How full the window was when it was last asked, which is at the end of a turn:
     /// the figure only moves when the conversation does.
     context_percent: u8,
+    /// The task list as it was last drawn.
+    tasks: Vec<crate::tools::plan::Task>,
     /// Abandons the turn in flight. `None` between turns.
     turn_cancel: Option<CancellationToken>,
     /// What the chat pane last drew, so scrolling can be bounded by what exists.
@@ -283,6 +287,8 @@ async fn run_ui(
     steer: mpsc::Sender<String>,
     // What this session can call, for /tools.
     tools: Vec<String>,
+    // The task list the model keeps, drawn while it has anything in it.
+    tasks: std::sync::Arc<crate::tools::plan::TaskList>,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
 ) -> Result<()> {
@@ -434,6 +440,11 @@ async fn run_ui(
                         state.entries.push(Entry::ToolCall { name, args: args_pretty });
                     }
                     AgentEvent::ToolResult { name, output } => {
+                        // The list is the model's, so it is read back after the call that
+                        // may have changed it rather than kept in step by hand.
+                        if name == "update_plan" {
+                            state.tasks = tasks.get().await;
+                        }
                         state.entries.push(Entry::ToolResult {
                             name,
                             is_error: output.is_error,

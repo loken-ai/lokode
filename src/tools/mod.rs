@@ -4,6 +4,7 @@ pub mod fs_write;
 #[cfg(test)]
 pub mod harness;
 pub mod lsp;
+pub mod plan;
 pub mod registry;
 pub mod run_tests;
 pub mod search;

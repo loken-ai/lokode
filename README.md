@@ -163,6 +163,17 @@ The exit code says what happened without anything having to be parsed: `0` finis
 something failed - a backend error, or the step limit - and `2` a tool was refused by the
 policy, which is a different thing from the model deciding not to use one.
 
+## Work of several steps
+
+`update_plan` is a tool the model calls to keep a task list: what is done, what is being
+worked on, what is left. It appears as a pane above the input while there is a list, and
+disappears when there is not. Nothing is written to disk and nothing is approved, since it
+changes nothing outside the session.
+
+It is for the person first: a step counter says how far a turn has gone and nothing about
+what it is doing. It helps a small model too, whose window drops the oldest messages first
+and with them the goal it was given.
+
 ## Changing a file
 
 `write_file` replaces a file, `edit_file` replaces one unique substring, `edit_lines`

@@ -51,10 +51,13 @@ pub struct Booted {
     pub steer: tokio::sync::mpsc::Sender<String>,
     /// Every tool this session can call, named and described, built-ins and the servers'.
     pub tools: Vec<String>,
+    /// The task list the model keeps, for the interface to draw.
+    pub tasks: Arc<crate::tools::plan::TaskList>,
 }
 
 pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
-    let (mut registry, lsp) = build_registry(cfg.root.clone());
+    let tasks = Arc::new(crate::tools::plan::TaskList::default());
+    let ((mut registry, lsp), _) = build_registry_with(cfg.root.clone(), tasks.clone());
     // Third-party tools go in after the built-ins, so a server cannot take a name the agent
     // already relies on.
     let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root).await;
@@ -266,6 +269,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         mcp,
         steer: steer_tx,
         tools,
+        tasks,
     })
 }
 
@@ -304,6 +308,14 @@ fn provider_for(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Pro
 
 /// The twelve tools, and the language-server pool two of them share.
 pub fn build_registry(root: PathBuf) -> (Registry, Arc<LspPool>) {
+    build_registry_with(root, Arc::new(crate::tools::plan::TaskList::default())).0
+}
+
+/// [`build_registry`], keeping the task list the interface has to draw.
+pub fn build_registry_with(
+    root: PathBuf,
+    tasks: Arc<crate::tools::plan::TaskList>,
+) -> ((Registry, Arc<LspPool>), Arc<crate::tools::plan::TaskList>) {
     use crate::tools::{
         bash::Bash,
         fs_read::{Glob, ListDir, ReadFile},
@@ -322,6 +334,9 @@ pub fn build_registry(root: PathBuf) -> (Registry, Arc<LspPool>) {
     reg.register(WriteFile);
     reg.register(EditFile);
     reg.register(EditLines);
+    reg.register(crate::tools::plan::UpdatePlan {
+        tasks: tasks.clone(),
+    });
     reg.register(ApplyPatch);
     reg.register(Bash);
     reg.register(RunTests);
@@ -329,7 +344,7 @@ pub fn build_registry(root: PathBuf) -> (Registry, Arc<LspPool>) {
     let pool = LspPool::new(root);
     reg.register(LspDiagnostics { pool: pool.clone() });
     reg.register(LspHover { pool: pool.clone() });
-    (reg, pool)
+    ((reg, pool), tasks)
 }
 
 /// Find the session being resumed, if one was asked for.
