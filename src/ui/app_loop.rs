@@ -1077,6 +1077,7 @@ const HELP: &str = "\
 /model  what the backend serves, or /model <name> to switch and remember it
 /diff   everything the agent has changed this session
 /undo   put back the most recent turn that changed something
+/digest what has been worked out about this project, or /digest forget
 /init   write a first draft of this project's instructions
 /tools  the tools this session can call, and where they came from
 /mcp    the tool servers, or /mcp <server> <prompt> to take one of their prompts
