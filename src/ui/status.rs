@@ -143,7 +143,6 @@ impl Status {
             spans.extend(key("enter", "steer"));
         } else {
             spans.extend(key("enter", "send"));
-            spans.extend(key("pgup", "scroll"));
             spans.extend(key("/copy", "take it"));
             spans.extend(key("/help", "more"));
         }

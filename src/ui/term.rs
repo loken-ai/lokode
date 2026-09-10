@@ -37,15 +37,14 @@ pub struct TerminalGuard {
 }
 
 impl TerminalGuard {
-    /// The mouse is deliberately left to the terminal.
+    /// The wheel scrolls the pane, which is what a captured mouse buys.
     ///
-    /// Capturing it buys a scroll wheel and costs the thing a terminal is for: with the
-    /// mouse captured, dragging over the pane selects nothing, so a conversation cannot be
-    /// copied out of it. PageUp and PageDown scroll, and are on the key line where they
-    /// can be found; selection has no substitute.
+    /// It costs the terminal's own drag-to-select, which most terminals give back when
+    /// Shift is held. Selecting a pane with no borders in it is worth having either way,
+    /// and `/copy` is there for the conversation as text rather than as a rectangle.
     pub fn new() -> Result<Self> {
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen)?;
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
         Ok(Self { _private: () })
     }
 }

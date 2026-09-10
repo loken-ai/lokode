@@ -7,7 +7,16 @@ use thiserror::Error;
 /// The suggestion is built by the caller rather than by the resolver: finding it walks the
 /// project, which is not something a path check should ever do on its own.
 pub fn refusal(root: &Path, wanted: &Path, error: &PathError) -> String {
-    let mut out = error.to_string();
+    // Named the way the project names it. The absolute path says where this checkout
+    // happens to sit, which is not what the reader is looking for and not how they typed
+    // it.
+    let mut out = match error {
+        PathError::NotFound { path } => format!(
+            "path '{}' does not exist",
+            path.strip_prefix(root).unwrap_or(path).display()
+        ),
+        other => other.to_string(),
+    };
     if matches!(error, PathError::NotFound { .. }) {
         let near = nearby(root, wanted);
         if !near.is_empty() {
@@ -141,6 +150,25 @@ pub fn resolve(root: &Path, candidate: &Path, must_exist: bool) -> Result<PathBu
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    /// The absolute path says where this checkout happens to sit, which is not what the
+    /// reader is looking for and not how they typed it.
+    #[test]
+    fn a_refusal_names_the_path_the_way_the_project_does() {
+        let root = PathBuf::from("/somewhere/project");
+        let missing = root.join("src/gone.rs");
+        let said = refusal(
+            &root,
+            std::path::Path::new("src/gone.rs"),
+            &PathError::NotFound {
+                path: missing.clone(),
+            },
+        );
+        assert!(said.contains("src/gone.rs"), "{said}");
+        assert!(!said.contains("/somewhere/project"), "{said}");
+    }
+
     use super::*;
     use std::fs;
     use tempfile::tempdir;

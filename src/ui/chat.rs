@@ -127,22 +127,49 @@ impl Entry {
                 }));
                 out
             }
+            // What the program says about itself, not what the model said. Two weights:
+            // an ordinary remark recedes, and something that went wrong does not - an
+            // error in the same grey as a footnote is an error nobody reads.
             Entry::Notice(s) => {
                 if looks_like_diff(s) {
                     return s.lines().map(diff_line).collect();
                 }
+                let bad = says_something_went_wrong(s);
+                let style = match bad {
+                    true => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    false => Style::default().fg(Color::DarkGray),
+                };
+                let mark = if bad { "! " } else { "· " };
                 s.lines()
                     .enumerate()
                     .map(|(i, l)| {
                         Line::from(Span::styled(
-                            format!("{}{l}", if i == 0 { "· " } else { "  " }),
-                            Style::default().fg(Color::DarkGray),
+                            format!("{}{l}", if i == 0 { mark } else { "  " }),
+                            style,
                         ))
                     })
                     .collect()
             }
         }
     }
+}
+
+/// Whether a remark is about something that went wrong.
+///
+/// Read off the wording rather than carried alongside it, because every one of these
+/// reaches the pane as the same kind of message. The words are the ones the loop itself
+/// uses when it reports a failure.
+fn says_something_went_wrong(s: &str) -> bool {
+    const BAD: [&str; 6] = [
+        "backend error",
+        "stopped:",
+        "gave up",
+        "failed",
+        "could not",
+        "refused",
+    ];
+    let head = s.lines().next().unwrap_or("").to_lowercase();
+    BAD.iter().any(|b| head.contains(b))
 }
 
 /// What a call is about, in the words a person would use.
@@ -440,6 +467,21 @@ mod tests {
         let body = "before\n```sh\nls **/*.rs\n```\nafter";
         let rendered = text(&prose(body));
         assert_eq!(rendered[2], "ls **/*.rs");
+    }
+
+    /// An error in the same grey as a footnote is an error nobody reads.
+    #[test]
+    fn a_remark_about_a_failure_is_not_a_footnote() {
+        assert!(says_something_went_wrong(
+            "backend error: connection refused"
+        ));
+        assert!(says_something_went_wrong(
+            "stopped: 3 steps in a row that got nowhere"
+        ));
+        assert!(!says_something_went_wrong(
+            "12s · 2 step(s) · nothing changed"
+        ));
+        assert!(!says_something_went_wrong("backend http://127.0.0.1:11435"));
     }
 
     /// Judged on a diff's header, because a bulleted list also starts lines with `-`.

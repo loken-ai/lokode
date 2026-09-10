@@ -8,9 +8,9 @@ use crossterm::event::{
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -311,8 +311,7 @@ fn at_start(input: &TextArea) -> bool {
 }
 
 fn fresh_input(text: &str) -> TextArea<'static> {
-    let mut input = TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
-    input.set_block(Block::default().borders(Borders::ALL).title(" input "));
+    let input = TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
     input
 }
 
@@ -393,17 +392,25 @@ async fn run_ui(
     input.set_placeholder_text(
         "Ask the model to do something… (Enter to send, Shift-Enter for newline)",
     );
-    input.set_block(Block::default().borders(Borders::ALL).title(" input "));
 
     let mut events = EventStream::new();
 
     loop {
         term.draw(|f| {
+            // No borders anywhere. They cost four columns and two lines, they land in
+            // every selection made with the mouse, and they separate nothing that a blank
+            // line and a prompt mark do not separate better.
+            //
+            // The input grows with what is being typed, up to a few lines, so a long
+            // instruction is visible while it is written instead of scrolling inside a box
+            // of fixed height.
+            let typed = input.lines().len().clamp(1, INPUT_MAX_LINES) as u16;
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(3),
-                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Length(typed),
                     Constraint::Length(1),
                     Constraint::Length(1),
                 ])
@@ -413,8 +420,7 @@ async fn run_ui(
             for e in &state.entries {
                 lines.extend(e.to_lines());
             }
-            let chat_block = Block::default().borders(Borders::ALL).title(" chat ");
-            let inner_h = chat_block.inner(chunks[0]).height as usize;
+            let inner_h = chunks[0].height as usize;
             let total = lines.len();
             // Remembered for the scroll keys, which cannot know either of these.
             state.content_lines = total;
@@ -427,12 +433,29 @@ async fn run_ui(
             let start = end.saturating_sub(inner_h);
             let visible: Vec<Line<'static>> =
                 lines.into_iter().skip(start).take(end - start).collect();
-            let chat = Paragraph::new(visible)
-                .block(chat_block)
-                .wrap(Wrap { trim: false });
+            let chat = Paragraph::new(visible).wrap(Wrap { trim: false });
             f.render_widget(chat, chunks[0]);
 
-            f.render_widget(&input, chunks[1]);
+            // The prompt mark, in its own column, so the text the user types starts where
+            // the answers do and a wrapped line does not sit under the mark.
+            let typing = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(2), Constraint::Min(1)])
+                .split(chunks[2]);
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "❯ ",
+                    Style::default()
+                        .fg(if state.busy {
+                            Color::DarkGray
+                        } else {
+                            Color::Cyan
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ))),
+                typing[0],
+            );
+            f.render_widget(&input, typing[1]);
 
             let waiting = state.pending_approval.is_some();
             let status = Status {
@@ -463,9 +486,9 @@ async fn run_ui(
             };
             f.render_widget(
                 Paragraph::new(status.to_line()).style(Style::default().fg(Color::Gray)),
-                chunks[2],
+                chunks[3],
             );
-            f.render_widget(Paragraph::new(status.keys()), chunks[3]);
+            f.render_widget(Paragraph::new(status.keys()), chunks[4]);
 
             if let Some(prompt) = state.pending_approval.as_ref() {
                 ApprovalView {
@@ -740,8 +763,7 @@ async fn run_ui(
                                 if text.trim().is_empty() { continue; }
                                 state.entries.push(Entry::User(text.clone()));
                                 input = TextArea::default();
-                                input.set_block(Block::default().borders(Borders::ALL).title(" input "));
-                                // A line beginning with `/` is for verve, not the model.
+                                                            // A line beginning with `/` is for verve, not the model.
                                 // Handled before the turn is started so that `/undo` works
                                 // when the thing you want undone is what the model just did.
                                 state.remember(&text);
@@ -875,6 +897,9 @@ fn copy_out(entries: &[Entry], last_only: bool, root: &std::path::Path) -> Strin
     }
     format!("{} line(s): {}", text.lines().count(), said.join(", "))
 }
+
+/// How tall the input may grow before it scrolls inside itself.
+const INPUT_MAX_LINES: usize = 6;
 
 /// Answer a slash command.
 ///
