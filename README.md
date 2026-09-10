@@ -112,6 +112,12 @@ refused, because that write would discard whatever you did in your own editor. A
 that is not there is answered with where the file actually is, rather than with a refusal
 that costs a search to act on.
 
+A turn that is getting nowhere is handed back rather than run to the step limit. Three
+steps in a row where every call either failed or had already been answered, or six failed
+calls in a turn that has changed nothing, and the turn ends saying which tool kept failing.
+A weak model looping on one read cost sixteen steps and twenty thousand tokens before this;
+it now costs six steps and under four thousand.
+
 At an approval prompt: `y` accepts once, `a` accepts everything in the stated scope for this
 session, `n` or `Esc` declines. `Enter` deliberately does nothing there - it is the send key,
 and a prompt appearing mid-sentence should not be able to approve a command you have not read.
