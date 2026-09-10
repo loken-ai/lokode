@@ -64,8 +64,12 @@ One thing it uses if it is there, and one it needs:
 
 ## Using it
 
+The keys are on their own line under the input, always in view, because a shortcut nobody
+can see is a shortcut nobody uses.
+
 | Key | |
 |---|---|
+| `Shift-Tab` | plan and act, the one setting you change several times an hour |
 | `Enter` | send |
 | `Shift-Enter` | newline |
 | `Esc` | interrupt the running turn |
@@ -74,11 +78,25 @@ One thing it uses if it is there, and one it needs:
 | `@path` in a prompt | send that file, or that directory's listing, with the question |
 | `↑` / `↓` | walk what you have already sent (from an empty input) |
 | `/retry`, `/retry <model>` | ask the last question again, of the same model or another |
+| `/copy`, `/copy last` | the conversation to the clipboard and to a file |
 | `PageUp` / `PageDown`, wheel | scroll |
 | `Ctrl-C`, `Ctrl-Q` | quit |
 
 The model's prose is rendered as the light markdown it tends to write - fenced code,
-headings, `code` and **bold** - and anything that is a diff is coloured as one.
+headings, `code` and **bold** - and anything that is a diff is coloured as one. A tool call
+is one line, the verb and the thing it acts on, and its result is the answer with a few
+lines of evidence under it: printing every argument and every line turned each step into a
+wall of JSON nobody read.
+
+The mouse is left to the terminal. Capturing it buys a scroll wheel and costs the thing a
+terminal is for, since a captured pane cannot be selected and a conversation cannot be
+copied out of it. `PageUp` and `PageDown` scroll, and `/copy` puts the conversation on the
+terminal's own clipboard - through ssh and tmux, no daemon - and writes it to a file
+besides, because a terminal that ignores the sequence says so to nobody.
+
+The shape of the project goes in with the contract, and the contract says never to ask for
+a file: a model told nothing about the tree asks for the source to be pasted in, because
+asking is cheaper than guessing a path.
 
 Typing while the agent works is allowed: the line joins the conversation at the next step
 boundary and the screen says when it was handed over. That is the difference between

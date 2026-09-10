@@ -37,11 +37,26 @@ pub struct TerminalGuard {
 }
 
 impl TerminalGuard {
+    /// The mouse is deliberately left to the terminal.
+    ///
+    /// Capturing it buys a scroll wheel and costs the thing a terminal is for: with the
+    /// mouse captured, dragging over the pane selects nothing, so a conversation cannot be
+    /// copied out of it. PageUp and PageDown scroll, and are on the key line where they
+    /// can be found; selection has no substitute.
     pub fn new() -> Result<Self> {
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(io::stdout(), EnterAlternateScreen)?;
         Ok(Self { _private: () })
     }
+}
+
+/// Take the mouse, for a wheel that scrolls the pane instead of the terminal.
+pub fn capture_mouse(on: bool) -> Result<()> {
+    match on {
+        true => execute!(io::stdout(), EnableMouseCapture)?,
+        false => execute!(io::stdout(), DisableMouseCapture)?,
+    }
+    Ok(())
 }
 
 impl Drop for TerminalGuard {

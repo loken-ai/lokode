@@ -364,12 +364,11 @@ async fn run_ui(
     };
     // The protocol is not stated here: it is settled by asking the backend, which has not
     // answered yet, and the status line carries whatever it turns out to be.
-    state.entries.push(Entry::Notice(format!(
-        "Welcome. Enter sends, Shift-Enter is a newline, Esc interrupts a running turn, \
-         PageUp/PageDown scroll, Ctrl-C or Ctrl-Q quits.\n\
-         Backend: {}",
-        cfg.backend_url
-    )));
+    // The keys live on their own line under the input, where they are always in view, so
+    // the welcome says the one thing that line cannot: what this session is talking to.
+    state
+        .entries
+        .push(Entry::Notice(format!("backend {}", cfg.backend_url)));
     if restored > 0 {
         state.entries.push(Entry::Notice(format!(
             "resumed session {session_id}: {restored} earlier message(s) are back in view"
@@ -404,7 +403,8 @@ async fn run_ui(
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(3),
-                    Constraint::Length(5),
+                    Constraint::Length(3),
+                    Constraint::Length(1),
                     Constraint::Length(1),
                 ])
                 .split(f.area());
@@ -437,10 +437,13 @@ async fn run_ui(
             let waiting = state.pending_approval.is_some();
             let status = Status {
                 model: state.model.clone(),
-                root: cfg.root.display().to_string(),
-                session: session_id.clone(),
-                grammar: cfg.grammar_enabled,
-                protocol: state.protocol.label(),
+                // The last component: it is what names the project, and the rest is where
+                // it happens to sit on this disk.
+                root: cfg
+                    .root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| cfg.root.display().to_string()),
                 planning: state.planning,
                 context_percent: state.context_percent,
                 step: state.step,
@@ -462,6 +465,7 @@ async fn run_ui(
                 Paragraph::new(status.to_line()).style(Style::default().fg(Color::Gray)),
                 chunks[2],
             );
+            f.render_widget(Paragraph::new(status.keys()), chunks[3]);
 
             if let Some(prompt) = state.pending_approval.as_ref() {
                 ApprovalView {
@@ -662,6 +666,35 @@ async fn run_ui(
 
                     if key.kind == KeyEventKind::Press {
                         match key.code {
+                            // The one setting a person changes several times an hour, on
+                            // the key every agent puts it on. A command for it exists and
+                            // nobody finds a command they have to read about first.
+                            KeyCode::BackTab
+                            | KeyCode::Tab
+                                if key.modifiers.contains(KeyModifiers::SHIFT)
+                                    && !state.busy =>
+                            {
+                                let said = run_command(
+                                    if state.planning { "act" } else { "plan" },
+                                    CommandCtx {
+                                        checkpoints: checkpoints.as_deref(),
+                                        root: &cfg.root,
+                                        control: &control_tx,
+                                        policy: &cfg.policy,
+                                        tools: &tools,
+                                        digest: &digest,
+                                        mcp: &mcp,
+                                        mcp_summary: &mcp_summary,
+                                        busy: state.busy,
+                                    },
+                                )
+                                .await;
+                                if let Ran::Said(text) = said {
+                                    state.planning = !state.planning;
+                                    state.entries.push(Entry::Notice(text));
+                                }
+                                continue;
+                            }
                             KeyCode::Esc if state.busy => {
                                 if let Some(cancel) = state.turn_cancel.take() {
                                     cancel.cancel();
@@ -687,6 +720,19 @@ async fn run_ui(
                                 if let Some(text) = state.newer() {
                                     input = fresh_input(&text);
                                 }
+                                continue;
+                            }
+                            // Answered here rather than in the command table: it is the
+                            // one command whose subject is the pane itself.
+                            KeyCode::Enter
+                                if !key.modifiers.contains(KeyModifiers::SHIFT)
+                                    && input.lines().join("\n").trim().starts_with("/copy") =>
+                            {
+                                let what = input.lines().join("\n");
+                                let last = what.trim() == "/copy last";
+                                input = fresh_input("");
+                                let said = copy_out(&state.entries, last, &cfg.root);
+                                state.entries.push(Entry::Notice(said));
                                 continue;
                             }
                             KeyCode::Enter if !key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -788,6 +834,46 @@ fn is_quit(k: &KeyEvent) -> bool {
         (k.code, k.modifiers),
         (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), KeyModifiers::CONTROL)
     )
+}
+
+/// Put the conversation where a person can take it: on the terminal's clipboard, and in a
+/// file that is always there whether or not the terminal took it.
+///
+/// Both, because neither can be relied on alone. A terminal either understands the copy
+/// sequence or ignores it without saying so, and a file is no use to somebody who wanted
+/// to paste into a message.
+fn copy_out(entries: &[Entry], last_only: bool, root: &std::path::Path) -> String {
+    let text = match last_only {
+        true => entries
+            .iter()
+            .rev()
+            .find(|e| matches!(e, Entry::Assistant(_) | Entry::AssistantStreaming(_)))
+            .map(|e| e.to_text())
+            .unwrap_or_default(),
+        false => entries
+            .iter()
+            .map(|e| e.to_text())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    };
+    if text.trim().is_empty() {
+        return "nothing to copy yet".to_string();
+    }
+    let mut said = Vec::new();
+    if text.len() <= crate::ui::clipboard::MOST && crate::ui::clipboard::put(&text).is_ok() {
+        said.push("sent to the terminal's clipboard".to_string());
+    }
+    let path = crate::paths::state_dir()
+        .unwrap_or_else(|| root.to_path_buf())
+        .join("last-copy.txt");
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match std::fs::write(&path, &text) {
+        Ok(()) => said.push(format!("written to {}", path.display())),
+        Err(e) => said.push(format!("could not be written ({e})")),
+    }
+    format!("{} line(s): {}", text.lines().count(), said.join(", "))
 }
 
 /// Answer a slash command.
@@ -1094,6 +1180,7 @@ const HELP: &str = "\
 /act    leave planning, change things again
 /model  what the backend serves, or /model <name> to switch and remember it
 /retry  ask the last question again, or /retry <model> to ask another model
+/copy   put the conversation on the clipboard and in a file, or /copy last for the answer
 /diff   everything the agent has changed this session
 /undo   put back the most recent turn that changed something
 /digest what has been worked out about this project, or /digest forget

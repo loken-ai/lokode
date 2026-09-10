@@ -30,87 +30,226 @@ pub enum Entry {
 }
 
 impl Entry {
+    /// The entry as plain text, for taking the conversation out of the pane.
+    ///
+    /// The same content the screen carries, without the colour and the box drawing: what a
+    /// person pastes into an issue or a message.
+    pub fn to_text(&self) -> String {
+        match self {
+            Entry::User(s) => format!("> {s}"),
+            Entry::Assistant(s) | Entry::AssistantStreaming(s) => s.clone(),
+            Entry::ToolCall { name, args } => format!("{name}{}", call_subject(name, args)),
+            Entry::ToolResult { is_error, body, .. } => match is_error {
+                true => format!("error: {body}"),
+                false => body.clone(),
+            },
+            Entry::ToolOutput { name, body } => format!("{name} …\n{body}"),
+            Entry::Reasoning(s) => s.clone(),
+            Entry::Notice(s) => format!("· {s}"),
+        }
+    }
+
     pub fn to_lines(&self) -> Vec<Line<'static>> {
         match self {
-            Entry::User(s) => block("you", Color::Cyan, s, Body::Plain),
-            Entry::Assistant(s) | Entry::AssistantStreaming(s) => {
-                block("assistant", Color::Green, s, Body::Prose)
+            // The person's own words, marked the way a shell marks a prompt rather than
+            // with a header of their own: a line that says "you" over what you just typed
+            // is a line spent saying nothing.
+            Entry::User(s) => {
+                let mut out: Vec<Line<'static>> = s
+                    .lines()
+                    .enumerate()
+                    .map(|(i, l)| {
+                        Line::from(vec![
+                            Span::styled(
+                                if i == 0 { "> " } else { "  " },
+                                Style::default()
+                                    .fg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(l.to_string(), Style::default().fg(Color::Cyan)),
+                        ])
+                    })
+                    .collect();
+                out.push(Line::from(""));
+                out
             }
-            Entry::ToolCall { name, args } => block(
-                &format!("→ {name}"),
-                Color::Yellow,
-                &truncate(args, 800),
-                Body::Plain,
-            ),
+            Entry::Assistant(s) | Entry::AssistantStreaming(s) => {
+                let mut out = prose(s);
+                out.push(Line::from(""));
+                out
+            }
+            // One line, the way a person would say it: the verb and the thing it acts
+            // on. The arguments in full are what turned this pane into a wall of JSON,
+            // and the one that matters is always the same one for a given tool.
+            Entry::ToolCall { name, args } => vec![Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    name.clone(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(call_subject(name, args), Style::default().fg(Color::Yellow)),
+            ])],
             Entry::ToolResult {
                 name,
                 is_error,
                 body,
             } => {
-                let label = if *is_error {
-                    format!("← {name} [error]")
-                } else {
-                    format!("← {name}")
-                };
-                block(
-                    &label,
-                    if *is_error {
-                        Color::Red
-                    } else {
-                        Color::Magenta
-                    },
-                    &truncate(body, 1600),
-                    // A tool that returns a diff - a write, an edit, a patch - is the case
-                    // where colour carries the meaning rather than decorating it.
-                    if looks_like_diff(body) {
-                        Body::Diff
-                    } else {
-                        Body::Plain
-                    },
-                )
+                let _ = name;
+                result_lines(*is_error, body)
             }
             // `/diff` answers through a notice, and a wall of uncoloured diff is the thing
             // it is least useful as.
-            Entry::Reasoning(s) => {
-                let mut lines = block("thinking", Color::DarkGray, s, Body::Plain);
-                // Dim the body as well as the label: the header alone is not enough to
-                // stop a wall of scratchpad reading as the answer.
-                for line in lines.iter_mut().skip(1) {
-                    for span in line.spans.iter_mut() {
-                        if span.style.fg.is_none() {
-                            span.style = span.style.fg(Color::DarkGray);
-                        }
-                    }
-                }
-                lines
-            }
+            Entry::Reasoning(s) => s
+                .lines()
+                .map(|l| {
+                    Line::from(Span::styled(
+                        format!("  {l}"),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    ))
+                })
+                .collect(),
             // Dimmed and set apart: it is what is happening, not what was said, and it
             // is replaced by the tool's own result the moment there is one.
             Entry::ToolOutput { name, body } => {
-                block(&format!("… {name}"), Color::DarkGray, body, Body::Plain)
+                let mut out = vec![Line::from(Span::styled(
+                    format!("  {name} …"),
+                    Style::default().fg(Color::DarkGray),
+                ))];
+                out.extend(body.lines().map(|l| {
+                    Line::from(Span::styled(
+                        format!("    {l}"),
+                        Style::default().fg(Color::DarkGray),
+                    ))
+                }));
+                out
             }
-            Entry::Notice(s) => block(
-                "·",
-                Color::DarkGray,
-                s,
+            Entry::Notice(s) => {
                 if looks_like_diff(s) {
-                    Body::Diff
-                } else {
-                    Body::Plain
-                },
-            ),
+                    return s.lines().map(diff_line).collect();
+                }
+                s.lines()
+                    .enumerate()
+                    .map(|(i, l)| {
+                        Line::from(Span::styled(
+                            format!("{}{l}", if i == 0 { "· " } else { "  " }),
+                            Style::default().fg(Color::DarkGray),
+                        ))
+                    })
+                    .collect()
+            }
         }
     }
 }
 
-/// How a body should be read.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Body {
-    Plain,
-    /// Light markdown: what a model actually emits, and nothing more.
-    Prose,
-    Diff,
+/// What a call is about, in the words a person would use.
+///
+/// One argument carries the meaning of a call and the rest is machinery: which file, which
+/// pattern, which command. Printing the arguments in full turned every step into a wall of
+/// JSON, and the one that matters is the same one every time for a given tool.
+fn call_subject(name: &str, args: &str) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(args).unwrap_or(serde_json::Value::Null);
+    let field = |k: &str| parsed.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let subject = match name {
+        "grep" => field("pattern"),
+        "bash" => field("cmd"),
+        "glob" => field("pattern"),
+        "web_fetch" => field("url"),
+        "delegate" => field("task"),
+        "run_tests" => field("target"),
+        _ => field("path").or_else(|| field("file")),
+    };
+    // A tool with nothing to name still says how much it is doing.
+    let subject = subject.or_else(|| {
+        parsed
+            .get("tasks")
+            .and_then(|t| t.as_array())
+            .map(|t| format!("{} task(s)", t.len()))
+    });
+    let subject = subject.or_else(|| {
+        parsed
+            .get("edits")
+            .and_then(|t| t.as_array())
+            .map(|t| format!("{} edit(s)", t.len()))
+    });
+    match subject {
+        None => String::new(),
+        Some(s) => {
+            let one_line = s.replace('\n', " ");
+            format!("({})", truncate(one_line.trim(), SUBJECT_CHARS))
+        }
+    }
 }
+
+/// A result in the shape of an answer rather than of a transcript.
+///
+/// The first line of a tool's own result is its answer; what follows is evidence. The
+/// answer is always shown, the evidence up to a few lines, and the rest counted. An error
+/// is shown whole because an error nobody can read is an error nobody can act on.
+fn result_lines(is_error: bool, body: &str) -> Vec<Line<'static>> {
+    let colour = if is_error {
+        Color::Red
+    } else {
+        Color::DarkGray
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    // Kept as it was written, leading spaces and all: a tool that numbers its lines lines
+    // them up, and trimming the first one alone breaks the column.
+    let head = lines.first().copied().unwrap_or("");
+    let head = if head.trim().is_empty() && lines.len() > 1 {
+        format!("{} line(s)", lines.len())
+    } else if head.trim().is_empty() {
+        "nothing".to_string()
+    } else {
+        truncate(head, SUBJECT_CHARS)
+    };
+    let mut out = vec![Line::from(vec![
+        Span::styled("  ⤷ ", Style::default().fg(colour)),
+        Span::styled(head, Style::default().fg(colour)),
+    ])];
+    let rest = &lines[lines.len().min(1)..];
+    let shown = if is_error {
+        rest.len()
+    } else {
+        rest.len().min(BODY_LINES)
+    };
+    let diff = looks_like_diff(body);
+    for l in &rest[..shown] {
+        out.push(match diff {
+            true => indent(diff_line(l)),
+            false => Line::from(Span::styled(
+                format!("    {l}"),
+                Style::default().fg(Color::DarkGray),
+            )),
+        });
+    }
+    if rest.len() > shown {
+        out.push(Line::from(Span::styled(
+            format!("    … {} more line(s)", rest.len() - shown),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    // One blank line after the answer: what follows is the model talking again, and the
+    // two run together without it.
+    out.push(Line::from(""));
+    out
+}
+
+/// A rendered line, moved in under the result it belongs to.
+fn indent(line: Line<'static>) -> Line<'static> {
+    let mut spans = vec![Span::raw("    ")];
+    spans.extend(line.spans);
+    Line::from(spans)
+}
+
+/// How much of a subject or an answer fits on one line before it stops being one.
+const SUBJECT_CHARS: usize = 96;
+
+/// How much evidence is shown under an answer before it is counted instead.
+const BODY_LINES: usize = 8;
 
 /// Whether a body is a unified diff.
 ///
@@ -119,21 +258,6 @@ enum Body {
 fn looks_like_diff(s: &str) -> bool {
     s.lines()
         .any(|l| l.starts_with("@@ ") || l.starts_with("--- ") || l.starts_with("diff --git "))
-}
-
-fn block(label: &str, color: Color, body: &str, kind: Body) -> Vec<Line<'static>> {
-    let header = Line::from(Span::styled(
-        format!("[{label}]"),
-        Style::default().fg(color).add_modifier(Modifier::BOLD),
-    ));
-    let mut out = vec![header];
-    match kind {
-        Body::Plain => out.extend(body.lines().map(|l| Line::from(l.to_string()))),
-        Body::Diff => out.extend(body.lines().map(diff_line)),
-        Body::Prose => out.extend(prose(body)),
-    }
-    out.push(Line::from(""));
-    out
 }
 
 fn diff_line(l: &str) -> Line<'static> {

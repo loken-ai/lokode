@@ -1,17 +1,12 @@
 use std::time::Duration;
 
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 #[derive(Debug, Clone)]
 pub struct Status {
     pub model: String,
     pub root: String,
-    pub session: String,
-    pub grammar: bool,
-    /// How tool calls travel. Shown because it is settled by asking the backend, not by
-    /// the flags, and a session can change it part-way through.
-    pub protocol: &'static str,
     /// Shown only while planning: acting is the ordinary state and does not need saying.
     pub planning: bool,
     /// How full the history budget is. Coloured once it is close, because the first
@@ -44,57 +39,63 @@ fn how_long(d: Duration) -> String {
 }
 
 impl Status {
+    /// The line under the input: what is in force on the left, what is happening on the
+    /// right.
+    ///
+    /// Everything here answers a question somebody actually asks mid-turn - which model,
+    /// how full, what is it doing, how long has it been doing it. What was in it and is
+    /// not: the session id, which nobody types; the absolute path of the project, whose
+    /// last component is the part that identifies it; and the protocol, which is settled
+    /// once and said when it changes.
     pub fn to_line(&self) -> Line<'static> {
-        let mark = if self.busy {
-            SPINNER[self.tick % SPINNER.len()]
-        } else {
-            " "
-        };
-        let grammar = if self.grammar {
-            "grammar"
-        } else {
-            "no-grammar"
-        };
-        let mut spans = vec![
-            Span::styled(
-                format!(" {mark} "),
-                Style::default().fg(if self.busy {
-                    Color::Yellow
+        let mut spans = Vec::new();
+        spans.push(Span::styled(
+            match self.busy {
+                true => format!(" {} ", SPINNER[self.tick % SPINNER.len()]),
+                false => "   ".to_string(),
+            },
+            Style::default().fg(if self.busy {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            }),
+        ));
+        spans.push(Span::styled(
+            match self.planning {
+                true => " PLAN ",
+                false => " ACT  ",
+            },
+            Style::default()
+                .fg(Color::Black)
+                .bg(if self.planning {
+                    Color::Cyan
                 } else {
-                    Color::Gray
-                }),
-            ),
-            Span::raw(format!("model={}  ", self.model)),
-            Span::raw(format!("root={}  ", self.root)),
-            Span::raw(format!(
-                "session={}…  ",
-                &self.session[..self.session.len().min(8)]
-            )),
-            Span::styled(
-                format!("{}  {grammar}  ", self.protocol),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::raw(format!("step {}/{}", self.step, self.max_steps)),
-            Span::styled(
-                format!("  ctx {}%", self.context_percent),
-                Style::default().fg(match self.context_percent {
-                    0..=74 => Color::Gray,
-                    75..=99 => Color::Yellow,
-                    _ => Color::Red,
-                }),
-            ),
-        ];
-        if self.planning {
-            spans.insert(
-                1,
-                Span::styled(
-                    "PLAN  ",
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                ),
-            );
+                    Color::Green
+                })
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            self.model.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!("  {}", self.root),
+            Style::default().fg(Color::DarkGray),
+        ));
+        spans.push(Span::styled(
+            format!("  {}%", self.context_percent),
+            Style::default().fg(match self.context_percent {
+                0..=74 => Color::DarkGray,
+                75..=99 => Color::Yellow,
+                _ => Color::Red,
+            }),
+        ));
+        if self.busy {
+            spans.push(Span::styled(
+                format!("  {}/{}", self.step, self.max_steps),
+                Style::default().fg(Color::DarkGray),
+            ));
         }
         // The phase is what a user is looking for when the screen has stopped changing, so
         // it goes last, where the eye lands, with the time it has been there beside it.
@@ -104,6 +105,41 @@ impl Status {
                 Style::default().fg(Color::Yellow),
             ));
         }
+        Line::from(spans)
+    }
+
+    /// The keys, on their own line, because a shortcut nobody can see is a shortcut nobody
+    /// uses. Only the ones that change what happens next.
+    pub fn keys(&self) -> Line<'static> {
+        let key = |k: &str, what: &str| {
+            vec![
+                Span::styled(
+                    format!("  {k}"),
+                    Style::default()
+                        .fg(Color::Gray)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!(" {what}"), Style::default().fg(Color::DarkGray)),
+            ]
+        };
+        let mut spans = Vec::new();
+        spans.extend(key(
+            "shift-tab",
+            match self.planning {
+                true => "act",
+                false => "plan",
+            },
+        ));
+        if self.busy {
+            spans.extend(key("esc", "stop"));
+            spans.extend(key("enter", "steer"));
+        } else {
+            spans.extend(key("enter", "send"));
+            spans.extend(key("pgup", "scroll"));
+            spans.extend(key("/copy", "take it"));
+            spans.extend(key("/help", "more"));
+        }
+        spans.extend(key("ctrl-c", "quit"));
         Line::from(spans)
     }
 }
@@ -116,9 +152,6 @@ mod tests {
         Status {
             model: "qwen3:8b".into(),
             root: "/p".into(),
-            session: "0123456789".into(),
-            grammar: true,
-            protocol: "native",
             planning: false,
             context_percent: 40,
             step: 2,
