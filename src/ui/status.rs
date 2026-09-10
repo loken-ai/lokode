@@ -9,8 +9,13 @@ pub struct Status {
     pub root: String,
     /// Shown only while planning: acting is the ordinary state and does not need saying.
     pub planning: bool,
-    /// How full the history budget is. Coloured once it is close, because the first
-    /// elision is the moment a session starts forgetting what it was told.
+    /// How much of the history budget the conversation occupies, as a percentage.
+    ///
+    /// Against the budget rather than the model's whole window: the budget is what
+    /// compaction defends, so a hundred here is where the oldest steps start being dropped
+    /// rather than where the model would refuse the request. Coloured as it approaches,
+    /// because the first elision is the moment a session starts forgetting what it was
+    /// told.
     pub context_percent: u8,
     pub step: usize,
     pub max_steps: usize,
@@ -83,8 +88,11 @@ impl Status {
             format!("  {}", self.root),
             Style::default().fg(Color::DarkGray),
         ));
+        // Named, because a bare percentage on a status bar is a number nobody can act
+        // on: this one says how close the conversation is to the point where its oldest
+        // steps start being dropped to make room.
         spans.push(Span::styled(
-            format!("  {}%", self.context_percent),
+            format!("  ctx {}%", self.context_percent),
             Style::default().fg(match self.context_percent {
                 0..=74 => Color::DarkGray,
                 75..=99 => Color::Yellow,
@@ -161,6 +169,15 @@ mod tests {
             in_phase,
             tick: 1,
         }
+    }
+
+    /// A bare percentage is a number nobody can act on, so it says what it measures.
+    #[test]
+    fn the_context_figure_says_what_it_is() {
+        let line = status(false, None, Duration::default())
+            .to_line()
+            .to_string();
+        assert!(line.contains("ctx 40%"), "{line}");
     }
 
     #[test]
