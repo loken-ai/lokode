@@ -204,6 +204,15 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         (None, Some(l)) => Some(format!("What earlier sessions found out here:\n{l}")),
         (None, None) => None,
     };
+    // And the shape of the tree. A model that has been told nothing about the project asks
+    // for a file to be pasted in, because asking is cheaper than guessing a path.
+    let instructions = match crate::agent::layout::preamble(&cfg.root) {
+        Some(map) => Some(match instructions {
+            Some(i) => format!("{i}\n\n{map}"),
+            None => map,
+        }),
+        None => instructions,
+    };
     let system = Agent::build_system_prompt(&registry, protocol, mode, instructions.as_deref());
     let mut session = Session::new(system, context_tokens, max_answer_tokens);
     let restored = earlier.as_ref().map(|e| e.messages.len()).unwrap_or(0);
@@ -331,6 +340,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         checked_this_step: Default::default(),
         barren: Default::default(),
         failures: Default::default(),
+        from_guess: Default::default(),
         repeats: Default::default(),
         before_plan: None,
         // What this project has taught about each model, from the writes that did and did

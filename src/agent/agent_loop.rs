@@ -325,6 +325,17 @@ impl Guess {
     }
 }
 
+/// The one thing a local agent must never do.
+///
+/// A model used to a chat window asks for the file to be pasted in. Here the project is on
+/// this disk and the tools are in its hand, so asking is a turn spent to be told what it
+/// could have read, and a person who has to paste their own code has no use for an agent.
+const NEVER_ASK: &str = "The project is on this disk and you have tools for it. Never ask \
+                         the user to paste, provide or share a file, its contents or its \
+                         path: list, search and read it yourself. Ask only about what is \
+                         not in the project - what they want, or a decision only they can \
+                         make.";
+
 /// How much of a call's arguments a reviewer is shown.
 ///
 /// Enough to see what the change is, bounded because a whole-file write is the whole file
@@ -602,6 +613,11 @@ pub struct Agent {
     pub barren: u32,
     /// Calls that failed in this turn, however they were spread across its steps.
     pub failures: u32,
+    /// Answers that came from a guess rather than from the model having asked before.
+    ///
+    /// Served plainly: a model that is handed what it was about to ask for is not
+    /// repeating itself, and telling it that it is would be a lie about its own turn.
+    pub from_guess: std::collections::HashSet<String>,
     /// Read-only calls already answered in this turn, by tool and arguments.
     ///
     /// A model that has lost its place asks the same question again, and a run can hold
@@ -693,7 +709,8 @@ impl Agent {
             ToolProtocol::Native => format!(
                 "You are a local-first code agent driving a TUI on the user's machine.\n\
                  Call the tools you have been given to inspect and change the project.\n\
-                 Stop calling tools when the task is finished or when you only need to talk.\n\n\
+                 Stop calling tools when the task is finished or when you only need to talk.\n\
+                 {NEVER_ASK}\n\n\
                  {}",
                 tool_manifest(reg)
             ),
@@ -702,7 +719,8 @@ impl Agent {
                  Respond with a single JSON object matching the schema:\n\
                    {{ \"assistant_text\": \"<prose to user>\", \"tool_calls\": [ {{ \"name\": <tool>, \"arguments\": {{...}} }} ] }}\n\
                  Emit zero tool_calls when the task is finished or when you only need to talk.\n\
-                 Tool results will be returned to you as role=tool messages on the next turn.\n\n\
+                 Tool results will be returned to you as role=tool messages on the next turn.\n\
+                 {NEVER_ASK}\n\n\
                  {}",
                 tool_manifest(reg)
             ),
@@ -1137,6 +1155,7 @@ impl Agent {
 
         self.this_turn = TurnTally::begin();
         self.repeats.clear();
+        self.from_guess.clear();
         self.barren = 0;
         self.failures = 0;
 
@@ -1260,7 +1279,9 @@ impl Agent {
             if let Some((handle, stop)) = guessing {
                 stop.cancel();
                 if let Ok(Some((key, out))) = handle.await {
-                    self.repeats.entry(key).or_insert(out);
+                    if self.repeats.insert(key.clone(), out).is_none() {
+                        self.from_guess.insert(key);
+                    }
                 }
             }
             record.after.model_ms = asked_at.elapsed().as_millis() as u64;
@@ -1523,7 +1544,12 @@ impl Agent {
                     }
                     let key = repeat_key(call);
                     if let Some(known) = self.repeats.get(&key) {
-                        plan.push(Err(said_before(known)));
+                        // Handed what it was about to ask for, or told it is going in
+                        // circles: the same answer, and only one of them is true.
+                        plan.push(Err(match self.from_guess.remove(&key) {
+                            true => known.clone(),
+                            false => said_before(known),
+                        }));
                     } else if let Some(i) = fresh.iter().position(|c| repeat_key(c) == key) {
                         plan.push(Ok(i));
                     } else {
@@ -2501,6 +2527,7 @@ mod tests {
             checked_this_step: Default::default(),
             barren: Default::default(),
             failures: Default::default(),
+            from_guess: Default::default(),
             repeats: Default::default(),
             before_plan: None,
             history: Default::default(),
@@ -2993,6 +3020,60 @@ mod tests {
             .start_guess(&CancellationToken::new())
             .expect("speculation is on");
         assert!(handle.await.unwrap().is_none());
+    }
+
+    /// A model handed what it was about to ask for is not repeating itself, and being
+    /// told that it is would be a lie about its own turn. The second ask is a repeat.
+    #[tokio::test]
+    async fn an_answer_that_came_from_a_guess_is_served_plainly() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "forty two");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c2","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"forty two"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        // As if a guess had already fetched it.
+        let key = repeat_key(&ResolvedCall {
+            id: String::new(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "a.txt"}),
+        });
+        agent
+            .repeats
+            .insert(key.clone(), ToolOutput::ok("    1 | forty two"));
+        agent.from_guess.insert(key);
+
+        let events = drive(&mut agent, "what does a.txt say").await;
+        let results: Vec<&ToolOutput> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ToolResult { name, output } if name == "read_file" => Some(output),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 2, "both asks need an answer");
+        assert!(
+            !results[0].content.contains("you already ran this"),
+            "{results:?}"
+        );
+        assert!(results[0].content.contains("forty two"), "{results:?}");
+        // The second ask is the model repeating itself, and is told so.
+        assert!(
+            results[1].content.contains("you already ran this"),
+            "{results:?}"
+        );
     }
 
     /// A model asking the same question every step learns nothing each time. The memo

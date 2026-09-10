@@ -4,6 +4,7 @@ pub mod check;
 pub mod digest;
 pub mod history;
 pub mod hooks;
+pub mod layout;
 pub mod mentions;
 pub mod protocol;
 pub mod repairs;

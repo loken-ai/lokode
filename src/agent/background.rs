@@ -184,6 +184,7 @@ impl Discovery {
             checked_this_step: Default::default(),
             barren: Default::default(),
             failures: Default::default(),
+            from_guess: Default::default(),
             repeats: Default::default(),
             before_plan: None,
             history: Default::default(),
