@@ -134,14 +134,14 @@ impl Tool for Delegate {
             turn: 0,
         };
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let cancel = ctx.cancel.clone();
-        if let Err(e) = sub.run_user_turn(a.task, cancel, tx).await {
-            return Ok(ToolOutput::err(format!("the delegated turn failed: {e:#}")));
-        }
+        let events = match sub.collect_turn(a.task, cancel).await {
+            Ok(events) => events,
+            Err(e) => return Ok(ToolOutput::err(format!("the delegated turn failed: {e:#}"))),
+        };
         let mut answer = String::new();
         let mut notices = Vec::new();
-        while let Ok(event) = rx.try_recv() {
+        for event in events {
             match event {
                 crate::agent::agent_loop::AgentEvent::AssistantText(s) => {
                     if !s.trim().is_empty() {

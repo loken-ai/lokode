@@ -151,10 +151,7 @@ impl Discovery {
             turn: 0,
         };
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-        let outcome = agent
-            .run_user_turn(question.clone(), cancel.clone(), tx)
-            .await;
+        let outcome = agent.collect_turn(question.clone(), cancel.clone()).await;
         if outcome.is_err() || cancel.is_cancelled() {
             // Put it back: an interrupted question is not an answered one, and the whole
             // point is that the work survives being interrupted.
@@ -162,7 +159,7 @@ impl Discovery {
             return None;
         }
         let mut answer = String::new();
-        while let Ok(event) = rx.try_recv() {
+        for event in outcome.unwrap_or_default() {
             if let crate::agent::agent_loop::AgentEvent::AssistantText(s) = event {
                 if !s.trim().is_empty() {
                     answer = s;

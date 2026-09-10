@@ -796,6 +796,29 @@ impl Agent {
         !self.cfg.model.trim().is_empty()
     }
 
+    /// Run one turn to the end and hand back everything it said.
+    ///
+    /// The events channel is bounded. A caller that reads it only once the turn has
+    /// returned stops the turn at the sixty-fourth event and waits there forever, so a
+    /// sub-session that reports its own progress has to be drained while it runs.
+    pub async fn collect_turn(
+        &mut self,
+        user_input: String,
+        cancel: CancellationToken,
+    ) -> Result<Vec<AgentEvent>> {
+        let (tx, mut rx) = mpsc::channel(64);
+        let drain = tokio::spawn(async move {
+            let mut events = Vec::new();
+            while let Some(event) = rx.recv().await {
+                events.push(event);
+            }
+            events
+        });
+        let outcome = self.run_user_turn(user_input, cancel, tx).await;
+        let events = drain.await.unwrap_or_default();
+        outcome.map(|()| events)
+    }
+
     pub async fn run_user_turn(
         &mut self,
         user_input: String,
@@ -1877,16 +1900,10 @@ mod tests {
     }
 
     async fn drive(agent: &mut Agent, prompt: &str) -> Vec<AgentEvent> {
-        let (tx, mut rx) = mpsc::channel(64);
         agent
-            .run_user_turn(prompt.into(), CancellationToken::new(), tx)
+            .collect_turn(prompt.into(), CancellationToken::new())
             .await
-            .unwrap();
-        let mut out = Vec::new();
-        while let Ok(e) = rx.try_recv() {
-            out.push(e);
-        }
-        out
+            .unwrap()
     }
 
     /// A file named in the question arrives with it, so the model does not spend a round
@@ -2024,6 +2041,66 @@ mod tests {
             !history.contains("the answer is forty two"),
             "the search came back with the answer"
         );
+    }
+
+    /// A sub-session says as much as any other session, and a long answer says more than
+    /// the events channel holds. Its caller has to read while it runs.
+    #[tokio::test]
+    async fn a_long_delegated_answer_still_comes_back() {
+        let h = Harness::new(Answer::Yes);
+        // Well past the channel's depth, so a caller that reads only at the end stops here.
+        let long: Vec<String> = (0..200)
+            .map(|i| format!(r#"{{"choices":[{{"delta":{{"content":"word{i} "}}}}]}}"#))
+            .collect();
+        let mut sub_answer: Vec<&str> = long.iter().map(String::as_str).collect();
+        sub_answer.push(r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#);
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"delegate","arguments":"{\"task\": \"say a lot\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&sub_answer),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+
+        let mut reg = crate::boot::build_registry(h.root.clone()).0;
+        let sub = Arc::new(reg.clone());
+        reg.register(crate::tools::delegate::Delegate {
+            what: Arc::new(crate::tools::delegate::Delegation {
+                backend: Arc::new(crate::backend::client::BackendClient::new(
+                    backend.url.clone(),
+                )),
+                registry: sub,
+                model: "test".into(),
+                roles: Default::default(),
+                context_tokens: 8192,
+                max_answer_tokens: 4096,
+                protocol: ToolProtocol::Native,
+                grammar_enabled: false,
+                max_steps: 4,
+            }),
+        });
+        let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+        let events = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            drive(&mut agent, "say a lot"),
+        )
+        .await
+        .expect("the delegated turn never returned");
+
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output } if name == "delegate" => Some(output),
+                _ => None,
+            })
+            .expect("the delegation was never answered");
+        assert!(!result.is_error, "{result:?}");
+        assert!(result.content.contains("word199"), "{}", result.content);
     }
 
     /// A pre-tool hook that refuses stops the call, and what it printed is what the model
