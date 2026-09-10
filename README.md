@@ -93,6 +93,25 @@ At an approval prompt: `y` accepts once, `a` accepts everything in the stated sc
 session, `n` or `Esc` declines. `Enter` deliberately does nothing there - it is the send key,
 and a prompt appearing mid-sentence should not be able to approve a command you have not read.
 
+## Working it out while you are not waiting
+
+`--discover`, or `discover = true` in the configuration, gives the session a second thread
+of work: while nothing else is running, one question about the project is taken off a
+queue, answered by a read-only session of its own, and what it found is written down. The
+queue and what has been learned both outlive the session, so the finding out is done once
+rather than at the start of every day.
+
+It is held in place by three rules. It runs only while nothing else does and stops the
+instant you press Enter. It asks the server at a priority that yields, so the answer you
+are waiting for is never behind it. And it plans rather than acts, which means every tool
+that writes, runs a command or reaches the network refuses before it runs.
+
+What it learns goes in front of the model next session, as a short paragraph of statements
+rather than the dozen searches that produced them. That is the point: the searching is what
+fills a window, and a window spent on rediscovery is a window not spent on the work.
+`/digest` shows what is known and where each statement came from, `/digest forget` clears
+it, and what is worth keeping belongs in `.verve.md` where the rest of the team gets it.
+
 ## What the project tells the agent
 
 `.verve.md` at the root of a project, and `~/.config/verve/verve.md` for yourself, are read

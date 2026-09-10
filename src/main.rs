@@ -108,6 +108,10 @@ struct Cli {
     #[arg(long)]
     plan: bool,
 
+    /// Look into the project while nobody is waiting, and remember what is found.
+    #[arg(long)]
+    discover: bool,
+
     /// Run one turn without the interface and exit. Everything below applies to that.
     #[arg(short, long)]
     prompt: Option<String>,
@@ -286,6 +290,9 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             hooks: file.hooks.clone(),
             roles: file.roles.clone(),
             preload: file.preload.unwrap_or(true),
+            // Off unless asked for: it spends the machine's time on its own, and that is
+            // a thing to opt into rather than to discover.
+            discover: cli.discover || file.discover.unwrap_or(false),
             headless: cli.prompt.is_some(),
             mode: if cli.plan || file.mode.as_deref() == Some("plan") {
                 verve::agent::agent_loop::Mode::Plan

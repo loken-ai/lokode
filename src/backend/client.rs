@@ -55,6 +55,12 @@ pub struct BackendClient {
 }
 
 impl BackendClient {
+    /// The header a server that schedules by priority reads.
+    ///
+    /// Named here rather than configured: it is one server's extension, and a server that
+    /// does not know it ignores an unknown header, which is the right outcome.
+    pub const PRIORITY_HEADER: &'static str = "x-loken-priority";
+
     pub fn new(base_url: impl Into<String>) -> Self {
         Self::with_headers(base_url, &[])
     }

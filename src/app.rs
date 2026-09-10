@@ -50,6 +50,8 @@ pub struct AppConfig {
     pub roles: crate::agent::roles::Roles,
     /// Whether to hold the next model ready behind other work.
     pub preload: bool,
+    /// Whether to look into the project while nobody is waiting.
+    pub discover: bool,
     /// Whether this run is driven by a script rather than by a person at a screen.
     pub headless: bool,
     /// Directories an approved shell command may write to, or `None` to leave it

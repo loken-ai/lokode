@@ -61,6 +61,8 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         steer,
         tools,
         tasks,
+        digest,
+        discovery,
     } = boot::boot(&cfg).await?;
 
     // Channels:
@@ -123,6 +125,8 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         steer,
         tools,
         tasks,
+        digest,
+        discovery,
         mcp.clients.clone(),
         mcp_summary,
         &mut agent_evt_rx,
@@ -298,6 +302,10 @@ async fn run_ui(
 
     // The task list the model keeps, drawn while it has anything in it.
     tasks: std::sync::Arc<crate::tools::plan::TaskList>,
+    // What is known about the project, shared with the worker that adds to it.
+    digest: std::sync::Arc<tokio::sync::Mutex<crate::agent::digest::Digest>>,
+    // Answers one question about the project while nobody is waiting.
+    discovery: Option<std::sync::Arc<crate::agent::background::Discovery>>,
     // The servers, for the prompts /mcp can take. Cloned handles: the process still owns
     // them and still shuts them down.
     mcp: Vec<std::sync::Arc<crate::mcp::client::McpClient>>,
@@ -305,6 +313,12 @@ async fn run_ui(
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
 ) -> Result<()> {
+    // What the background worker has to say, and the handle that stops it. It runs only
+    // while nothing else does, so the token is fired the moment a turn starts: the user's
+    // work must never wait behind work nobody asked for.
+    let (learn_tx, mut learn_rx) = mpsc::channel::<Option<String>>(4);
+    let mut discovering: Option<CancellationToken> = None;
+
     let mut state = UiState {
         planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
         model: model.to_string(),
@@ -405,6 +419,25 @@ async fn run_ui(
             }
         })?;
 
+        // Nothing is happening, there is something to find out, and nobody is waiting:
+        // the three conditions together are what makes this free. One question at a time,
+        // so the machine is never given more than it was idle for.
+        if !state.busy && discovering.is_none() {
+            if let Some(worker) = &discovery {
+                let has_questions = !digest.lock().await.questions.is_empty();
+                if has_questions {
+                    let token = shutdown.child_token();
+                    discovering = Some(token.clone());
+                    let worker = worker.clone();
+                    let tx = learn_tx.clone();
+                    tokio::spawn(async move {
+                        let learned = worker.answer_one(token).await;
+                        let _ = tx.send(learned).await;
+                    });
+                }
+            }
+        }
+
         // The only timer, and it runs only while a turn does: time passing IS the change
         // to draw then, since the status line counts how long the phase has been going and
         // the spinner has to move. At idle every reason to redraw still arrives as an
@@ -426,6 +459,18 @@ async fn run_ui(
 
             Some(prompt) = approval_rx.recv() => {
                 state.pending_approval = Some(prompt);
+            }
+
+            Some(learned) = learn_rx.recv() => {
+                discovering = None;
+                // Said once, in a line: what was found is worth knowing, and a paragraph
+                // about it in the middle of somebody's work is not.
+                if let Some(text) = learned {
+                    state.entries.push(Entry::Notice(format!("looked into the project: {text}")));
+                }
+                for suggestion in digest.lock().await.take_suggestions() {
+                    state.entries.push(Entry::Notice(format!("suggestion: {suggestion}")));
+                }
             }
 
             Some(evt) = agent_evt_rx.recv() => {
@@ -567,6 +612,7 @@ async fn run_ui(
                                             control: &control_tx,
                                             policy: &cfg.policy,
                                             tools: &tools,
+                                            digest: &digest,
                                             mcp: &mcp,
                                             mcp_summary: &mcp_summary,
                                             busy: state.busy,
@@ -607,6 +653,11 @@ async fn run_ui(
                                         ));
                                     }
                                     continue;
+                                }
+                                // Whatever was being looked into goes: the user is
+                                // waiting now, and the question will still be there.
+                                if let Some(token) = discovering.take() {
+                                    token.cancel();
                                 }
                                 state.busy = true;
                                 state.step = 0;
@@ -702,6 +753,8 @@ struct CommandCtx<'a> {
     control: &'a mpsc::Sender<crate::agent::agent_loop::Control>,
     policy: &'a crate::sandbox::policy::Policy,
     tools: &'a [String],
+    /// What is known about the project, for /digest.
+    digest: &'a tokio::sync::Mutex<crate::agent::digest::Digest>,
     mcp: &'a [std::sync::Arc<crate::mcp::client::McpClient>],
     mcp_summary: &'a str,
     /// A control request is answered between turns, so a command that needs one has to
@@ -716,6 +769,7 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         control,
         policy,
         tools,
+        digest,
         mcp,
         mcp_summary,
         busy,
@@ -736,6 +790,14 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
             (false, false) => format!("{text}\n\n{rest}"),
         };
         return Ran::Prompt(text);
+    }
+    if verb == "digest" {
+        let mut d = digest.lock().await;
+        if rest == "forget" {
+            d.forget();
+            return Ran::Said("forgotten; it will be worked out again".into());
+        }
+        return Ran::Said(d.describe());
     }
     if verb == "why" {
         if busy {

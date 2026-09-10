@@ -53,6 +53,12 @@ pub struct Booted {
     pub tools: Vec<String>,
     /// The task list the model keeps, for the interface to draw.
     pub tasks: Arc<crate::tools::plan::TaskList>,
+    /// What is known about this project and what is still to be looked into, shared with
+    /// the background worker so a session sees what it learns.
+    pub digest: Arc<tokio::sync::Mutex<crate::agent::digest::Digest>>,
+    /// Answers one question about the project while nobody is waiting. `None` when the
+    /// configuration turned it off.
+    pub discovery: Option<Arc<crate::agent::background::Discovery>>,
 }
 
 pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
@@ -158,6 +164,17 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     ctx.max_output_chars =
         crate::agent::session::tool_output_chars(context_tokens, max_answer_tokens);
 
+    // What earlier sessions worked out about this project, and the questions they did
+    // not get to. Both outlive the process, which is the whole point: the finding out is
+    // done once and used every time.
+    let mut digest = crate::agent::digest::Digest::open(crate::paths::state_dir(), &cfg.root);
+    if digest.is_empty() && digest.questions.is_empty() {
+        for question in crate::agent::background::opening_questions() {
+            digest.ask(&question);
+        }
+        digest.save();
+    }
+
     // Bounded against this window, and what could not be sent is said rather than
     // silently dropped.
     let (instructions, notes) = crate::config::load_instructions(
@@ -165,6 +182,16 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         crate::agent::session::instruction_chars(context_tokens, max_answer_tokens),
     );
     let mode = cfg.mode;
+    // The standing instructions a person wrote, then what the background work has found
+    // out: the cheaper half of what a session used to spend its first minutes
+    // rediscovering, in a paragraph rather than in a dozen searches.
+    let learned = digest.preamble(crate::agent::digest::MAX_PREAMBLE_CHARS);
+    let instructions = match (instructions, learned) {
+        (Some(i), Some(l)) => Some(format!("{i}\n\nWhat earlier sessions found out here:\n{l}")),
+        (Some(i), None) => Some(i),
+        (None, Some(l)) => Some(format!("What earlier sessions found out here:\n{l}")),
+        (None, None) => None,
+    };
     let system = Agent::build_system_prompt(&registry, protocol, mode, instructions.as_deref());
     let mut session = Session::new(system, context_tokens, max_answer_tokens);
     let restored = earlier.as_ref().map(|e| e.messages.len()).unwrap_or(0);
@@ -239,7 +266,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     registry.register(crate::tools::delegate::Delegate {
         what: Arc::new(crate::tools::delegate::Delegation {
             backend: backend.clone(),
-            registry: registry_for_delegation,
+            registry: registry_for_delegation.clone(),
             // A delegated question is a search: its own model when the project names one,
             // and the session's otherwise.
             model: cfg
@@ -258,6 +285,30 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         }),
     });
     let registry = Arc::new(registry);
+
+    let digest = Arc::new(tokio::sync::Mutex::new(digest));
+    // Its own client, whose requests say they should yield, and the same tools as the
+    // session: a background turn that could not read the project could not find anything
+    // out about it. It plans rather than acts, so none of them can change anything.
+    let discovery = cfg
+        .discover
+        .then(|| -> Result<Arc<crate::agent::background::Discovery>> {
+            Ok(Arc::new(crate::agent::background::Discovery {
+                backend: background_provider(cfg)?,
+                registry: registry_for_delegation.clone(),
+                ctx: ctx.clone(),
+                model: cfg
+                    .roles
+                    .get(crate::agent::roles::Role::Search)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| model.clone()),
+                protocol,
+                context_tokens,
+                max_answer_tokens,
+                digest: digest.clone(),
+            }))
+        })
+        .transpose()?;
 
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
@@ -319,7 +370,31 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         steer: steer_tx,
         tools,
         tasks,
+        digest,
+        discovery,
     })
+}
+
+/// A second client whose requests say they should yield to the user's.
+///
+/// The background work shares a machine with the turn a person is waiting on, so it asks
+/// to be scheduled behind it. A server that does not schedule by priority ignores an
+/// unknown header, which is the right outcome: the work still happens, just without the
+/// courtesy. Only the OpenAI-compatible client carries it, because that is the one whose
+/// server is on this machine.
+fn background_provider(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Provider>> {
+    if cfg.backend_kind == crate::config::BackendKind::Anthropic {
+        return provider_for(cfg);
+    }
+    let mut headers = cfg.headers.clone();
+    headers.push((
+        BackendClient::PRIORITY_HEADER.to_string(),
+        "batch".to_string(),
+    ));
+    Ok(Arc::new(BackendClient::with_headers(
+        cfg.backend_url.clone(),
+        &headers,
+    )))
 }
 
 /// Build the client for whichever API the backend speaks.
