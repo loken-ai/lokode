@@ -107,8 +107,10 @@ small model spends that time guessing which read is coming next, the read is mad
 step that asks for it is answered without a round trip. It is abandoned the moment the
 answer arrives: a guess is worth having only if it lands first, and one that has not must
 never be something the turn waits on. Read-only by construction too, so a guess that would
-change something is dropped rather than run, because being wrong has to stay free. It happens only against a backend on this machine or this network, where an idle card
-is the whole cost, and `speculate = false` turns it off.
+change something is dropped rather than run, because being wrong has to stay free. `speculate = true` turns it on, against a backend on this machine or this network. It is
+off by default and should stay off unless the guessing model can stay resident beside the
+one answering: where the cards hold only one, every guess evicts the model the turn is
+waiting on and the feature costs what it was meant to save.
 
 A turn closes with what it came to: how long it took, how many steps, what it spent and
 which files it changed. A turn that answered in a moment and changed nothing says nothing,

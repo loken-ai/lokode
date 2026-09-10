@@ -216,8 +216,11 @@ pub struct FileConfig {
     /// Whether to have a nearby backend hold the next model ready while other work runs.
     /// On by default, and a no-op against anything that is not nearby.
     pub preload: Option<bool>,
-    /// Guess the next read while the model is still thinking. Only ever done against a
-    /// backend near enough that an idle card is the only thing it costs.
+    /// Guess the next read while the model is still thinking.
+    ///
+    /// Off unless asked for. It is only free when the model doing the guessing can stay
+    /// resident beside the one answering; where it cannot, every guess evicts the model
+    /// the turn is waiting on, and the feature costs what it was meant to save.
     pub speculate: Option<bool>,
     /// Whether to look into the project while nobody is waiting, and remember what is
     /// found. Off by default: it spends the machine's time on its own.
