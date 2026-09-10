@@ -202,7 +202,29 @@ const CHECK_FAILED: &str = "the language server reports:";
 const TURN_ABANDONED: &str = "[this turn ended without an answer]";
 
 /// How long to wait between two pieces of a streaming answer before giving up on it.
+///
+/// Between pieces only. A server that has started speaking and stops has stalled, and the
+/// gap says so whatever the prompt was.
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The slowest prefill worth waiting through, in tokens a second.
+///
+/// The wait for the first token is not a gap in an answer: it is the server reading the
+/// prompt, and it grows with the prompt. Held to the same figure as the gaps after it, a
+/// long window is unusable by construction - the client gives up on every request large
+/// enough to be the reason the window was asked for. Slow enough to cover a large model
+/// spread over consumer cards; anything below it is a server in trouble, not a server
+/// working.
+const SLOWEST_PREFILL: usize = 60;
+
+/// How long to wait for the first piece of an answer to a prompt of `chars`.
+///
+/// Never shorter than the gap allowed between pieces, so a short prompt is judged by the
+/// same rule it always was.
+fn first_token_timeout(chars: usize) -> std::time::Duration {
+    let tokens = chars / crate::agent::session::CHARS_PER_TOKEN;
+    std::time::Duration::from_secs((tokens / SLOWEST_PREFILL) as u64).max(STREAM_IDLE_TIMEOUT)
+}
 
 /// Split a turn's calls into runs that may go at once.
 ///
@@ -2297,6 +2319,10 @@ impl Agent {
         // Said once each: the phase is what the status line holds until the next one, not
         // a line per token.
         let (mut answering, mut thinking) = (false, false);
+        // The first piece is waited for differently from the ones after it: reading the
+        // prompt takes as long as the prompt is long, and a stall is a stall whatever
+        // was asked.
+        let mut patience = first_token_timeout(self.session.size_chars());
         loop {
             let next = tokio::select! {
                 biased;
@@ -2304,10 +2330,10 @@ impl Agent {
                 // A server that stops speaking mid-answer would otherwise hold the turn
                 // until the client's own timeout, which is fifteen minutes of a interface
                 // that says it is busy and is not.
-                _ = tokio::time::sleep(STREAM_IDLE_TIMEOUT) => {
+                _ = tokio::time::sleep(patience) => {
                     return Err(anyhow::anyhow!(
                         "backend sent nothing for {}s",
-                        STREAM_IDLE_TIMEOUT.as_secs()
+                        patience.as_secs()
                     ))
                 }
                 p = stream.next() => match p {
@@ -2315,6 +2341,9 @@ impl Agent {
                     None => break,
                 },
             };
+            // Something arrived, so the prompt has been read: from here a silence is a
+            // stall rather than work.
+            patience = STREAM_IDLE_TIMEOUT;
             match next? {
                 StreamEvent::Delta(p) => {
                     if !answering {
@@ -2497,6 +2526,19 @@ impl Agent {
 
 #[cfg(test)]
 mod tests {
+    /// Reading the prompt is work, not silence: a window asked for precisely so that a
+    /// large prompt can be sent is unusable if the client gives up while it is read.
+    #[test]
+    fn a_long_prompt_is_waited_for_longer_than_a_stall() {
+        // A short prompt is judged by the gap rule, as it always was.
+        assert_eq!(first_token_timeout(0), STREAM_IDLE_TIMEOUT);
+        assert_eq!(first_token_timeout(10_000), STREAM_IDLE_TIMEOUT);
+        // A window's worth of prompt is waited through.
+        let full = first_token_timeout(131_072 * crate::agent::session::CHARS_PER_TOKEN);
+        assert!(full > STREAM_IDLE_TIMEOUT, "{full:?}");
+        assert_eq!(full.as_secs(), (131_072 / SLOWEST_PREFILL) as u64);
+    }
+
     use super::*;
 
     #[test]

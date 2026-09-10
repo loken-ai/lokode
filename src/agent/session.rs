@@ -8,7 +8,7 @@ use crate::backend::wire::Message;
 /// The agent has no tokenizer, and acquiring one per model would tie it to a backend it
 /// deliberately does not depend on. The figure only decides *when* to compact, so being
 /// off by a fifth moves the trigger point and never corrupts the conversation.
-const CHARS_PER_TOKEN: usize = 4;
+pub(crate) const CHARS_PER_TOKEN: usize = 4;
 
 /// Fraction of the estimated capacity actually used.
 ///
