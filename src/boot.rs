@@ -164,9 +164,25 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // A window belongs to a model: the one named for this session takes what the
     // configuration says it needs, and the default only when it says nothing.
     let per_model = cfg.models.get(&model);
-    let context_tokens = per_model
+    let mut context_tokens = per_model
         .and_then(|m| m.context_tokens)
         .unwrap_or(cfg.context_tokens);
+    // What the backend actually offers, when nobody has said. A guess is wrong in both
+    // directions: too small wastes the window that is there, and too large sends prompts
+    // the server cuts, which produces an answer that is fluent and wrong about what it
+    // was asked.
+    if !cfg.context_was_set && per_model.and_then(|m| m.context_tokens).is_none() {
+        if let Ok(http) = crate::tools::registry::tool_http_client() {
+            if let Some(said) = crate::backend::window::of(&http, &cfg.backend_url, &model).await {
+                if said != context_tokens {
+                    model_notes.push(format!(
+                        "the backend offers {said} tokens for {model}; using that instead of {context_tokens}"
+                    ));
+                    context_tokens = said;
+                }
+            }
+        }
+    }
     let max_answer_tokens = per_model
         .and_then(|m| m.max_answer_tokens)
         .unwrap_or(cfg.max_answer_tokens);

@@ -104,6 +104,20 @@ fn shorten(answer: &str) -> Option<String> {
     (!short.is_empty() && short.len() <= MAX_ANSWER_CHARS).then(|| short.to_string())
 }
 
+/// Whether the text is an attempt at calling a tool rather than a statement about the
+/// project.
+///
+/// A model that reaches for a tool in its last breath leaves the call itself as the
+/// answer. Filed as a fact it becomes a line of XML that every later session is handed as
+/// something known about the project.
+fn is_a_tool_call(text: &str) -> bool {
+    let text = text.trim();
+    (text.starts_with('{') && text.contains("\"name\""))
+        || text.contains("<function=")
+        || text.contains("<tool_call>")
+        || text.contains("<parameter=")
+}
+
 /// How long an answer may be and still read as a statement of fact.
 const MAX_ANSWER_CHARS: usize = 400;
 
@@ -255,6 +269,12 @@ impl Discovery {
             self.put_back(&question).await;
             return None;
         }
+        if is_a_tool_call(&answer) {
+            // Not put back: the model was asked a question and reached for a tool instead
+            // of answering, and asking it again is asking the same model the same thing.
+            tracing::info!(%question, "the background answer was a tool call, discarded");
+            return None;
+        }
         if is_backend_failure(&answer) {
             tracing::info!(%question, %answer, "the backend failed mid-answer");
             self.put_back(&question).await;
@@ -326,6 +346,24 @@ mod tests {
         // The question was never spent, and the loop stops asking it.
         assert_eq!(digest.lock().await.questions.len(), 1);
         assert!(w.stalled());
+    }
+
+    /// A model that reaches for a tool in its last breath leaves the call as the answer.
+    /// Filed as a fact it becomes a line of XML every later session is handed as known.
+    #[test]
+    fn an_attempt_at_a_tool_call_is_not_a_fact() {
+        assert!(is_a_tool_call(
+            "<function=list_dir>\n<parameter=path>\n\n</parameter>\n</function>"
+        ));
+        assert!(is_a_tool_call(
+            "<tool_call>{\"name\": \"grep\"}</tool_call>"
+        ));
+        assert!(is_a_tool_call(
+            "{\"name\": \"read_file\", \"arguments\": {}}"
+        ));
+        assert!(!is_a_tool_call(
+            "It builds a terminal agent, written in Rust."
+        ));
     }
 
     #[test]

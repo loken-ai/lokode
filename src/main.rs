@@ -270,6 +270,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
                 .max_steps
                 .or(file.limits.max_steps)
                 .unwrap_or(default::MAX_STEPS),
+            context_was_set: cli.context_tokens.or(file.limits.context_tokens).is_some(),
             context_tokens: cli
                 .context_tokens
                 .or(file.limits.context_tokens)

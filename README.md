@@ -65,7 +65,23 @@ One thing it uses if it is there, and one it needs:
 ## Using it
 
 The keys are on their own line under the input, always in view, because a shortcut nobody
-can see is a shortcut nobody uses.
+can see is a shortcut nobody uses, and they change with what is in force.
+
+A slash at the start of a line opens the commands, narrowed as you type; an at-sign opens
+the files under the root. Tab takes what is highlighted, enter sends once there is nothing
+left to complete. A command's answer longer than a sentence opens on a page over the
+conversation and closes leaving nothing behind, rather than sitting in the thread for the
+rest of the session.
+
+`Alt` with the arrow keys moves between the steps of a session rather than the rows of the
+pane, and `space` opens a block that was counted. A change waiting to be agreed to is asked
+about in the thread, with its diff beside it, not in a window over the conversation it has
+to be judged against.
+
+The window is asked of the backend rather than assumed: guessing small wastes what is
+there, and guessing large sends prompts the server cuts, which produces an answer that is
+fluent and wrong about what it was asked. `--context-tokens` still settles it where it is
+stated.
 
 | Key | |
 |---|---|

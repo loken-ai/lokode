@@ -5,4 +5,5 @@ pub mod provider;
 pub mod reasoning;
 pub mod repair;
 pub mod schema;
+pub mod window;
 pub mod wire;

@@ -50,6 +50,8 @@ pub struct AppConfig {
     pub roles: crate::agent::roles::Roles,
     /// Whether to hold the next model ready behind other work.
     pub preload: bool,
+    /// Whether the window was stated rather than left to be found out.
+    pub context_was_set: bool,
     /// Whether to spend an idle card guessing the next read while the model thinks.
     pub speculate: bool,
     /// Whether to look into the project while nobody is waiting.

@@ -355,6 +355,36 @@ const REVIEW_SAID_CHARS: usize = 400;
 /// fails often enough in a row to be stopped by the other rule.
 const FAILED_CALLS: u32 = 6;
 
+/// Whether a name in the catalogue is something a turn could be had with.
+///
+/// A server that does more than text lists what it does: voices, transcribers, image
+/// pipelines, an encoder or two. None of them can answer a question, and offering them to
+/// somebody choosing a model is offering a choice that cannot work.
+///
+/// Judged on the name, which is all the catalogue gives. A name that says nothing either
+/// way is kept: refusing to offer a model because its name was unfamiliar would be worse
+/// than listing one that turns out to be a transcriber.
+pub fn can_hold_a_conversation(name: &str) -> bool {
+    const NOT_A_CHAT: [&str; 14] = [
+        "whisper",
+        "tts",
+        "voice",
+        "xtts",
+        "ace-step",
+        "flux",
+        "-image",
+        "image-",
+        "clip",
+        "embed",
+        "rerank",
+        "guard",
+        "moderation",
+        "stable-audio",
+    ];
+    let name = name.to_lowercase();
+    !NOT_A_CHAT.iter().any(|m| name.contains(m))
+}
+
 /// Whether the text is a failure the server wrote into the stream rather than an answer.
 ///
 /// A server that fails part-way through generation reports it in the content, where it
@@ -1027,6 +1057,7 @@ impl Agent {
                 Ok(models) => {
                     let lines: Vec<String> = models
                         .iter()
+                        .filter(|m| can_hold_a_conversation(m))
                         .map(|m| {
                             let mark = if *m == self.cfg.model { "* " } else { "  " };
                             format!("{mark}{m}")
@@ -3074,6 +3105,27 @@ mod tests {
             results[1].content.contains("you already ran this"),
             "{results:?}"
         );
+    }
+
+    /// A server that does more than text lists what it does, and none of it can answer a
+    /// question. Offering it to somebody choosing a model is offering a choice that
+    /// cannot work.
+    #[test]
+    fn the_catalogue_offers_only_what_can_answer() {
+        for name in [
+            "Systran/faster-whisper-base",
+            "coqui/XTTS-v2",
+            "black-forest-labs/FLUX.1-schnell",
+            "Qwen/Qwen-Image",
+            "openai/clip-vit-large-patch14",
+            "llama-guard3:1b",
+        ] {
+            assert!(!can_hold_a_conversation(name), "{name}");
+        }
+        // A name that says nothing either way is kept.
+        for name in ["qwen3-coder:30b", "mistral-small3.2:latest", "boogu"] {
+            assert!(can_hold_a_conversation(name), "{name}");
+        }
     }
 
     /// A model asking the same question every step learns nothing each time. The memo
