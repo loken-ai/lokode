@@ -238,6 +238,18 @@ fn last_is_parallel(registry: &Registry, run: &[ResolvedCall]) -> bool {
 /// sixteen.
 const BARREN_STEPS: u32 = 3;
 
+/// How much of a call's arguments a reviewer is shown.
+///
+/// Enough to see what the change is, bounded because a whole-file write is the whole file
+/// and the question is about the shape of the change rather than every line of it.
+const REVIEW_ARG_CHARS: usize = 4000;
+
+/// How long an objection may be and still be one.
+///
+/// A reviewer that writes a paragraph is discussing the change rather than objecting to
+/// it, and a paragraph in front of the model is a paragraph it will argue with.
+const REVIEW_SAID_CHARS: usize = 400;
+
 /// How many calls may fail in a turn that has changed nothing before it is given back.
 ///
 /// Counted across the turn rather than in a row, because a model that gets its own
@@ -1336,6 +1348,36 @@ impl Agent {
                         self.preload(&next);
                     }
                 }
+                // A second pair of eyes on anything that changes something, when the
+                // project has named a model for it. Asked before the write rather than
+                // after, because after is a file to put back.
+                let mut objections: std::collections::HashMap<String, String> = Default::default();
+                if self
+                    .cfg
+                    .roles
+                    .get(crate::agent::roles::Role::Review)
+                    .is_some()
+                {
+                    for call in &run {
+                        let mutating = self
+                            .registry
+                            .get(&call.name)
+                            .map(|t| t.mutates())
+                            .unwrap_or(false);
+                        if !mutating {
+                            continue;
+                        }
+                        if let Some(said) = self.second_opinion(call, &turn.text, &cancel).await {
+                            let _ = events
+                                .send(AgentEvent::Notice(format!(
+                                    "second opinion on {}: {said}",
+                                    call.name
+                                )))
+                                .await;
+                            objections.insert(call.id.clone(), said);
+                        }
+                    }
+                }
                 // What actually runs. A read-only call this turn already made, with
                 // nothing written since, has an answer: running it again spends a round
                 // trip to be told the same thing, and a model that is going in circles
@@ -1343,6 +1385,14 @@ impl Agent {
                 let mut fresh: Vec<&ResolvedCall> = Vec::new();
                 let mut plan: Vec<Result<usize, ToolOutput>> = Vec::with_capacity(run.len());
                 for call in &run {
+                    if objections.contains_key(&call.id) {
+                        plan.push(Err(ToolOutput::err(format!(
+                            "not run: a second reading of this change says {}. Fix that or \
+                             say why it is right.",
+                            objections[&call.id]
+                        ))));
+                        continue;
+                    }
                     let key = repeat_key(call);
                     if let Some(known) = self.repeats.get(&key) {
                         plan.push(Err(said_before(known)));
@@ -1566,6 +1616,69 @@ impl Agent {
         if self.steps.len() > 200 {
             self.steps.remove(0);
         }
+    }
+
+    /// What a second model says about a change, before it is written.
+    ///
+    /// Asked of a different model than the one proposing the change: the value is in the
+    /// disagreement, and a model checking its own work agrees with itself. Read-only, one
+    /// question, so the smallest model in the house can answer it.
+    ///
+    /// `None` means no objection - which is also what a reviewer that could not be reached
+    /// means. A review that fails must not be able to stop the work.
+    async fn second_opinion(
+        &self,
+        call: &ResolvedCall,
+        said: &str,
+        cancel: &CancellationToken,
+    ) -> Option<String> {
+        // The last thing the person asked for, which is what the change has to serve.
+        let asked = self
+            .session
+            .history
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.chars().take(REVIEW_ARG_CHARS).collect::<String>())?;
+        let args = serde_json::to_string(&call.arguments).ok()?;
+        let args: String = args.chars().take(REVIEW_ARG_CHARS).collect();
+        let req = TurnRequest {
+            model: self.model_for(crate::agent::roles::Role::Review),
+            messages: vec![
+                Message::system(
+                    "You are checking one proposed change against what was asked for. \
+                     Answer with the single word OK when the change does what was asked. \
+                     Otherwise answer with one short sentence naming what is wrong with \
+                     it. Do not suggest improvements and do not comment on style: only \
+                     say something when the change would not do what was asked, would \
+                     lose work that is already there, or touches the wrong file.",
+                ),
+                Message::user(format!(
+                    "What was asked:\n{asked}\n\nWhat the agent says it is doing:\n{said}\n\n                     The call it wants to make:\n{}: {args}",
+                    call.name
+                )),
+            ],
+            tools: None,
+            grammar: None,
+            max_tokens: 120,
+            temperature: 0.0,
+            user: Some(format!("{}-review", self.session.id)),
+        };
+        let answer = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return None,
+            r = self.backend.complete(req) => r.ok()?,
+        };
+        let answer = answer.trim();
+        // A reviewer that says nothing, says OK, or opens with it has no objection.
+        let head = answer.trim_start_matches(['"', '`', '*']).trim_start();
+        if head.is_empty()
+            || head.len() > REVIEW_SAID_CHARS
+            || head.to_lowercase().starts_with("ok")
+        {
+            return None;
+        }
+        Some(head.lines().next()?.trim().to_string())
     }
 
     /// Diagnostics for a file a write tool just changed, when there are any.
@@ -2145,6 +2258,19 @@ mod tests {
         )
     }
 
+    /// A plain JSON reply, for the calls that do not stream.
+    fn json_reply(content: &str) -> String {
+        let body = serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": content},
+                         "finish_reason": "stop"}]
+        })
+        .to_string();
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
     fn rejects_tools() -> String {
         let body =
             r#"{"error":{"message":"unknown field `tools`","type":"invalid_request_error"}}"#;
@@ -2518,6 +2644,75 @@ mod tests {
             Some("read_file")
         );
         assert_eq!(nearest_tool(&reg, "zzz").as_deref(), None);
+    }
+
+    /// A change is read by a second model before it is written. The value is in the
+    /// disagreement, so the objection stops the write and reaches the one who proposed it.
+    #[tokio::test]
+    async fn a_second_reading_stops_a_change_it_objects_to() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "keep me");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"replacing it"}}]}"#,
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write_file","arguments":"{\"path\": \"a.txt\", \"content\": \"gone\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            // The reviewer, answering the one question it was asked.
+            json_reply("it deletes the line the user asked to keep"),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"understood"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.cfg.roles.review = Some("small".into());
+        let events = drive(&mut agent, "add a line to a.txt and keep what is there").await;
+
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output } if name == "write_file" => Some(output),
+                _ => None,
+            })
+            .expect("the call was never answered");
+        assert!(result.is_error, "{result:?}");
+        assert!(result.content.contains("second reading"), "{result:?}");
+        // The file is untouched: the objection came before the write, not after it.
+        assert_eq!(h.read("a.txt"), "keep me");
+    }
+
+    /// A reviewer that agrees says so in one word and gets out of the way.
+    #[tokio::test]
+    async fn a_second_reading_that_agrees_changes_nothing() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write_file","arguments":"{\"path\": \"a.txt\", \"content\": \"two\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            json_reply("OK"),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.cfg.roles.review = Some("small".into());
+        let events = drive(&mut agent, "put two in a.txt").await;
+
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output } if name == "write_file" => Some(output),
+                _ => None,
+            })
+            .expect("the call was never answered");
+        assert!(!result.is_error, "{result:?}");
+        assert_eq!(h.read("a.txt"), "two");
     }
 
     /// A model asking the same question every step learns nothing each time. The memo

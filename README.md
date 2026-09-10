@@ -370,9 +370,17 @@ back, saying so, because a model that changed without anyone announcing it makes
 answer's character unexplainable. The status line shows the model answering now, which is
 not always the one the session started with.
 
+`review` names a second pair of eyes. When it is set, anything about to change something is
+read first by that model, which is asked one question: does this do what was asked. An
+objection stops the call before the file moves and is handed back to the model that
+proposed it; agreement is one word and costs a few tokens on a card that was idle anyway.
+The value is in the disagreement, which is why it is a different model: one checking its
+own work agrees with itself. A reviewer that cannot be reached never blocks anything.
+
 `escalate` is the model to raise to when the cheap path has been shown to be wrong. After a
-write the language server is asked about the file, and a step whose change did not check
-out raises the session to that model for the steps that follow, saying so. Two writes that
+write the language server is asked about the file, and, where the project has no language
+server for it, the compiler is asked to compile and nothing else. A step whose change did
+not check out raises the session to that model for the steps that follow, saying so. Two writes that
 do check out bring it back down. A step that only read something moves nothing either way,
 because a search says nothing about whether a model can produce a change that compiles.
 

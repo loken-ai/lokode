@@ -29,6 +29,10 @@ pub enum Role {
     /// Where to go when the cheap path has been shown to be wrong: the model asked to
     /// clean up after a step whose change did not compile.
     Escalate,
+    /// A second pair of eyes on a change, before it is written. Read-only work with one
+    /// question to answer, so a small model does it, and two models disagreeing is worth
+    /// more than either of them alone.
+    Review,
 }
 
 impl Role {
@@ -40,16 +44,18 @@ impl Role {
             Role::Search => "search",
             Role::Repair => "repair",
             Role::Escalate => "escalate",
+            Role::Review => "review",
         }
     }
 
-    pub const ALL: [Role; 6] = [
+    pub const ALL: [Role; 7] = [
         Role::Chat,
         Role::Plan,
         Role::Edit,
         Role::Search,
         Role::Repair,
         Role::Escalate,
+        Role::Review,
     ];
 }
 
@@ -67,6 +73,7 @@ pub struct Roles {
     pub search: Option<String>,
     pub repair: Option<String>,
     pub escalate: Option<String>,
+    pub review: Option<String>,
 }
 
 impl Roles {
@@ -78,6 +85,7 @@ impl Roles {
             Role::Search => self.search.as_deref(),
             Role::Repair => self.repair.as_deref(),
             Role::Escalate => self.escalate.as_deref(),
+            Role::Review => self.review.as_deref(),
         }
     }
 
@@ -90,6 +98,7 @@ impl Roles {
             search: over.search.or(base.search),
             repair: over.repair.or(base.repair),
             escalate: over.escalate.or(base.escalate),
+            review: over.review.or(base.review),
         }
     }
 
