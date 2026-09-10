@@ -232,6 +232,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         cfg: AgentConfig {
             model: model.clone(),
             mode,
+            hooks: cfg.hooks.clone(),
             remember_model_in: crate::config::user_config_path(),
             context_tokens: cfg.context_tokens,
             models: cfg.models.clone(),

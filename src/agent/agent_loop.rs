@@ -191,6 +191,8 @@ struct Completion {
 pub struct AgentConfig {
     pub model: String,
     pub mode: Mode,
+    /// Commands to run at the edges of a tool call and a turn.
+    pub hooks: crate::config::HooksSection,
     /// The window to use for a model the configuration says nothing about.
     pub context_tokens: usize,
     /// What each named model needs, when it differs from the default.
@@ -620,7 +622,7 @@ impl Agent {
             self.record_assistant_turn(&turn)?;
 
             if turn.calls.is_empty() {
-                let _ = events.send(AgentEvent::TurnDone).await;
+                self.end_turn(&events).await;
                 return Ok(());
             }
 
@@ -702,8 +704,30 @@ impl Agent {
                 self.cfg.max_steps
             )))
             .await;
-        let _ = events.send(AgentEvent::TurnDone).await;
+        self.end_turn(&events).await;
         Ok(())
+    }
+
+    /// Run the turn-end hook, if there is one, and close the turn.
+    ///
+    /// What the hook says is a notice rather than part of the conversation: the turn is
+    /// over, so there is nothing left for the model to do about it, and the person is the
+    /// one who has to read that the formatter rewrote three files.
+    async fn end_turn(&self, events: &mpsc::Sender<AgentEvent>) {
+        if let Some(hook) = self.cfg.hooks.turn_end.clone() {
+            let ran = crate::agent::hooks::run(&hook, &self.ctx.root, "", "turn-end").await;
+            if !ran.output.is_empty() {
+                let mark = if ran.ok {
+                    "turn-end hook"
+                } else {
+                    "turn-end hook failed"
+                };
+                let _ = events
+                    .send(AgentEvent::Notice(format!("{mark}:\n{}", ran.output)))
+                    .await;
+            }
+        }
+        let _ = events.send(AgentEvent::TurnDone).await;
     }
 
     /// Close an unanswered turn.
@@ -714,7 +738,9 @@ impl Agent {
     async fn abandon(&mut self, events: &mpsc::Sender<AgentEvent>, why: &str) {
         self.session.push(Message::assistant(TURN_ABANDONED));
         let _ = events.send(AgentEvent::Notice(why.to_string())).await;
-        let _ = events.send(AgentEvent::TurnDone).await;
+        // The hook runs here too: an abandoned turn can have changed files, and that is
+        // exactly when a formatter or a test suite is worth running.
+        self.end_turn(events).await;
     }
 
     /// Commit what a tool just changed, if a history is being kept.
@@ -1005,11 +1031,37 @@ impl Agent {
                  Say what you would do with it as a step of the plan."
             ));
         }
+        // Only around a call that changes something: a hook on every read would run on
+        // the searches an agent does by the dozen, and there is nothing there to check.
+        if tool.mutates() {
+            if let Some(hook) = self.cfg.hooks.pre_tool.clone() {
+                let ran = crate::agent::hooks::run(&hook, &self.ctx.root, name, "pre-tool").await;
+                if !ran.ok {
+                    return ToolOutput::err(format!(
+                        "refused before it ran, by this project's pre-tool hook:\n{}",
+                        ran.output
+                    ));
+                }
+            }
+        }
         let started = std::time::Instant::now();
         let out = match tool.run(&self.ctx, args).await {
             Ok(o) => o,
             Err(e) => ToolOutput::err(format!("tool '{name}' failed: {e:#}")),
         };
+        if tool.mutates() {
+            if let Some(hook) = self.cfg.hooks.post_tool.clone() {
+                let ran = crate::agent::hooks::run(&hook, &self.ctx.root, name, "post-tool").await;
+                // What it says is handed over whether it succeeded or not: a formatter
+                // that rewrote the file has something the model needs to know.
+                if !ran.output.is_empty() {
+                    let mut out = out;
+                    out.content
+                        .push_str(&format!("\n\npost-tool hook:\n{}", ran.output));
+                    return out;
+                }
+            }
+        }
         tracing::info!(
             tool = name,
             ms = started.elapsed().as_millis(),
@@ -1151,6 +1203,7 @@ mod tests {
             registry,
             cfg: AgentConfig {
                 mode: Mode::Act,
+                hooks: Default::default(),
                 instructions: None,
                 // A test must never write into the person's own configuration.
                 remember_model_in: None,
@@ -1181,6 +1234,65 @@ mod tests {
             out.push(e);
         }
         out
+    }
+
+    /// A pre-tool hook that refuses stops the call, and what it printed is what the model
+    /// is told: guidance an agent cannot skip, which is the only kind that holds.
+    #[tokio::test]
+    async fn a_refusing_hook_stops_the_tool_and_is_handed_to_the_model() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"write_file","arguments":"{\"path\": \"a.txt\", \"content\": \"two\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"understood"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.cfg.hooks.pre_tool = Some("echo the tree is not clean >&2; exit 1".into());
+        let events = drive(&mut agent, "change it").await;
+
+        let refusal = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output } if name == "write_file" => Some(output),
+                _ => None,
+            })
+            .expect("the write was never answered");
+        assert!(refusal.is_error);
+        assert!(
+            refusal.content.contains("the tree is not clean"),
+            "{refusal:?}"
+        );
+        assert_eq!(h.read("a.txt"), "one");
+    }
+
+    /// A hook at the end of a turn is for the person: it says what it did, and it runs
+    /// even for a turn that was abandoned, because that turn can have changed files.
+    #[tokio::test]
+    async fn the_turn_end_hook_reports_to_the_user() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![sse(&[
+            r#"{"choices":[{"delta":{"content":"nothing to do"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ])])
+        .await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        agent.cfg.hooks.turn_end = Some("echo formatted 3 files".into());
+        let events = drive(&mut agent, "hello").await;
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                AgentEvent::Notice(s) if s.contains("formatted 3 files")
+            )),
+            "the hook said nothing: {events:?}"
+        );
     }
 
     /// While planning, a tool that would change something is refused before it runs, and

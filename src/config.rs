@@ -207,6 +207,22 @@ pub struct FileConfig {
     /// What may go ahead without a question, and what may never go ahead at all.
     #[serde(default)]
     pub approve: crate::sandbox::policy::Policy,
+    /// Commands to run at the edges of a tool call and a turn.
+    #[serde(default)]
+    pub hooks: HooksSection,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct HooksSection {
+    /// Run before a tool that changes something. A non-zero exit refuses the call and
+    /// what it printed is handed to the model, which is what makes a policy check part
+    /// of the loop rather than advice nobody reads.
+    pub pre_tool: Option<String>,
+    /// Run after such a tool, whatever it did.
+    pub post_tool: Option<String>,
+    /// Run when a turn ends. A formatter or a test suite belongs here.
+    pub turn_end: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -413,6 +429,11 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 w.extend(over.shell.writable);
                 w
             },
+        },
+        hooks: HooksSection {
+            pre_tool: over.hooks.pre_tool.or(base.hooks.pre_tool),
+            post_tool: over.hooks.post_tool.or(base.hooks.post_tool),
+            turn_end: over.hooks.turn_end.or(base.hooks.turn_end),
         },
         approve: crate::sandbox::policy::Policy {
             // Added to rather than replaced, on both sides: a project stating what is

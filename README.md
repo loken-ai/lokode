@@ -163,6 +163,29 @@ The exit code says what happened without anything having to be parsed: `0` finis
 something failed - a backend error, or the step limit - and `2` a tool was refused by the
 policy, which is a different thing from the model deciding not to use one.
 
+## Hooks
+
+A project can put its own commands at the edges of the loop:
+
+```toml
+[hooks]
+pre-tool = "./scripts/guard.sh"
+post-tool = "cargo fmt"
+turn-end = "cargo test --quiet"
+```
+
+They run only around a tool that changes something, because a hook on every read would run
+on the searches an agent does by the dozen. A non-zero exit from the pre-tool hook refuses
+the call and what it printed is handed to the model, which is the only form of guidance an
+agent cannot skip. The post-tool hook's output is handed over too, since a formatter that
+rewrote the file has something the model needs to know. The turn-end hook reports to you,
+and runs for an abandoned turn as well, because that is exactly when files have been left
+half-changed.
+
+The hook is given the tool's name, the project root and which edge it is at, in the
+environment. It is bounded in time and its output is bounded in length, since both land
+inside a turn.
+
 ## Commands a project ships
 
 A Markdown file under `.verve/commands` is a command: `review.md` makes `/review`, and what
