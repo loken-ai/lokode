@@ -91,6 +91,8 @@ pub enum Control {
         name: Option<String>,
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// Hold the session to a tool protocol, once something has found out which one works.
+    Protocol(ToolProtocol),
     /// Plan or act.
     Mode {
         mode: Mode,
@@ -223,6 +225,29 @@ fn last_is_parallel(registry: &Registry, run: &[ResolvedCall]) -> bool {
         .and_then(|c| registry.get(&c.name))
         .map(|t| !t.mutates())
         .unwrap_or(false)
+}
+
+/// Whether an answer is a tool call the model had to write out because it was never
+/// given the tools.
+///
+/// The shape varies with the model - `read_file('a.rs')`, `read_file src/a.rs` in a shell
+/// fence, the JSON it would have sent - so the test is the name itself, as a word. A model
+/// that names a tool it did not call was not given it.
+fn calls_a_tool_in_prose(reg: &Registry, text: &str) -> bool {
+    reg.iter().any(|(name, _)| names_word(text, name))
+}
+
+/// Whether `word` appears in `text` on its own, not inside a longer identifier.
+fn names_word(text: &str, word: &str) -> bool {
+    let part = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(i, _)| {
+        let before = text[..i].chars().next_back().is_none_or(|c| !part(c));
+        let after = text[i + word.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !part(c));
+        before && after
+    })
 }
 
 /// One model response, with whatever the server said about how it ended.
@@ -439,7 +464,8 @@ impl Agent {
         prompt
     }
 
-    fn contract(reg: &Registry, protocol: ToolProtocol) -> String {
+    /// What the model is told about calling tools, before anything about this turn.
+    pub(crate) fn contract(reg: &Registry, protocol: ToolProtocol) -> String {
         match protocol {
             ToolProtocol::Native => format!(
                 "You are a local-first code agent driving a TUI on the user's machine.\n\
@@ -625,6 +651,14 @@ impl Agent {
             Control::Model { name, reply } => {
                 let answer = self.switch_model(name).await;
                 let _ = reply.send(answer);
+            }
+            Control::Protocol(protocol) => {
+                // Only where the protocol was left open. A session told which protocol to
+                // speak keeps speaking it, and is told when the backend disagrees.
+                if self.cfg.allow_fallback && self.cfg.protocol != protocol {
+                    self.cfg.protocol = protocol;
+                    self.rebuild_preamble();
+                }
             }
             Control::Mode { mode, reply } => {
                 let _ = reply.send(self.set_mode(mode));
@@ -976,6 +1010,32 @@ impl Agent {
                     record.after.model_ms += asked_at.elapsed().as_millis() as u64;
                     self.spend.model_ms += asked_at.elapsed().as_millis() as u64;
                 }
+            }
+
+            // A backend can also take the tool definitions and drop them. Nothing fails:
+            // the model is simply never told it has tools, and writes the call it wanted
+            // to make into its answer. The tell is an answer that names a tool the model
+            // was given no way to call.
+            if self.cfg.allow_fallback
+                && self.cfg.protocol == ToolProtocol::Native
+                && step == 0
+                && matches!(&attempt, Ok(c) if c.calls.is_empty()
+                    && calls_a_tool_in_prose(&self.registry, &c.text))
+            {
+                tracing::warn!("the backend ignored the tool definitions; using the envelope");
+                self.fall_back_to_envelope();
+                let _ = events
+                    .send(AgentEvent::Notice(
+                        "the backend accepted the tool definitions and ignored them; \
+                         asking again with the JSON envelope"
+                            .into(),
+                    ))
+                    .await;
+                let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
+                let asked_at = std::time::Instant::now();
+                attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+                record.after.model_ms += asked_at.elapsed().as_millis() as u64;
+                self.spend.model_ms += asked_at.elapsed().as_millis() as u64;
             }
 
             let completion = match attempt {
@@ -2041,6 +2101,57 @@ mod tests {
             !history.contains("the answer is forty two"),
             "the search came back with the answer"
         );
+    }
+
+    #[test]
+    fn a_tool_name_inside_a_longer_word_is_not_a_call() {
+        assert!(names_word("I will read_file('a.rs')", "read_file"));
+        assert!(names_word("run: read_file src/a.rs", "read_file"));
+        assert!(!names_word("see read_files_doc for more", "read_file"));
+        assert!(!names_word("the xread_file helper", "read_file"));
+    }
+
+    /// A backend that takes the tool definitions and drops them fails nothing: the model
+    /// writes the call it wanted to make into its answer. The session notices and asks
+    /// again under the protocol that needs no cooperation from the server.
+    #[tokio::test]
+    async fn a_backend_that_ignores_the_tools_is_noticed_and_worked_around() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "forty two");
+        let backend = fake_backend(vec![
+            // Tools were sent and dropped: the model writes the call out instead.
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"I will read it: read_file('a.txt')"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            // Asked again, under the envelope.
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"{\"assistant_text\":\"\",\"tool_calls\":[{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.txt\"}}]}"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"{\"assistant_text\":\"it says forty two\",\"tool_calls\":[]}"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.cfg.allow_fallback = true;
+        let events = drive(&mut agent, "what does a.txt say").await;
+
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::Notice(n)
+                if n.contains("ignored them"))),
+            "the user was never told the tools were dropped"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ToolResult { name, .. }
+                if name == "read_file")),
+            "the file was never read"
+        );
+        assert_eq!(agent.cfg.protocol, ToolProtocol::Envelope);
     }
 
     /// A sub-session says as much as any other session, and a long answer says more than

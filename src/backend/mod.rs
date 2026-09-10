@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod client;
+pub mod probe;
 pub mod provider;
 pub mod reasoning;
 pub mod repair;

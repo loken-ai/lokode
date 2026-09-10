@@ -156,19 +156,19 @@ impl Discovery {
             .await
             .preamble(crate::agent::digest::MAX_PREAMBLE_CHARS);
 
-        let mut system = crate::agent::agent_loop::Agent::build_system_prompt(
-            &self.registry,
-            self.protocol,
-            // Planning, which is what makes every tool that changes anything refuse
-            // before it runs. A background turn nobody is watching must not be able to
-            // write, run a command or reach the network.
-            crate::agent::agent_loop::Mode::Plan,
-            Some(
-                "You are looking into a project so that later work does not have to. Use \
-                 the read-only tools to find out, then answer in one or two sentences, \
-                 stating the fact rather than describing your search. If you cannot find \
-                 out, say exactly that in one sentence.",
-            ),
+        // The tool contract, then this turn's own stance. Not the planning prompt: the
+        // turn runs in plan mode, which is what makes every tool that changes anything
+        // refuse before it runs, but a model told to finish with numbered steps writes
+        // them instead of looking anything up.
+        let mut system = crate::agent::agent_loop::Agent::contract(&self.registry, self.protocol);
+        system.push_str(
+            "\n\nYou are looking into a project so that later work does not have to. Read \
+             and search only: every tool that writes, runs a command or reaches the \
+             network is refused here. Call the read-only tools first - the answer is in \
+             the files, not in what you already believe about projects like this one - \
+             then state the fact in one or two sentences. Do not describe your search, do \
+             not write a plan, do not list steps. If the files do not say, answer exactly \
+             \"not found\" and nothing else.",
         );
         if let Some(known) = known {
             system.push_str("\n\nAlready known, do not repeat:\n");

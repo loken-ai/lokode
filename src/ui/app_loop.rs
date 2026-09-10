@@ -75,6 +75,33 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     let (control_tx, mut control_rx) = mpsc::channel::<crate::agent::agent_loop::Control>(4);
     let (agent_evt_tx, mut agent_evt_rx) = mpsc::channel::<AgentEvent>(128);
     let agent_evt_tx_for_loop = agent_evt_tx.clone();
+    // Asked once, while the user is still reading the first screen: does this backend
+    // actually do native tool calls? A backend that takes the definitions and drops them
+    // fails nothing, so nothing else would ever find out.
+    if cfg.tool_protocol == crate::app::ProtocolChoice::Auto {
+        let backend = agent.backend.clone();
+        let model_probed = agent.cfg.model.clone();
+        let tx = control_tx.clone();
+        let token = shutdown.child_token();
+        let notices = agent_evt_tx.clone();
+        tokio::spawn(async move {
+            if crate::backend::probe::ignores_native_tools(backend, &model_probed, token).await {
+                let _ = tx
+                    .send(crate::agent::agent_loop::Control::Protocol(
+                        crate::agent::protocol::ToolProtocol::Envelope,
+                    ))
+                    .await;
+                let _ = notices
+                    .send(AgentEvent::Notice(
+                        "this backend accepts tool definitions and does not use them; \
+                         the session speaks the JSON envelope instead"
+                            .into(),
+                    ))
+                    .await;
+            }
+        });
+    }
+
     let agent_task = tokio::spawn(async move {
         loop {
             // A control request is answered between turns: the turn channel is read
