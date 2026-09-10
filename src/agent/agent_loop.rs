@@ -761,7 +761,20 @@ impl Agent {
             chars = user_input.len(),
             "turn started"
         );
-        self.session.push(Message::user(user_input));
+        // A file the person named travels with the question rather than being fetched
+        // after it: they have already decided it is relevant, and on a local model the
+        // round trip that would fetch it costs seconds.
+        let expanded =
+            crate::agent::mentions::expand(&user_input, &self.ctx.root, self.ctx.max_output_chars);
+        if !expanded.attached.is_empty() {
+            let _ = events
+                .send(AgentEvent::Notice(format!(
+                    "sent with the question: {}",
+                    expanded.attached.join(", ")
+                )))
+                .await;
+        }
+        self.session.push(Message::user(expanded.text));
 
         let turn_schema = build_turn_schema(&self.registry);
         let validator = Validator::new(&turn_schema).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1719,6 +1732,37 @@ mod tests {
             out.push(e);
         }
         out
+    }
+
+    /// A file named in the question arrives with it, so the model does not spend a round
+    /// trip fetching what the person had already decided was relevant.
+    #[tokio::test]
+    async fn a_file_named_in_the_question_arrives_with_it() {
+        let h = Harness::new(Answer::Yes);
+        h.write("notes.md", "the answer is in here");
+        let backend = fake_backend(vec![sse(&[
+            r#"{"choices":[{"delta":{"content":"read it"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ])])
+        .await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "what does @notes.md say?").await;
+
+        let sent = backend.seen.lock().unwrap();
+        let messages = sent[0]["messages"].as_array().unwrap();
+        let user = messages
+            .iter()
+            .find(|m| m["role"] == "user")
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or_default();
+        assert!(user.contains("what does @notes.md say?"), "{user}");
+        assert!(user.contains("the answer is in here"), "{user}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Notice(s) if s.contains("notes.md"))),
+            "the user was not told what went with the question: {events:?}"
+        );
     }
 
     /// Planning is long and ends in acting, so the model acting will use is asked for

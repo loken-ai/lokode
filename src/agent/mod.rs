@@ -3,6 +3,7 @@ pub mod background;
 pub mod digest;
 pub mod history;
 pub mod hooks;
+pub mod mentions;
 pub mod protocol;
 pub mod roles;
 pub mod session;

@@ -71,6 +71,7 @@ One thing it uses if it is there, and one it needs:
 | `Esc` | interrupt the running turn |
 | `/plan`, `/act` | plan without changing anything, then carry it out |
 | `Enter` while it works | hand the line to the turn in flight |
+| `@path` in a prompt | send that file, or that directory's listing, with the question |
 | `↑` / `↓` | walk what you have already sent (from an empty input) |
 | `PageUp` / `PageDown`, wheel | scroll |
 | `Ctrl-C`, `Ctrl-Q` | quit |
@@ -81,6 +82,12 @@ headings, `code` and **bold** - and anything that is a diff is coloured as one.
 Typing while the agent works is allowed: the line joins the conversation at the next step
 boundary and the screen says when it was handed over. That is the difference between
 steering a turn and abandoning it. A slash command typed then runs immediately.
+
+Naming a file with `@` sends it with the question: "why does `@src/main.rs` do nothing?"
+arrives with the file rather than costing a round trip to fetch what you had already
+decided was relevant. A directory sends its listing. What is attached is bounded like any
+other thing that lands in the window, a mention that is not a path here is left alone, and
+nothing outside the project can be reached by naming it.
 
 A shell command and a test suite show their output while they run, as a dimmed tail that
 the tool's own result replaces when it is over. A build that says nothing for two minutes
