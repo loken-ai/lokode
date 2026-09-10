@@ -670,6 +670,9 @@ pub struct Agent {
     /// Whether this turn has already been asked to go and look. Once: a nudge that
     /// repeats is an argument.
     pub nudged: bool,
+    /// The window the history is currently sized to, so the server saying the same thing
+    /// again costs nothing and saying something new is noticed.
+    pub window_in_use: usize,
     /// Steps in a row where every tool call failed and nothing was written.
     pub barren: u32,
     /// Calls that failed in this turn, however they were spread across its steps.
@@ -934,6 +937,44 @@ impl Agent {
             }
             warming.store(false, std::sync::atomic::Ordering::Relaxed);
         });
+    }
+
+    /// Shrink the history to the window the server says it actually served.
+    ///
+    /// The configured figure is what this session asked for; the served one is what it
+    /// got, which can be smaller because the checkpoint declares less or because the
+    /// cards held no more. Believing the larger of the two is the expensive mistake: the
+    /// prompt goes out too big and the server cuts it from the front, taking the standing
+    /// instructions and leaving an answer that is fluent and about the wrong thing.
+    ///
+    /// A ceiling, never a raise. A server serving a larger window because somebody else
+    /// asked for one is not an invitation to fill it.
+    async fn adopt_served_window(&mut self, events: &mpsc::Sender<AgentEvent>) {
+        let Some(served) = self.backend.served_window() else {
+            return;
+        };
+        let per_model = self.cfg.models.get(&self.cfg.model);
+        let asked = per_model
+            .and_then(|m| m.context_tokens)
+            .unwrap_or(self.cfg.context_tokens);
+        let window = asked.min(served);
+        if window == self.window_in_use {
+            return;
+        }
+        self.window_in_use = window;
+        let reserve = crate::agent::session::answer_reserve(
+            window,
+            per_model
+                .and_then(|m| m.max_answer_tokens)
+                .unwrap_or(self.cfg.max_answer_tokens),
+        );
+        self.session.set_window(window, reserve);
+        let _ = events
+            .send(AgentEvent::Notice(format!(
+                "the server serves {served} tokens for {}; the history is sized to {window}",
+                self.cfg.model
+            )))
+            .await;
     }
 
     /// Take the window a model needs and forget what the last one taught, which every
@@ -1345,6 +1386,7 @@ impl Agent {
                 },
                 after: Default::default(),
             };
+            self.adopt_served_window(&events).await;
             // Sent every step rather than at the end of the turn: a window filling up is
             // something to see while there is still time to compact, not afterwards.
             let _ = events
@@ -2631,6 +2673,7 @@ mod tests {
             background: None,
             checked_this_step: Default::default(),
             nudged: false,
+            window_in_use: 0,
             barren: Default::default(),
             failures: Default::default(),
             from_guess: Default::default(),

@@ -1,5 +1,5 @@
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -52,6 +52,8 @@ pub struct BackendClient {
     /// Cleared the first time the server rejects `stream_options`, so the cost of finding
     /// out is paid once per session rather than on every request.
     usage_supported: AtomicBool,
+    /// The window the server last said it served, or zero if it has never said.
+    served_window: AtomicUsize,
 }
 
 impl BackendClient {
@@ -60,6 +62,16 @@ impl BackendClient {
     /// Named here rather than configured: it is one server's extension, and a server that
     /// does not know it ignores an unknown header, which is the right outcome.
     pub const PRIORITY_HEADER: &'static str = "x-loken-priority";
+
+    /// The header a server reads to be told what context to serve the model with, and
+    /// answers in to say what it served.
+    ///
+    /// The OpenAI body has no field for a window, so a client speaking that shape is
+    /// otherwise held to whatever default the server was configured with, however large
+    /// the model is. Asking is half of it: a request can be clamped by what the
+    /// checkpoint declares or by what the cards hold, so the answer is read for what was
+    /// actually served rather than assumed to be what was asked.
+    pub const WINDOW_HEADER: &'static str = "x-loken-num-ctx";
 
     pub fn new(base_url: impl Into<String>) -> Self {
         Self::with_headers(base_url, &[])
@@ -96,6 +108,26 @@ impl BackendClient {
                 .expect("reqwest client"),
             base: base_url.into(),
             usage_supported: AtomicBool::new(true),
+            served_window: AtomicUsize::new(0),
+        }
+    }
+
+    /// Record what the server says it served, for the caller to size its history by.
+    fn note_served_window(&self, headers: &reqwest::header::HeaderMap) {
+        if let Some(n) = headers
+            .get(Self::WINDOW_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<usize>().ok())
+        {
+            self.served_window.store(n, Ordering::Relaxed);
+        }
+    }
+
+    /// The window the server last said it served, if it has said.
+    pub fn served_window(&self) -> Option<usize> {
+        match self.served_window.load(Ordering::Relaxed) {
+            0 => None,
+            n => Some(n),
         }
     }
 
@@ -201,6 +233,8 @@ impl BackendClient {
                 Err(e) => return Err(e),
             }
         };
+
+        self.note_served_window(resp.headers());
 
         // One splitter per response: the tags it tracks can straddle chunk boundaries, so
         // the state has to outlive a single chunk and must not outlive the stream.
@@ -374,6 +408,10 @@ fn mentions(e: &anyhow::Error, needles: &[&str]) -> bool {
 /// See [`crate::backend::provider::Capabilities`] for what it declares it can do.
 #[async_trait::async_trait]
 impl crate::backend::provider::Provider for BackendClient {
+    fn served_window(&self) -> Option<usize> {
+        BackendClient::served_window(self)
+    }
+
     fn label(&self) -> &str {
         "openai-compatible"
     }
@@ -476,6 +514,21 @@ impl BackendClient {
 
 #[cfg(test)]
 mod tests {
+    /// What the server says it served is read from the answer, because a request that
+    /// asks for a window can be clamped without the body saying so.
+    #[test]
+    fn the_served_window_is_read_from_the_answer() {
+        let c = BackendClient::new("http://127.0.0.1:1");
+        assert_eq!(c.served_window(), None);
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert(BackendClient::WINDOW_HEADER, "32768".parse().unwrap());
+        c.note_served_window(&h);
+        assert_eq!(c.served_window(), Some(32768));
+        // A server that stops saying does not unsay what it said.
+        c.note_served_window(&reqwest::header::HeaderMap::new());
+        assert_eq!(c.served_window(), Some(32768));
+    }
+
     use super::*;
     use reqwest::StatusCode;
 

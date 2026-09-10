@@ -84,6 +84,14 @@ pub trait Provider: Send + Sync {
         Ok(())
     }
 
+    /// The context window the server says it served, once it has said.
+    ///
+    /// `None` from a provider whose API has no way to say it, which is most of them: the
+    /// caller then keeps the window it was configured with.
+    fn served_window(&self) -> Option<usize> {
+        None
+    }
+
     /// What the backend says it serves, for choosing one without having to know its name.
     ///
     /// A backend that does not answer is not a broken backend: the caller falls back to

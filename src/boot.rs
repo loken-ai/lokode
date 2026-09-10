@@ -366,6 +366,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         background: background_provider(cfg).ok(),
         checked_this_step: Default::default(),
         nudged: false,
+        window_in_use: context_tokens,
         barren: Default::default(),
         failures: Default::default(),
         from_guess: Default::default(),
@@ -472,6 +473,10 @@ fn background_provider(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provid
         BackendClient::PRIORITY_HEADER.to_string(),
         "batch".to_string(),
     ));
+    headers.push((
+        BackendClient::WINDOW_HEADER.to_string(),
+        cfg.context_tokens.to_string(),
+    ));
     Ok(Arc::new(BackendClient::with_headers(
         cfg.backend_url.clone(),
         &headers,
@@ -504,10 +509,23 @@ fn provider_for(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Pro
             )?))
         }
         // `auto` is settled against the URL before it reaches here.
-        _ => Ok(Arc::new(BackendClient::with_headers(
-            cfg.backend_url.clone(),
-            &cfg.headers,
-        ))),
+        _ => {
+            let mut headers = cfg.headers.clone();
+            // Ask for the window this session intends to fill. The OpenAI body has no
+            // field for it, so a server configured for a smaller model would otherwise
+            // serve that window whatever the model can do, and say nothing about it. A
+            // server that does not know the header ignores it, which is the right
+            // outcome; one that does clamps to what the checkpoint and the cards allow
+            // and says what it served.
+            headers.push((
+                BackendClient::WINDOW_HEADER.to_string(),
+                cfg.context_tokens.to_string(),
+            ));
+            Ok(Arc::new(BackendClient::with_headers(
+                cfg.backend_url.clone(),
+                &headers,
+            )))
+        }
     }
 }
 

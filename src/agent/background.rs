@@ -197,6 +197,7 @@ impl Discovery {
             background: None,
             checked_this_step: Default::default(),
             nudged: false,
+            window_in_use: 0,
             barren: Default::default(),
             failures: Default::default(),
             from_guess: Default::default(),
