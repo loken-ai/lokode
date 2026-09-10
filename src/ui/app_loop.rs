@@ -429,7 +429,7 @@ async fn run_ui(
         if !state.busy && discovering.is_none() {
             if let Some(worker) = &discovery {
                 let has_questions = !digest.lock().await.questions.is_empty();
-                if has_questions {
+                if has_questions && !worker.stalled() {
                     let token = shutdown.child_token();
                     discovering = Some(token.clone());
                     let worker = worker.clone();

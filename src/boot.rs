@@ -314,6 +314,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
                 context_tokens,
                 max_answer_tokens,
                 digest: digest.clone(),
+                stalls: Default::default(),
             }))
         })
         .transpose()?;

@@ -33,7 +33,16 @@ pub struct Discovery {
     /// Shared with the session, because what is learned has to be there for the next turn
     /// rather than for the next process.
     pub digest: Arc<Mutex<Digest>>,
+    /// Turns in a row that came back with nothing said at all.
+    pub stalls: std::sync::atomic::AtomicU32,
 }
+
+/// How many turns may come back saying nothing before the background gives up.
+///
+/// A question that is put back is asked again straight away, so a backend that is down
+/// would be hammered by a queue that never drains. Three is enough to ride out one bad
+/// response and short enough that a real outage stops the loop rather than feeding it.
+const MAX_STALLS: u32 = 3;
 
 /// How many steps one question may take.
 ///
@@ -115,6 +124,26 @@ fn kind_for(question: &str) -> Kind {
 }
 
 impl Discovery {
+    /// Whether the background has given up for this session.
+    ///
+    /// It gives up on turns that said nothing, which is what a backend that is down looks
+    /// like from here. An answer of any kind clears it.
+    pub fn stalled(&self) -> bool {
+        self.stalls.load(std::sync::atomic::Ordering::Relaxed) >= MAX_STALLS
+    }
+
+    /// The question goes back and the stall is counted.
+    async fn put_back(&self, question: &str) {
+        self.digest.lock().await.ask(question);
+        let n = self
+            .stalls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        if n >= MAX_STALLS {
+            tracing::info!("background discovery stopped: the turns come back empty");
+        }
+    }
+
     /// Answer one question, if there is one waiting. Returns what was learned.
     ///
     /// Everything here is best effort: a background turn that failed is a background turn
@@ -189,7 +218,7 @@ impl Discovery {
         if outcome.is_err() || cancel.is_cancelled() {
             // Put it back: an interrupted question is not an answered one, and the whole
             // point is that the work survives being interrupted.
-            self.digest.lock().await.ask(&question);
+            self.put_back(&question).await;
             return None;
         }
         let mut answer = String::new();
@@ -207,6 +236,16 @@ impl Discovery {
                 _ => {}
             }
         }
+        if answer.trim().is_empty() {
+            // The turn ended without saying anything: a backend that would not answer, or
+            // a turn that ran out of steps. Nothing was asked and answered, so the
+            // question goes back rather than being spent.
+            tracing::info!(%question, "background turn said nothing");
+            self.put_back(&question).await;
+            return None;
+        }
+        // Something came back, so whatever was wrong before is not wrong now.
+        self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
         if !looked {
             // An answer that read nothing is a guess, and a guess in the digest is worse
             // than an empty digest: everything later in the session is told it as fact.
@@ -243,6 +282,35 @@ impl Discovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn worker(digest: Arc<Mutex<Digest>>) -> Discovery {
+        Discovery {
+            backend: Arc::new(crate::backend::client::BackendClient::new(
+                "http://127.0.0.1:1".to_string(),
+            )),
+            registry: Arc::new(crate::tools::registry::Registry::new()),
+            ctx: crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes).ctx,
+            model: "test".into(),
+            protocol: crate::agent::protocol::ToolProtocol::Native,
+            context_tokens: 8192,
+            max_answer_tokens: 512,
+            digest,
+            stalls: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_said_nothing_gives_the_question_back_and_then_gives_up() {
+        let digest = Arc::new(Mutex::new(Digest::default()));
+        let w = worker(digest.clone());
+        for _ in 0..MAX_STALLS {
+            assert!(!w.stalled());
+            w.put_back("what is the test command?").await;
+        }
+        // The question was never spent, and the loop stops asking it.
+        assert_eq!(digest.lock().await.questions.len(), 1);
+        assert!(w.stalled());
+    }
 
     #[test]
     fn a_long_answer_keeps_its_first_two_sentences() {
