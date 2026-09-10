@@ -227,6 +227,26 @@ fn last_is_parallel(registry: &Registry, run: &[ResolvedCall]) -> bool {
         .unwrap_or(false)
 }
 
+/// What makes two calls the same call: the tool, and the arguments it was given.
+fn repeat_key(call: &ResolvedCall) -> String {
+    format!("{}\u{0}{}", call.name, call.arguments)
+}
+
+/// A result the model has already been given, handed back with the fact said plainly.
+///
+/// Said rather than hidden: a model that is repeating itself has lost its place, and the
+/// only thing that changes that is being told.
+fn said_before(known: &ToolOutput) -> ToolOutput {
+    ToolOutput {
+        content: format!(
+            "you already ran this and nothing has been written since, so the answer is \
+             the one you had:\n{}",
+            known.content
+        ),
+        is_error: known.is_error,
+    }
+}
+
 /// Whether an answer is a tool call the model had to write out because it was never
 /// given the tools.
 ///
@@ -395,6 +415,12 @@ impl Spend {
 pub struct Agent {
     /// What this turn changed and what it cost, for the line that closes it.
     pub this_turn: TurnTally,
+    /// Read-only calls already answered in this turn, by tool and arguments.
+    ///
+    /// A model that has lost its place asks the same question again, and a run can hold
+    /// the same call twice. The answer cannot have changed: it is cleared the moment
+    /// anything writes, so what is served from here is what running it would return.
+    pub repeats: std::collections::HashMap<String, ToolOutput>,
     /// The model the session was on when planning began, to be given back on leaving it.
     pub before_plan: Option<String>,
     /// What each model has managed in this project, learned from the writes that did and
@@ -897,6 +923,7 @@ impl Agent {
         }
 
         self.this_turn = TurnTally::begin();
+        self.repeats.clear();
 
         // The cap on what a policy may grant is about one piece of work, so it starts
         // again with each turn rather than running out over a session.
@@ -1192,16 +1219,44 @@ impl Agent {
                         self.preload(&next);
                     }
                 }
+                // What actually runs. A read-only call this turn already made, with
+                // nothing written since, has an answer: running it again spends a round
+                // trip to be told the same thing, and a model that is going in circles
+                // does exactly that.
+                let mut fresh: Vec<&ResolvedCall> = Vec::new();
+                let mut plan: Vec<Result<usize, ToolOutput>> = Vec::with_capacity(run.len());
+                for call in &run {
+                    let key = repeat_key(call);
+                    if let Some(known) = self.repeats.get(&key) {
+                        plan.push(Err(said_before(known)));
+                    } else if let Some(i) = fresh.iter().position(|c| repeat_key(c) == key) {
+                        plan.push(Ok(i));
+                    } else {
+                        fresh.push(call);
+                        plan.push(Ok(fresh.len() - 1));
+                    }
+                }
                 let ran_at = std::time::Instant::now();
-                let results = futures::future::join_all(
-                    run.iter()
+                let ran = futures::future::join_all(
+                    fresh
+                        .iter()
                         .map(|call| self.dispatch_tool(&call.name, call.arguments.clone())),
                 )
                 .await;
+                let mut served = std::collections::HashSet::new();
+                let results: Vec<ToolOutput> = plan
+                    .into_iter()
+                    .map(|slot| match slot {
+                        Ok(i) if served.insert(i) => ran[i].clone(),
+                        Ok(i) => said_before(&ran[i]),
+                        Err(known) => known,
+                    })
+                    .collect();
 
                 record.after.tool_ms += ran_at.elapsed().as_millis() as u64;
                 self.spend.tool_ms += ran_at.elapsed().as_millis() as u64;
                 for (call, result) in run.into_iter().zip(results) {
+                    let key = repeat_key(&call);
                     let _ = events
                         .send(AgentEvent::ToolResult {
                             name: call.name.clone(),
@@ -1223,6 +1278,13 @@ impl Agent {
                         .get(&call.name)
                         .map(|t| t.mutates())
                         .unwrap_or(false);
+                    if !mutating {
+                        // Only a read is worth remembering, and only until something
+                        // writes: after that the answer it would give is a new answer.
+                        self.repeats.insert(key, result.clone());
+                    } else if !result.is_error {
+                        self.repeats.clear();
+                    }
                     if mutating && !result.is_error {
                         for path in changed_paths(&result.content) {
                             self.this_turn.touched(&path);
@@ -1928,6 +1990,7 @@ mod tests {
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
             this_turn: Default::default(),
+            repeats: Default::default(),
             before_plan: None,
             history: Default::default(),
             escalated_from: None,
@@ -2121,6 +2184,82 @@ mod tests {
         assert!(names_word("run: read_file src/a.rs", "read_file"));
         assert!(!names_word("see read_files_doc for more", "read_file"));
         assert!(!names_word("the xread_file helper", "read_file"));
+    }
+
+    /// The same read twice in one run is one read. The model gets two answers, because
+    /// two calls need two results, and the machine does the work once.
+    #[tokio::test]
+    async fn the_same_read_twice_in_one_run_is_read_once() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "forty two");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}},{"index":1,"id":"c2","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"forty two"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "read a.txt twice").await;
+
+        let results: Vec<&ToolOutput> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ToolResult { name, output } if name == "read_file" => Some(output),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 2, "both calls need an answer");
+        assert!(results[0].content.contains("forty two"), "{results:?}");
+        assert!(results[1].content.contains("forty two"), "{results:?}");
+        // The second is answered from the first, and says so.
+        assert!(
+            results[1].content.contains("you already ran this"),
+            "{results:?}"
+        );
+    }
+
+    /// A write makes every earlier read stale, so the same read after it runs again.
+    #[tokio::test]
+    async fn a_read_after_a_write_is_read_again() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c2","function":{"name":"write_file","arguments":"{\"path\": \"a.txt\", \"content\": \"two\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c3","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"it says two"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "read, write, read").await;
+
+        let last = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ToolResult { name, output } if name == "read_file" => Some(output),
+                _ => None,
+            })
+            .next_back()
+            .expect("the file was never read back");
+        assert!(last.content.contains("two"), "{last:?}");
+        assert!(!last.content.contains("you already ran this"), "{last:?}");
     }
 
     /// A backend that takes the tool definitions and drops them fails nothing: the model
