@@ -163,6 +163,18 @@ The exit code says what happened without anything having to be parsed: `0` finis
 something failed - a backend error, or the step limit - and `2` a tool was refused by the
 policy, which is a different thing from the model deciding not to use one.
 
+## Changing a file
+
+`write_file` replaces a file, `edit_file` replaces one unique substring, `edit_lines`
+applies several of those to one file in order, all or none, and `apply_patch` takes a
+unified diff across several files. Prefer `edit_lines` over repeated single edits: on a
+local model each round trip is seconds, and an edit that cannot be placed leaves the file
+as it was rather than half of two versions.
+
+After a write, the language server is asked about that file and anything it reports comes
+back in the same tool result. The model corrects its own syntax error on the spot instead
+of learning about it a turn later, if it thinks to ask.
+
 ## Hooks
 
 A project can put its own commands at the edges of the loop:

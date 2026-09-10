@@ -260,6 +260,9 @@ impl Spend {
 pub struct Agent {
     /// What this session has spent.
     pub spend: Spend,
+    /// The language servers, for checking a file the agent has just written. `None`
+    /// leaves writes unchecked, which is what a test without a server wants.
+    pub lsp: Option<Arc<crate::tools::lsp::LspPool>>,
     /// Lines the user typed while a turn was running. Drained at a step boundary, which
     /// is where the history can take a user message without moving a boundary the
     /// compactor reasons about.
@@ -763,6 +766,27 @@ impl Agent {
         Ok(())
     }
 
+    /// Diagnostics for a file a write tool just changed, when there are any.
+    ///
+    /// The path is read from the tool's own result rather than from its arguments: what
+    /// was written is what the tool says it wrote, and a refused or failed call says
+    /// nothing to parse. Never fails a write: a language server that is missing, slow or
+    /// silent leaves the result as it was.
+    async fn verify_written(&self, tool: &str, out: &ToolOutput) -> Option<String> {
+        let lsp = self.lsp.as_ref()?;
+        if out.is_error || !matches!(tool, "write_file" | "edit_file" | "edit_lines") {
+            return None;
+        }
+        // "edited <path>", "wrote <path>", "applied N edit(s) to <path>".
+        let first = out.content.lines().next()?;
+        let path = first.rsplit(' ').next()?;
+        let path = std::path::Path::new(path);
+        if !path.exists() {
+            return None;
+        }
+        crate::tools::lsp::diagnostics_now(lsp, path, std::time::Duration::from_secs(2)).await
+    }
+
     /// Run the turn-end hook, if there is one, and close the turn.
     ///
     /// What the hook says is a notice rather than part of the conversation: the turn is
@@ -1104,6 +1128,18 @@ impl Agent {
             Ok(o) => o,
             Err(e) => ToolOutput::err(format!("tool '{name}' failed: {e:#}")),
         };
+        // What the compiler already knows about the file that was just written, handed
+        // back in the same result. Without it the model learns of its own syntax error on
+        // the next turn, if it thinks to ask, and usually it does not.
+        let out = match self.verify_written(name, &out).await {
+            Some(diagnostics) => {
+                let mut out = out;
+                out.content
+                    .push_str(&format!("\n\nthe language server reports:\n{diagnostics}"));
+                out
+            }
+            None => out,
+        };
         if tool.mutates() {
             if let Some(hook) = self.cfg.hooks.post_tool.clone() {
                 let ran = crate::agent::hooks::run(&hook, &self.ctx.root, name, "post-tool").await;
@@ -1247,6 +1283,7 @@ mod tests {
         let (steer_tx, steer_rx) = mpsc::channel::<String>(8);
         let agent = Agent {
             spend: Spend::default(),
+            lsp: None,
             steer: steer_rx,
             backend: Arc::new(crate::backend::client::BackendClient::new(
                 backend.url.clone(),

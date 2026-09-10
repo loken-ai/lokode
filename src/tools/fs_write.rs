@@ -179,6 +179,123 @@ impl Tool for EditFile {
     }
 }
 
+// ============================================================== edit_lines --
+
+pub struct EditLines;
+
+#[derive(Deserialize)]
+struct EditLinesArgs {
+    path: PathBuf,
+    edits: Vec<OneEdit>,
+}
+
+#[derive(Deserialize)]
+struct OneEdit {
+    /// Existing substring to replace. Must occur exactly once in the file as it stands
+    /// when this edit's turn comes.
+    old_string: String,
+    new_string: String,
+}
+
+#[async_trait]
+impl Tool for EditLines {
+    fn name(&self) -> &str {
+        "edit_lines"
+    }
+    fn mutates(&self) -> bool {
+        true
+    }
+    fn description(&self) -> &str {
+        "Apply several unique-substring replacements to one file, in order, all or none. \
+         Prefer this over repeated edit_file on the same file."
+    }
+
+    fn args_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "edits": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_string": {"type": "string"},
+                            "new_string": {"type": "string"}
+                        },
+                        "required": ["old_string", "new_string"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["path", "edits"],
+            "additionalProperties": false
+        })
+    }
+
+    /// All of them or none of them.
+    ///
+    /// Applied to the text in memory first, so an edit that cannot be placed leaves the
+    /// file as it was rather than half-changed. Each is checked against the text as the
+    /// earlier ones left it, which is what the model means when it writes them in order.
+    async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
+        let a: EditLinesArgs = serde_json::from_value(args)?;
+        if a.edits.is_empty() {
+            return Ok(ToolOutput::err("no edits given"));
+        }
+        let target = match allowlist::resolve(&ctx.root, &a.path, true) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolOutput::err(e.to_string())),
+        };
+        let before = match text::read_text(&target).await {
+            Ok(b) => b,
+            Err(e) => return Ok(ToolOutput::err(e)),
+        };
+
+        let mut after = before.clone();
+        for (i, edit) in a.edits.iter().enumerate() {
+            let count = after.matches(&edit.old_string).count();
+            if count != 1 {
+                return Ok(ToolOutput::err(format!(
+                    "edit {} of {}: old_string {} in {}; nothing was changed",
+                    i + 1,
+                    a.edits.len(),
+                    if count == 0 {
+                        "was not found".to_string()
+                    } else {
+                        format!("matched {count} times, so it is ambiguous")
+                    },
+                    target.display()
+                )));
+            }
+            after = after.replacen(&edit.old_string, &edit.new_string, 1);
+        }
+        let diff = unified_diff(&before, &after, &target.display().to_string());
+
+        match ctx
+            .approve(ApprovalRequest {
+                tool: self.name().into(),
+                summary: format!("edit_lines {} ({} edits)", target.display(), a.edits.len()),
+                diff_preview: Some(diff.clone()),
+                scope: write_scope(self.name(), &target),
+            })
+            .await
+        {
+            Approval::Proceed => {}
+            Approval::Denied => return Ok(ToolOutput::err("user denied")),
+            Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
+        }
+
+        write_atomic(&target, &after).await?;
+        Ok(ToolOutput::ok(format!(
+            "applied {} edit(s) to {}\n{}",
+            a.edits.len(),
+            target.display(),
+            preview(&diff)
+        )))
+    }
+}
+
 // ============================================================= apply_patch --
 
 pub struct ApplyPatch;
@@ -830,5 +947,76 @@ mod tests {
             1,
             "a deleted line that looks like a header split the patch: {diff}"
         );
+    }
+}
+
+#[cfg(test)]
+mod edit_lines_tests {
+    use super::*;
+    use crate::tools::harness::{Answer, Harness};
+
+    fn edits(pairs: &[(&str, &str)]) -> Value {
+        json!({
+            "path": "a.rs",
+            "edits": pairs
+                .iter()
+                .map(|(o, n)| json!({"old_string": o, "new_string": n}))
+                .collect::<Vec<_>>()
+        })
+    }
+
+    #[tokio::test]
+    async fn several_edits_are_applied_in_order() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "let a = 1;\nlet b = 2;\n");
+        let out = EditLines
+            .run(&h.ctx, edits(&[("a = 1", "a = 10"), ("b = 2", "b = 20")]))
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{out:?}");
+        assert_eq!(h.read("a.rs"), "let a = 10;\nlet b = 20;\n");
+    }
+
+    /// All or none: an edit that cannot be placed leaves the file as it was, so the model
+    /// is never left reasoning about a file that is half of two versions.
+    #[tokio::test]
+    async fn one_edit_that_cannot_be_placed_leaves_the_file_alone() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "let a = 1;\nlet b = 2;\n");
+        let out = EditLines
+            .run(&h.ctx, edits(&[("a = 1", "a = 10"), ("nowhere", "x")]))
+            .await
+            .unwrap();
+        assert!(out.is_error);
+        assert!(out.content.contains("edit 2 of 2"), "{out:?}");
+        assert!(out.content.contains("nothing was changed"), "{out:?}");
+        assert_eq!(h.read("a.rs"), "let a = 1;\nlet b = 2;\n");
+    }
+
+    /// An ambiguous edit is refused for the same reason the single-edit tool refuses one:
+    /// the model meant one place and the tool cannot know which.
+    #[tokio::test]
+    async fn an_ambiguous_edit_is_refused() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "x = 1;\nx = 1;\n");
+        let out = EditLines
+            .run(&h.ctx, edits(&[("x = 1", "x = 2")]))
+            .await
+            .unwrap();
+        assert!(out.is_error);
+        assert!(out.content.contains("ambiguous"), "{out:?}");
+        assert_eq!(h.read("a.rs"), "x = 1;\nx = 1;\n");
+    }
+
+    #[tokio::test]
+    async fn a_denied_edit_writes_nothing() {
+        let h = Harness::new(Answer::No);
+        h.write("a.rs", "let a = 1;\n");
+        let out = EditLines
+            .run(&h.ctx, edits(&[("a = 1", "a = 2")]))
+            .await
+            .unwrap();
+        assert!(out.is_error);
+        assert_eq!(h.read("a.rs"), "let a = 1;\n");
     }
 }

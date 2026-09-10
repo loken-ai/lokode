@@ -485,6 +485,36 @@ impl Tool for LspDiagnostics {
     }
 }
 
+/// What the language server says about one file, or nothing when it has no server, it
+/// cannot be started, or it says nothing within `wait`.
+///
+/// Written for two callers: the tool a model calls on purpose, and the check that runs
+/// after a write. The second must never fail a write, so every path here answers `None`
+/// rather than an error.
+pub async fn diagnostics_now(
+    pool: &LspPool,
+    path: &std::path::Path,
+    wait: std::time::Duration,
+) -> Option<String> {
+    let lang = LangId::from_path(path)?;
+    let proc = pool.get_or_spawn(lang).await.ok()?;
+    let (uri, changed) = proc.sync(path, lang).await.ok()?;
+    if changed {
+        proc.diagnostics.lock().await.remove(&uri);
+    }
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
+        if let Some(diags) = proc.diagnostics.lock().await.get(&uri).cloned() {
+            if diags.is_empty() {
+                return None;
+            }
+            return Some(format_diags(path, &diags));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    None
+}
+
 pub struct LspHover {
     pub pool: Arc<LspPool>,
 }

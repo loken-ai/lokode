@@ -226,6 +226,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
         spend: Default::default(),
+        lsp: Some(lsp.clone()),
         steer: steer_rx,
         backend,
         registry,
@@ -306,7 +307,7 @@ pub fn build_registry(root: PathBuf) -> (Registry, Arc<LspPool>) {
     use crate::tools::{
         bash::Bash,
         fs_read::{Glob, ListDir, ReadFile},
-        fs_write::{ApplyPatch, EditFile, WriteFile},
+        fs_write::{ApplyPatch, EditFile, EditLines, WriteFile},
         lsp::{LspDiagnostics, LspHover},
         run_tests::RunTests,
         search::Grep,
@@ -320,6 +321,7 @@ pub fn build_registry(root: PathBuf) -> (Registry, Arc<LspPool>) {
     reg.register(Grep);
     reg.register(WriteFile);
     reg.register(EditFile);
+    reg.register(EditLines);
     reg.register(ApplyPatch);
     reg.register(Bash);
     reg.register(RunTests);
