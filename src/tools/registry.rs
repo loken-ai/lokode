@@ -20,6 +20,12 @@ pub struct ToolCtx {
     /// Requests the policy has granted this turn. Reset when a turn starts, because a cap
     /// is about one piece of work rather than about a session.
     pub auto_used: Arc<AtomicUsize>,
+    /// Where a tool sends what it is printing, while it prints it.
+    ///
+    /// A build takes minutes and says nothing until it is over, which is indistinguishable
+    /// from a build that has hung. `None` for a caller with no screen: a script reads the
+    /// result, and a line at a time would only be noise in its log.
+    pub live: Option<tokio::sync::mpsc::Sender<LiveOutput>>,
     /// Whether the configuration's allow list applies.
     ///
     /// False for a run driven by a script, where the policy stated on the command line is
@@ -122,6 +128,18 @@ impl ToolCtx {
         }
     }
 
+    /// Show a line a tool has just printed. Dropped rather than queued when the screen is
+    /// behind: a stale line is worth nothing and holding up a build to deliver one would
+    /// be worse than losing it.
+    pub fn show(&self, tool: &str, line: &str) {
+        if let Some(live) = &self.live {
+            let _ = live.try_send(LiveOutput {
+                tool: tool.to_string(),
+                line: line.to_string(),
+            });
+        }
+    }
+
     /// Cut `s` to what one result may contribute, saying so in the text so the model
     /// reads a deliberate elision rather than a file that ends mid-line.
     pub fn clamp(&self, mut s: String) -> String {
@@ -135,6 +153,13 @@ impl ToolCtx {
         }
         s
     }
+}
+
+/// A line a tool has just printed, on its way to the screen.
+#[derive(Debug, Clone)]
+pub struct LiveOutput {
+    pub tool: String,
+    pub line: String,
 }
 
 #[derive(Debug, Clone)]

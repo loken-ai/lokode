@@ -16,6 +16,11 @@ pub enum Entry {
         is_error: bool,
         body: String,
     },
+    /// What a tool is printing while it runs, kept as one growing entry.
+    ToolOutput {
+        name: String,
+        body: String,
+    },
     Notice(String),
     /// The model's scratchpad, accumulated while it streams.
     ///
@@ -78,6 +83,11 @@ impl Entry {
                     }
                 }
                 lines
+            }
+            // Dimmed and set apart: it is what is happening, not what was said, and it
+            // is replaced by the tool's own result the moment there is one.
+            Entry::ToolOutput { name, body } => {
+                block(&format!("… {name}"), Color::DarkGray, body, Body::Plain)
             }
             Entry::Notice(s) => block(
                 "·",

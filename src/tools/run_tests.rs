@@ -67,21 +67,41 @@ impl Tool for RunTests {
         // take the suite with it rather than leave it running unattended.
         cmd.kill_on_drop(true);
         cmd.args(&argv).current_dir(&ctx.root);
-        let fut = cmd.output();
-        let output = tokio::select! {
+        // The suite is the longest thing here and the line that names the failing test
+        // arrives long before the end of it. Read as it comes, like the shell.
+        cmd.stdin(std::process::Stdio::null());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
+        };
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let collect = async {
+            let (out, err) = tokio::join!(
+                crate::tools::bash::read_lines(stdout, ctx, self.name()),
+                crate::tools::bash::read_lines(stderr, ctx, self.name())
+            );
+            (out, err, child.wait().await)
+        };
+        let (out, err, status) = tokio::select! {
             biased;
             _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
-            r = tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_S), fut) => match r {
-                Ok(Ok(o)) => o,
-                Ok(Err(e)) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
+            r = tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_S), collect) => match r {
+                Ok(v) => v,
                 Err(_) => return Ok(ToolOutput::err(format!("timed out after {TIMEOUT_S}s"))),
             },
         };
+        let code = match status {
+            Ok(s) => s.code().unwrap_or(-1),
+            Err(e) => return Ok(ToolOutput::err(format!("could not wait for it: {e}"))),
+        };
 
-        let mut report = format!("[{label}] exit: {}\n", output.status.code().unwrap_or(-1));
-        report.push_str(&ctx.clamp(String::from_utf8_lossy(&output.stdout).into()));
+        let mut report = format!("[{label}] exit: {code}\n");
+        report.push_str(&ctx.clamp(out));
         report.push('\n');
-        report.push_str(&ctx.clamp(String::from_utf8_lossy(&output.stderr).into()));
+        report.push_str(&ctx.clamp(err));
         Ok(ToolOutput::ok(report))
     }
 }

@@ -82,6 +82,11 @@ Typing while the agent works is allowed: the line joins the conversation at the 
 boundary and the screen says when it was handed over. That is the difference between
 steering a turn and abandoning it. A slash command typed then runs immediately.
 
+A shell command and a test suite show their output while they run, as a dimmed tail that
+the tool's own result replaces when it is over. A build that says nothing for two minutes
+cannot be told from one that has hung, and the line naming the failing test is worth having
+before the suite finishes. What reaches the model is still the whole of it.
+
 The status line says what the turn is doing whenever nothing is being printed - fitting the
 history, waiting for the model, thinking, answering, repairing a reply, running a named
 tool - with how long it has been doing it, beside a spinner that moves while a turn is

@@ -63,6 +63,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         tasks,
         digest,
         discovery,
+        mut live,
     } = boot::boot(&cfg).await?;
 
     // Channels:
@@ -127,6 +128,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         tasks,
         digest,
         discovery,
+        &mut live,
         mcp.clients.clone(),
         mcp_summary,
         &mut agent_evt_rx,
@@ -306,6 +308,8 @@ async fn run_ui(
     digest: std::sync::Arc<tokio::sync::Mutex<crate::agent::digest::Digest>>,
     // Answers one question about the project while nobody is waiting.
     discovery: Option<std::sync::Arc<crate::agent::background::Discovery>>,
+    // Lines the tools are printing as they print them.
+    live: &mut mpsc::Receiver<crate::tools::registry::LiveOutput>,
     // The servers, for the prompts /mcp can take. Cloned handles: the process still owns
     // them and still shuts them down.
     mcp: Vec<std::sync::Arc<crate::mcp::client::McpClient>>,
@@ -461,6 +465,28 @@ async fn run_ui(
                 state.pending_approval = Some(prompt);
             }
 
+            Some(printed) = live.recv() => {
+                // Kept as one entry that grows rather than a line each: a build's output
+                // is one thing happening, and a hundred entries would push the answer it
+                // belongs to off the screen.
+                match state.entries.last_mut() {
+                    Some(Entry::ToolOutput { name, body }) if *name == printed.tool => {
+                        body.push('\n');
+                        body.push_str(&printed.line);
+                        // Only the tail is kept: the whole of it reaches the model in the
+                        // result, and what a person wants while it runs is where it is now.
+                        let lines: Vec<&str> = body.lines().collect();
+                        if lines.len() > 12 {
+                            *body = lines[lines.len() - 12..].join("\n");
+                        }
+                    }
+                    _ => state.entries.push(Entry::ToolOutput {
+                        name: printed.tool,
+                        body: printed.line,
+                    }),
+                }
+            }
+
             Some(learned) = learn_rx.recv() => {
                 discovering = None;
                 // Said once, in a line: what was found is worth knowing, and a paragraph
@@ -499,6 +525,14 @@ async fn run_ui(
                         state.entries.push(Entry::ToolCall { name, args: args_pretty });
                     }
                     AgentEvent::ToolResult { name, output } => {
+                        // The tail was what it was printing; the result is what it
+                        // printed. Keeping both would show the same lines twice.
+                        if matches!(
+                            state.entries.last(),
+                            Some(Entry::ToolOutput { name: running, .. }) if *running == name
+                        ) {
+                            state.entries.pop();
+                        }
                         // The list is the model's, so it is read back after the call that
                         // may have changed it rather than kept in step by hand.
                         if name == "update_plan" {

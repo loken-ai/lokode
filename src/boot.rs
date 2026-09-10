@@ -59,6 +59,8 @@ pub struct Booted {
     /// Answers one question about the project while nobody is waiting. `None` when the
     /// configuration turned it off.
     pub discovery: Option<Arc<crate::agent::background::Discovery>>,
+    /// Lines the tools are printing as they print them.
+    pub live: tokio::sync::mpsc::Receiver<crate::tools::registry::LiveOutput>,
 }
 
 pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
@@ -78,10 +80,16 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let shutdown = CancellationToken::new();
 
     let auto_used = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Small on purpose: what a screen cannot keep up with is dropped rather than queued,
+    // because a line that arrives late is worth less than the build finishing on time.
+    let (live_tx, live_rx) = tokio::sync::mpsc::channel(64);
     let mut ctx = ToolCtx {
         policy: Arc::new(cfg.policy.clone()),
         auto_used: auto_used.clone(),
         honour_allow: !cfg.headless,
+        // A script reads the result; a person watches the build. Only the second wants
+        // it a line at a time.
+        live: (!cfg.headless).then(|| live_tx.clone()),
         root: cfg.root.clone(),
         approval: approval_tx,
         session_approvals: Arc::new(SessionApprovals::new()),
@@ -372,6 +380,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         tasks,
         digest,
         discovery,
+        live: live_rx,
     })
 }
 
