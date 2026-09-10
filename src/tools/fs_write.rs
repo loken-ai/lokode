@@ -33,7 +33,9 @@ impl Tool for WriteFile {
         true
     }
     fn description(&self) -> &str {
-        "Overwrite a file (or create it). Requires user approval."
+        "Create a file, or replace one whole. Everything not in `content` is gone: to \
+         change part of a file that already exists, use edit_file or edit_lines. Requires \
+         user approval."
     }
 
     fn args_schema(&self) -> Value {
