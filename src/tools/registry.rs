@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,6 +57,42 @@ pub struct ToolCtx {
     /// Directories an approved shell command may write to, or `None` to leave it
     /// unconfined - which is what it has always been.
     pub shell_writable: Option<Arc<Vec<PathBuf>>>,
+    /// What each file held the last time a tool read or wrote it.
+    ///
+    /// A whole-file write is written against what the model believes the file says. If
+    /// someone changed it in their editor in between, that belief is out of date and the
+    /// write silently discards their work.
+    pub known: Arc<std::sync::Mutex<HashMap<PathBuf, u64>>>,
+}
+
+/// A cheap content fingerprint, for telling a file that changed from one that did not.
+pub fn fingerprint(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
+impl ToolCtx {
+    /// Remember what `path` holds now, so a later write can tell whether it still does.
+    pub fn note_content(&self, path: &Path, bytes: &[u8]) {
+        if let Ok(mut known) = self.known.lock() {
+            known.insert(path.to_path_buf(), fingerprint(bytes));
+        }
+    }
+
+    /// Whether `path` has changed since a tool last saw it.
+    ///
+    /// False for a file no tool has read: nothing is known about it, and a guess either
+    /// way would be worse than the caller's own judgement.
+    pub fn changed_since_seen(&self, path: &Path, now: &[u8]) -> bool {
+        let Ok(known) = self.known.lock() else {
+            return false;
+        };
+        known
+            .get(path)
+            .is_some_and(|seen| *seen != fingerprint(now))
+    }
 }
 
 /// The HTTP client the tools share.

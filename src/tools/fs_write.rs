@@ -59,6 +59,15 @@ impl Tool for WriteFile {
             Ok(b) => b.unwrap_or_default(),
             Err(e) => return Ok(ToolOutput::err(e)),
         };
+        // A whole-file write replaces what the model believes the file says. If someone
+        // has changed it since the model read it, that belief is stale and the write
+        // throws their work away without either of them seeing it happen.
+        if ctx.changed_since_seen(&target, before.as_bytes()) {
+            return Ok(ToolOutput::err(format!(
+                "{} changed on disk since you read it; read it again before writing it",
+                target.display()
+            )));
+        }
         let diff = unified_diff(&before, &a.content, &target.display().to_string());
 
         match ctx
@@ -81,6 +90,7 @@ impl Tool for WriteFile {
         }
 
         write_atomic(&target, &a.content).await?;
+        ctx.note_content(&target, a.content.as_bytes());
 
         Ok(ToolOutput::ok(format!(
             "wrote {} ({} bytes)\n{}",
@@ -171,6 +181,7 @@ impl Tool for EditFile {
         }
 
         write_atomic(&target, &after).await?;
+        ctx.note_content(&target, after.as_bytes());
         Ok(ToolOutput::ok(format!(
             "edited {}\n{}",
             target.display(),
@@ -287,6 +298,7 @@ impl Tool for EditLines {
         }
 
         write_atomic(&target, &after).await?;
+        ctx.note_content(&target, after.as_bytes());
         Ok(ToolOutput::ok(format!(
             "applied {} edit(s) to {}\n{}",
             a.edits.len(),
@@ -411,6 +423,11 @@ impl Tool for ApplyPatch {
                 )));
             }
             committed.push(s);
+        }
+        // Once the whole patch is on disk: a run that rolled back left the files as they
+        // were, and what was seen of them is still what is there.
+        for s in &committed {
+            ctx.note_content(&s.target, s.after.as_bytes());
         }
 
         Ok(ToolOutput::ok(
@@ -568,6 +585,82 @@ fn parse_multifile_patch(src: &str) -> Result<Vec<diffy::Patch<'_, str>>, diffy:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file somebody changed while the model was thinking is not the file the model
+    /// read. Overwriting it whole would throw their work away with nothing to show it.
+    #[tokio::test]
+    async fn a_write_over_a_file_that_moved_is_refused() {
+        let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
+        h.write("a.txt", "one");
+        let read = crate::tools::fs_read::ReadFile
+            .run(&h.ctx, serde_json::json!({"path": "a.txt"}))
+            .await
+            .unwrap();
+        assert!(!read.is_error, "{read:?}");
+
+        // Someone else edits it.
+        h.write("a.txt", "one, and their change");
+
+        let out = WriteFile
+            .run(
+                &h.ctx,
+                serde_json::json!({"path": "a.txt", "content": "two"}),
+            )
+            .await
+            .unwrap();
+        assert!(out.is_error, "{out:?}");
+        assert!(out.content.contains("changed on disk"), "{}", out.content);
+        assert_eq!(
+            std::fs::read_to_string(h.root.join("a.txt")).unwrap(),
+            "one, and their change"
+        );
+    }
+
+    /// Reading it again is what makes the write allowed: the model is now writing over
+    /// what is actually there.
+    #[tokio::test]
+    async fn reading_it_again_lets_the_write_through() {
+        let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
+        h.write("a.txt", "one");
+        let _ = crate::tools::fs_read::ReadFile
+            .run(&h.ctx, serde_json::json!({"path": "a.txt"}))
+            .await
+            .unwrap();
+        h.write("a.txt", "their change");
+        let _ = crate::tools::fs_read::ReadFile
+            .run(&h.ctx, serde_json::json!({"path": "a.txt"}))
+            .await
+            .unwrap();
+
+        let out = WriteFile
+            .run(
+                &h.ctx,
+                serde_json::json!({"path": "a.txt", "content": "two"}),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{out:?}");
+        assert_eq!(
+            std::fs::read_to_string(h.root.join("a.txt")).unwrap(),
+            "two"
+        );
+    }
+
+    /// A file no tool has read is nobody's belief about anything, so the write stands.
+    #[tokio::test]
+    async fn a_file_never_read_is_written_without_argument() {
+        let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
+        h.write("a.txt", "one");
+        let out = WriteFile
+            .run(
+                &h.ctx,
+                serde_json::json!({"path": "a.txt", "content": "two"}),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{out:?}");
+    }
+
     use std::path::Path;
     use tempfile::tempdir;
 

@@ -57,6 +57,11 @@ impl Tool for ReadFile {
             Ok(b) => b,
             Err(e) => return Ok(ToolOutput::err(e)),
         };
+        // What the file held when it was read, so a later whole-file write can tell
+        // whether it is replacing what the model saw or somebody else's work.
+        if let Ok(bytes) = tokio::fs::read(&resolved).await {
+            ctx.note_content(&resolved, &bytes);
+        }
 
         Ok(ToolOutput::ok(ctx.clamp(body)))
     }
