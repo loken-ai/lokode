@@ -8,6 +8,8 @@ use crate::sandbox::approval::ApprovalRequest;
 
 pub struct ApprovalView<'a> {
     pub req: &'a ApprovalRequest,
+    /// Paths are shown relative to this.
+    pub root: &'a std::path::Path,
 }
 
 impl<'a> ApprovalView<'a> {
@@ -71,7 +73,7 @@ impl<'a> ApprovalView<'a> {
             Line::from(Span::styled(
                 format!(
                     "Always covers {} for this session",
-                    self.req.scope.describe()
+                    self.req.scope.describe_under(self.root)
                 ),
                 Style::default().fg(Color::DarkGray),
             )),

@@ -74,6 +74,19 @@ pub fn fingerprint(bytes: &[u8]) -> u64 {
 }
 
 impl ToolCtx {
+    /// A path as it is worth showing: relative to the project, which is how everyone
+    /// involved refers to it.
+    ///
+    /// The absolute path is what the tools work with and what the sandbox checks, but on
+    /// a narrow screen it is a line of scaffolding in front of the three words that
+    /// matter, and the model does not address files that way either.
+    pub fn short(&self, path: &Path) -> String {
+        path.strip_prefix(&self.root)
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    }
+
     /// Remember what `path` holds now, so a later write can tell whether it still does.
     pub fn note_content(&self, path: &Path, bytes: &[u8]) {
         if let Ok(mut known) = self.known.lock() {

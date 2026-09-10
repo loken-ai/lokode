@@ -65,19 +65,20 @@ impl Tool for WriteFile {
         if ctx.changed_since_seen(&target, before.as_bytes()) {
             return Ok(ToolOutput::err(format!(
                 "{} changed on disk since you read it; read it again before writing it",
-                target.display()
+                ctx.short(&target)
             )));
         }
-        let diff = unified_diff(&before, &a.content, &target.display().to_string());
+        let diff = unified_diff(&before, &a.content, &ctx.short(&target));
 
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),
                 summary: format!(
-                    "write_file {}  ({} → {} bytes)",
-                    target.display(),
+                    "write_file {}  ({} → {} bytes){}",
+                    ctx.short(&target),
                     before.len(),
-                    a.content.len()
+                    a.content.len(),
+                    losses(&diff)
                 ),
                 diff_preview: Some(diff.clone()),
                 scope: write_scope(self.name(), &target),
@@ -94,7 +95,7 @@ impl Tool for WriteFile {
 
         Ok(ToolOutput::ok(format!(
             "wrote {} ({} bytes)\n{}",
-            target.display(),
+            ctx.short(&target),
             a.content.len(),
             preview(&diff)
         )))
@@ -153,23 +154,23 @@ impl Tool for EditFile {
         if count == 0 {
             return Ok(ToolOutput::err(format!(
                 "old_string not found in {}",
-                target.display()
+                ctx.short(&target)
             )));
         }
         if count > 1 {
             return Ok(ToolOutput::err(format!(
                 "old_string is ambiguous: found {count} matches in {}; add surrounding context to make it unique",
-                target.display()
+                ctx.short(&target)
             )));
         }
 
         let after = before.replacen(&a.old_string, &a.new_string, 1);
-        let diff = unified_diff(&before, &after, &target.display().to_string());
+        let diff = unified_diff(&before, &after, &ctx.short(&target));
 
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),
-                summary: format!("edit_file {}", target.display()),
+                summary: format!("edit_file {}", ctx.short(&target)),
                 diff_preview: Some(diff.clone()),
                 scope: write_scope(self.name(), &target),
             })
@@ -184,7 +185,7 @@ impl Tool for EditFile {
         ctx.note_content(&target, after.as_bytes());
         Ok(ToolOutput::ok(format!(
             "edited {}\n{}",
-            target.display(),
+            ctx.short(&target),
             preview(&diff)
         )))
     }
@@ -276,17 +277,21 @@ impl Tool for EditLines {
                     } else {
                         format!("matched {count} times, so it is ambiguous")
                     },
-                    target.display()
+                    ctx.short(&target)
                 )));
             }
             after = after.replacen(&edit.old_string, &edit.new_string, 1);
         }
-        let diff = unified_diff(&before, &after, &target.display().to_string());
+        let diff = unified_diff(&before, &after, &ctx.short(&target));
 
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),
-                summary: format!("edit_lines {} ({} edits)", target.display(), a.edits.len()),
+                summary: format!(
+                    "edit_lines {} ({} edits)",
+                    ctx.short(&target),
+                    a.edits.len()
+                ),
                 diff_preview: Some(diff.clone()),
                 scope: write_scope(self.name(), &target),
             })
@@ -302,7 +307,7 @@ impl Tool for EditLines {
         Ok(ToolOutput::ok(format!(
             "applied {} edit(s) to {}\n{}",
             a.edits.len(),
-            target.display(),
+            ctx.short(&target),
             preview(&diff)
         )))
     }
@@ -396,7 +401,7 @@ impl Tool for ApplyPatch {
                     staged.len(),
                     staged
                         .iter()
-                        .map(|s| format!("  {}", s.target.display()))
+                        .map(|s| format!("  {}", ctx.short(&s.target)))
                         .collect::<Vec<_>>()
                         .join("\n")
                 ),
@@ -419,7 +424,7 @@ impl Tool for ApplyPatch {
                 let rolled = roll_back(&committed).await;
                 return Ok(ToolOutput::err(format!(
                     "{}: write failed: {e}\n{rolled}",
-                    s.target.display()
+                    ctx.short(&s.target)
                 )));
             }
             committed.push(s);
@@ -433,7 +438,7 @@ impl Tool for ApplyPatch {
         Ok(ToolOutput::ok(
             staged
                 .iter()
-                .map(|s| format!("patched {}", s.target.display()))
+                .map(|s| format!("patched {}", ctx.short(&s.target)))
                 .collect::<Vec<_>>()
                 .join("\n"),
         ))
@@ -532,6 +537,27 @@ async fn write_atomic(target: &std::path::Path, contents: &str) -> Result<()> {
 
 // -------------------------------------------------------------- helpers -----
 
+/// What a whole-file write is about to take out, when it takes out more than it puts in.
+///
+/// A write that replaces a file is the one change that can quietly lose work: the model
+/// reproduces what it remembers of the file and drops the rest. The line counts are in
+/// the diff already, but the diff is long and the summary is what is read.
+fn losses(diff: &str) -> String {
+    let removed = diff
+        .lines()
+        .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+        .count();
+    let added = diff
+        .lines()
+        .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+        .count();
+    if removed > added {
+        format!("  REMOVES {removed} line(s), adds {added}")
+    } else {
+        String::new()
+    }
+}
+
 fn unified_diff(before: &str, after: &str, path: &str) -> String {
     let diff = TextDiff::from_lines(before, after);
     diff.unified_diff()
@@ -585,6 +611,17 @@ fn parse_multifile_patch(src: &str) -> Result<Vec<diffy::Patch<'_, str>>, diffy:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_write_that_takes_more_out_than_it_puts_in_says_so() {
+        let diff = unified_diff("a\nb\nc\n", "a\n", "f.rs");
+        assert!(
+            losses(&diff).contains("REMOVES 2 line(s), adds 0"),
+            "{diff}"
+        );
+        let grown = unified_diff("a\n", "a\nb\n", "f.rs");
+        assert_eq!(losses(&grown), "");
+    }
 
     /// A file somebody changed while the model was thinking is not the file the model
     /// read. Overwriting it whole would throw their work away with nothing to show it.

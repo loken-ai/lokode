@@ -224,6 +224,8 @@ struct UiState {
     /// How tool calls travel, as the agent has it: settled by asking the backend, so the
     /// interface can only know it by asking.
     protocol: crate::agent::protocol::ToolProtocol,
+    /// When the approval now on screen was asked for. `None` when nothing is waiting.
+    waiting_since: Option<Instant>,
     /// The task list as it was last drawn.
     tasks: Vec<crate::tools::plan::Task>,
     /// The model answering now. It changes under the interface - by a command, by the
@@ -432,6 +434,7 @@ async fn run_ui(
 
             f.render_widget(&input, chunks[1]);
 
+            let waiting = state.pending_approval.is_some();
             let status = Status {
                 model: state.model.clone(),
                 root: cfg.root.display().to_string(),
@@ -443,8 +446,16 @@ async fn run_ui(
                 step: state.step,
                 max_steps: cfg.max_steps,
                 busy: state.busy,
-                phase: state.phase.as_ref().map(|p| p.label()),
-                in_phase: state.phase_since.map(|t| t.elapsed()).unwrap_or_default(),
+                phase: if waiting {
+                    Some("waiting for your answer".to_string())
+                } else {
+                    state.phase.as_ref().map(|p| p.label())
+                },
+                in_phase: if waiting {
+                    state.waiting_since.map(|t| t.elapsed()).unwrap_or_default()
+                } else {
+                    state.phase_since.map(|t| t.elapsed()).unwrap_or_default()
+                },
                 tick: state.tick,
             };
             f.render_widget(
@@ -453,7 +464,11 @@ async fn run_ui(
             );
 
             if let Some(prompt) = state.pending_approval.as_ref() {
-                ApprovalView { req: &prompt.req }.render(f, f.area());
+                ApprovalView {
+                    req: &prompt.req,
+                    root: &cfg.root,
+                }
+                .render(f, f.area());
             }
         })?;
 
@@ -497,6 +512,10 @@ async fn run_ui(
 
             Some(prompt) = approval_rx.recv() => {
                 state.pending_approval = Some(prompt);
+                // The turn is not running anything: it is waiting on the person. Saying
+                // "running write_file" for the minutes a prompt sits there is the one
+                // thing the status line must never do.
+                state.waiting_since = Some(Instant::now());
             }
 
             Some(printed) = live.recv() => {
@@ -604,6 +623,7 @@ async fn run_ui(
                         // tool that asked has already given up waiting, so the modal is
                         // asking about something that will not happen either way.
                         state.pending_approval = None;
+                        state.waiting_since = None;
                     }
                 }
             }
@@ -634,6 +654,7 @@ async fn run_ui(
                             if let Some(prompt) = state.pending_approval.take() {
                                 let _ = prompt.reply.send(decision);
                             }
+                            state.waiting_since = None;
                         }
                         continue;
                     }

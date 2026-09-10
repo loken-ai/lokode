@@ -30,10 +30,24 @@ pub enum ApprovalScope {
 impl ApprovalScope {
     /// How to describe this scope to the user, so `Always` is never wider than it reads.
     pub fn describe(&self) -> String {
+        self.describe_under(std::path::Path::new(""))
+    }
+
+    /// The same, with paths written as the project sees them.
+    ///
+    /// A prompt is read in a pane a few dozen columns wide, and the part of a path that
+    /// says what is about to change is the part below the project root.
+    pub fn describe_under(&self, root: &std::path::Path) -> String {
         match self {
             ApprovalScope::Command(cmd) => format!("this exact command ({cmd})"),
             ApprovalScope::Path { tool, prefix } => {
-                format!("{tool} anywhere under {}", prefix.display())
+                let shown = prefix.strip_prefix(root).unwrap_or(prefix).display();
+                let shown = shown.to_string();
+                if shown.is_empty() {
+                    format!("{tool} anywhere in the project")
+                } else {
+                    format!("{tool} anywhere under {shown}")
+                }
             }
             ApprovalScope::Host(host) => format!("requests to {host}"),
             ApprovalScope::Tool(tool) => format!("every {tool} call"),

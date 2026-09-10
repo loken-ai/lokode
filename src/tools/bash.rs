@@ -65,7 +65,11 @@ impl Tool for Bash {
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),
-                summary: format!("$ {}  (cwd: {})", a.cmd, cwd.display()),
+                summary: if cwd == ctx.root {
+                    format!("$ {}", a.cmd)
+                } else {
+                    format!("$ {}  (in {})", a.cmd, ctx.short(&cwd))
+                },
                 diff_preview: None,
                 scope: ApprovalScope::Command(a.cmd.clone()),
             })
