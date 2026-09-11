@@ -9,7 +9,20 @@ use verve::{app, config};
 mod default {
     pub const BACKEND_URL: &str = "http://127.0.0.1:11435";
     pub const MAX_STEPS: usize = 16;
-    pub const CONTEXT_TOKENS: usize = 8192;
+    /// The window to ask a local backend for.
+    ///
+    /// Large, and for a reason that is not the obvious one. A conversation that outgrows
+    /// its window is compacted, compaction rewrites the history from near its start, and
+    /// the server's hold on the prompt it had already read is a prefix - so every
+    /// compaction makes the next turn re-read the whole conversation. A window the work
+    /// fits in is therefore faster than a smaller one, not merely roomier: measured on one
+    /// question against a thirty-billion-parameter model, twenty-four seconds here against
+    /// three hundred at a quarter of it, with the turns after the first answering in a
+    /// quarter of a second instead of a minute.
+    ///
+    /// What to ask for, not what to assume: a backend that cannot afford it says what it
+    /// served and is believed.
+    pub const CONTEXT_TOKENS: usize = 131_072;
 
     /// How to ask a local backend to store the key-value cache.
     ///
@@ -21,6 +34,7 @@ mod default {
     /// Set it to `q8`, `q4` or `off` to insist. Ignored by a backend that does not know
     /// the header, which is every hosted one.
     pub const KV_FORMAT: &str = "";
+    /// What to reserve for one answer, capped at half the window in force.
     pub const MAX_ANSWER_TOKENS: usize = 4096;
 }
 
