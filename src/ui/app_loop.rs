@@ -1305,6 +1305,32 @@ async fn run_ui(
                         // that the call failed rather than that it was the wrong call, so
                         // the next step is usually the same call again and the person
                         // refuses it twice.
+                        // Almost right, which is the common case for a shell command: a
+                        // path wrong, a flag missing. Refusing it and retyping the whole
+                        // line from what is on screen is the work the prompt was meant to
+                        // save. This hands the line over to be corrected and run.
+                        if matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X')) {
+                            if let Some(command) = state
+                                .pending_approval
+                                .as_ref()
+                                .and_then(|p| p.req.summary.strip_prefix("$ "))
+                                .map(str::to_string)
+                            {
+                                if let Some(prompt) = state.pending_approval.take() {
+                                    let _ = prompt.reply.send(
+                                        crate::sandbox::approval::ApprovalDecision::Deny(Some(
+                                            "not as written; the user is running a corrected \
+                                             version themselves and will say what it printed"
+                                                .into(),
+                                        )),
+                                    );
+                                }
+                                state.waiting_since = None;
+                                state.at_entry = None;
+                                input = fresh_input(&format!("!{command}"));
+                                continue;
+                            }
+                        }
                         if matches!(key.code, KeyCode::Char('e') | KeyCode::Char('E')) {
                             state.refusing = state.pending_approval.take();
                             state.waiting_since = None;

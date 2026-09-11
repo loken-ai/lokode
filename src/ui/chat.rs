@@ -216,8 +216,14 @@ impl Entry {
                         )));
                     }
                 }
+                // The line a shell command is given is the one worth correcting, so the
+                // key that does it is offered only where there is a command to correct.
+                let fix = match summary.starts_with("$ ") {
+                    true => "   x no, let me fix it",
+                    false => "",
+                };
                 out.push(Line::from(Span::styled(
-                    format!("  y once   a always ({scope})   n or esc no   e no, and say why"),
+                    format!("  y once   a always ({scope})   n or esc no   e no, and say why{fix}"),
                     Style::default().fg(Color::Yellow),
                 )));
                 out.push(Line::from(""));
