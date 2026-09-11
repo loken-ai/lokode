@@ -2718,7 +2718,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(asked, crate::sandbox::approval::ApprovalDecision::Deny),
+            matches!(asked, crate::sandbox::approval::ApprovalDecision::Deny(_)),
             "a guess with nobody listening must be refused, not left waiting"
         );
     }

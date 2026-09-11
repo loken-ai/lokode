@@ -217,7 +217,7 @@ impl Entry {
                     }
                 }
                 out.push(Line::from(Span::styled(
-                    format!("  y once   a always ({scope})   n or esc no"),
+                    format!("  y once   a always ({scope})   n or esc no   e no, and say why"),
                     Style::default().fg(Color::Yellow),
                 )));
                 out.push(Line::from(""));

@@ -316,10 +316,16 @@ mod through_the_context {
         });
         // The allow list does not apply, so the question is put to the run's own policy,
         // which here says no.
-        assert_eq!(ctx.approve(request("cargo test")).await, Approval::Denied);
+        assert_eq!(
+            ctx.approve(request("cargo test")).await,
+            Approval::Denied(None)
+        );
         assert_eq!(h.asked().len(), 1);
         // The refusal still answers on its own.
-        assert_eq!(ctx.approve(request("rm -rf /")).await, Approval::Denied);
+        assert_eq!(
+            ctx.approve(request("rm -rf /")).await,
+            Approval::Denied(None)
+        );
         assert_eq!(h.asked().len(), 1);
     }
 
@@ -346,7 +352,10 @@ mod through_the_context {
             ctx.approve(request("cargo test --release")).await,
             Approval::Proceed
         );
-        assert_eq!(ctx.approve(request("rm -rf /")).await, Approval::Denied);
+        assert_eq!(
+            ctx.approve(request("rm -rf /")).await,
+            Approval::Denied(None)
+        );
         // Nothing was put to the user for either.
         assert_eq!(h.asked().len(), 0);
 

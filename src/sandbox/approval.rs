@@ -101,21 +101,36 @@ pub struct ApprovalRequest {
 }
 
 /// Outcome of a single approval prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalDecision {
     Once,
     Always,
-    Deny,
+    /// Refused, with what the person said about it when they said anything.
+    ///
+    /// A bare refusal tells a model that the call failed, not that it was the wrong call,
+    /// so the next step is usually the same call again, and the person refuses it twice.
+    Deny(Option<String>),
 }
 
 /// What a tool should do once the question has been settled, one way or another.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Approval {
     Proceed,
-    Denied,
+    Denied(Option<String>),
     /// The turn was abandoned while the prompt was on screen. Not the same as `Denied`:
     /// the user refused nothing, they stopped waiting.
     Interrupted,
+}
+
+/// What a tool hands back when its call was refused.
+///
+/// Carries what the person said, so the model has something to act on rather than a
+/// failure to work around.
+pub fn denial(why: Option<String>) -> String {
+    match why {
+        None => "user denied".to_string(),
+        Some(why) => format!("user denied: {why}"),
+    }
 }
 
 #[derive(Debug)]
@@ -178,9 +193,9 @@ pub async fn ask(sender: &ApprovalSender, req: ApprovalRequest) -> ApprovalDecis
         .await
         .is_err()
     {
-        return ApprovalDecision::Deny;
+        return ApprovalDecision::Deny(None);
     }
-    rx.await.unwrap_or(ApprovalDecision::Deny)
+    rx.await.unwrap_or(ApprovalDecision::Deny(None))
 }
 
 #[cfg(test)]

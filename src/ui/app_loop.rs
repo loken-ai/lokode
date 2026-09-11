@@ -340,6 +340,8 @@ struct UiState {
     said: Option<(String, Instant)>,
     /// A list a command opened, waiting to be chosen from.
     choosing: Option<crate::ui::chooser::Chooser>,
+    /// A call being refused, while what to do instead is being typed.
+    refusing: Option<crate::sandbox::approval::ApprovalPrompt>,
     /// What the backend serves, for finishing the name of one that is being typed. Asked
     /// for once and after a switch, since a backend's catalogue does not move under a
     /// session.
@@ -1299,6 +1301,20 @@ async fn run_ui(
                             }
                             continue;
                         }
+                        // Refused, with something to go on. A bare refusal tells a model
+                        // that the call failed rather than that it was the wrong call, so
+                        // the next step is usually the same call again and the person
+                        // refuses it twice.
+                        if matches!(key.code, KeyCode::Char('e') | KeyCode::Char('E')) {
+                            state.refusing = state.pending_approval.take();
+                            state.waiting_since = None;
+                            state.entries.push(Entry::Notice(
+                                "not doing that - say what to do instead; enter sends it, \
+                                 esc refuses without a reason"
+                                    .into(),
+                            ));
+                            continue;
+                        }
                         if let Some(decision) = approval_key(&key) {
                             if let Some(prompt) = state.pending_approval.take() {
                                 let _ = prompt.reply.send(decision);
@@ -1530,6 +1546,38 @@ async fn run_ui(
                             // thing left for Esc to mean is the line being typed. It did
                             // nothing at all there, which is a key that works everywhere
                             // except where it was pressed.
+                            // A refusal being explained, which is a question still on the
+                            // table: escaping it refuses without saying anything rather
+                            // than leaving the turn waiting on an answer nobody is giving.
+                            KeyCode::Esc if state.refusing.is_some() => {
+                                if let Some(prompt) = state.refusing.take() {
+                                    let _ = prompt
+                                        .reply
+                                        .send(crate::sandbox::approval::ApprovalDecision::Deny(
+                                            None,
+                                        ));
+                                }
+                                state.at_entry = None;
+                                input = fresh_input("");
+                                continue;
+                            }
+                            KeyCode::Enter if state.refusing.is_some() => {
+                                let said = input.lines().join("\n").trim().to_string();
+                                if let Some(prompt) = state.refusing.take() {
+                                    let _ = prompt.reply.send(
+                                        crate::sandbox::approval::ApprovalDecision::Deny(
+                                            (!said.is_empty()).then_some(said.clone()),
+                                        ),
+                                    );
+                                }
+                                state.entries.push(Entry::Notice(match said.is_empty() {
+                                    true => "refused".to_string(),
+                                    false => format!("refused: {said}"),
+                                }));
+                                state.at_entry = None;
+                                input = fresh_input("");
+                                continue;
+                            }
                             // A selection let go of, which is the first thing Esc should
                             // reach while one is on screen.
                             KeyCode::Esc if state.selecting.is_some() => {
@@ -2757,7 +2805,9 @@ fn approval_key(k: &KeyEvent) -> Option<ApprovalDecision> {
     }
     match k.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(ApprovalDecision::Once),
-        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(ApprovalDecision::Deny),
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            Some(ApprovalDecision::Deny(None))
+        }
         KeyCode::Char('a') | KeyCode::Char('A') => Some(ApprovalDecision::Always),
         _ => None,
     }
@@ -2918,16 +2968,34 @@ mod tests {
         assert_eq!(approval_key(&press(KeyCode::Enter)), None);
     }
 
+    /// A refusal with nothing said is still a refusal: the keys that back out keep
+    /// working, and what they mean does not change.
+    #[test]
+    fn refusing_says_nothing_unless_something_was_said() {
+        assert_eq!(
+            approval_key(&press(KeyCode::Char('n'))),
+            Some(ApprovalDecision::Deny(None))
+        );
+        // The key that asks for a reason is not itself a decision: the decision is made
+        // when what was typed is sent.
+        assert_eq!(approval_key(&press(KeyCode::Char('e'))), None);
+        assert_eq!(
+            crate::sandbox::approval::denial(Some("use the test runner".into())),
+            "user denied: use the test runner"
+        );
+        assert_eq!(crate::sandbox::approval::denial(None), "user denied");
+    }
+
     /// Declining must stay reachable by the two gestures people already use to back out.
     #[test]
     fn declining_is_reachable() {
         assert_eq!(
             approval_key(&press(KeyCode::Esc)),
-            Some(ApprovalDecision::Deny)
+            Some(ApprovalDecision::Deny(None))
         );
         assert_eq!(
             approval_key(&press(KeyCode::Char('n'))),
-            Some(ApprovalDecision::Deny)
+            Some(ApprovalDecision::Deny(None))
         );
     }
 

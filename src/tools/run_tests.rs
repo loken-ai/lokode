@@ -58,7 +58,9 @@ impl Tool for RunTests {
             .await
         {
             Approval::Proceed => {}
-            Approval::Denied => return Ok(ToolOutput::err("user denied")),
+            Approval::Denied(why) => {
+                return Ok(ToolOutput::err(crate::sandbox::approval::denial(why)))
+            }
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 

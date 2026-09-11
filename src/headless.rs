@@ -45,7 +45,7 @@ impl ApprovePolicy {
             // to have made.
             ApprovalDecision::Once
         } else {
-            ApprovalDecision::Deny
+            ApprovalDecision::Deny(None)
         }
     }
 }
@@ -127,7 +127,7 @@ pub async fn run(
                 summary = %prompt.req.summary,
                 "headless approval"
             );
-            if decision == ApprovalDecision::Deny {
+            if matches!(decision, ApprovalDecision::Deny(_)) {
                 let _ = blocked_tx.send(prompt.req.tool.clone());
             }
             let _ = prompt.reply.send(decision);
@@ -345,7 +345,7 @@ mod tests {
         ] {
             assert_eq!(
                 ApprovePolicy::None.decide(tool),
-                ApprovalDecision::Deny,
+                ApprovalDecision::Deny(None),
                 "{tool} was allowed under --approve none"
             );
         }
@@ -370,7 +370,7 @@ mod tests {
         for tool in ["bash", "run_tests", "web_fetch"] {
             assert_eq!(
                 ApprovePolicy::Edits.decide(tool),
-                ApprovalDecision::Deny,
+                ApprovalDecision::Deny(None),
                 "{tool} was allowed under --approve edits"
             );
         }

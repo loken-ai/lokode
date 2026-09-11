@@ -28,7 +28,7 @@ impl Answer {
         match self {
             Answer::Yes => ApprovalDecision::Once,
             Answer::Always => ApprovalDecision::Always,
-            Answer::No => ApprovalDecision::Deny,
+            Answer::No => ApprovalDecision::Deny(None),
         }
     }
 }

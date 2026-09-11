@@ -148,7 +148,7 @@ impl ToolCtx {
         ) {
             crate::sandbox::policy::Verdict::Refused(why) => {
                 tracing::info!(tool = %req.tool, scope = ?req.scope, %why, "refused by policy");
-                return Approval::Denied;
+                return Approval::Denied(None);
             }
             crate::sandbox::policy::Verdict::Allowed if self.honour_allow => {
                 self.auto_used.fetch_add(1, Ordering::Relaxed);
@@ -183,7 +183,7 @@ impl ToolCtx {
         // the first question anyone asks about a run that did something unexpected.
         tracing::info!(%tool, ?decision, ?scope, "approval decided");
         match decision {
-            ApprovalDecision::Deny => Approval::Denied,
+            ApprovalDecision::Deny(why) => Approval::Denied(why),
             ApprovalDecision::Once => Approval::Proceed,
             ApprovalDecision::Always => {
                 self.session_approvals.mark_always(scope).await;
