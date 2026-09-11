@@ -2011,7 +2011,21 @@ impl Agent {
                 .clone()
                 .unwrap_or_else(|| self.backend.clone()),
             registry: self.registry.clone(),
-            ctx: self.ctx.clone(),
+            ctx: {
+                // A guess may not ask the person for anything. Being wrong has to stay
+                // free, and a question is not free: it takes attention for a read nobody
+                // asked for, and the guess is abandoned the moment the answer arrives -
+                // which left the question on screen, unanswerable, for something that was
+                // never going to happen. Observed with a guessed web fetch.
+                //
+                // Refused where it is asked rather than filtered by a list of tools: the
+                // sender has nothing listening, so anything that would ask is declined,
+                // including whatever is added later.
+                let mut ctx = self.ctx.clone();
+                let (unheard, _) = tokio::sync::mpsc::channel(1);
+                ctx.approval = unheard;
+                ctx
+            },
             model,
             session: self.session.id.clone(),
             recent: self.recent_for_guess(),
@@ -2558,6 +2572,35 @@ impl Agent {
 
 #[cfg(test)]
 mod tests {
+    /// A guess must not be able to put a question to the person.
+    ///
+    /// The point of guessing which read is coming next is that being wrong costs nothing.
+    /// A tool that asks for approval breaks that: it takes attention for a read nobody
+    /// asked for, and the guess is abandoned the instant the real answer arrives - so the
+    /// question is left on screen for something that will never happen, and the turn
+    /// carries on around it. Seen with a guessed web fetch, which is read-only and so
+    /// passes the mutation test, and still asks before it reaches the network.
+    #[tokio::test]
+    async fn a_guess_cannot_ask_for_an_approval() {
+        use crate::sandbox::approval::{ApprovalRequest, ApprovalScope};
+        // The sender a guess is given: nothing is listening on it.
+        let (unheard, _) = tokio::sync::mpsc::channel(1);
+        let asked = crate::sandbox::approval::ask(
+            &unheard,
+            ApprovalRequest {
+                tool: "web_fetch".into(),
+                summary: "GET https://example.com".into(),
+                diff_preview: None,
+                scope: ApprovalScope::Host("example.com".into()),
+            },
+        )
+        .await;
+        assert!(
+            matches!(asked, crate::sandbox::approval::ApprovalDecision::Deny),
+            "a guess with nobody listening must be refused, not left waiting"
+        );
+    }
+
     /// Reading the prompt is work, not silence: a window asked for precisely so that a
     /// large prompt can be sent is unusable if the client gives up while it is read.
     #[test]
