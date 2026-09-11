@@ -99,6 +99,21 @@ pub fn tool_output_chars(context_tokens: usize, reserve_tokens: usize) -> usize 
     context_tokens.saturating_sub(reserve_tokens) * CHARS_PER_TOKEN / 4
 }
 
+/// What a reply's token count said about the request that produced it.
+///
+/// The count is the only thing a backend says about how it read the prompt, and two very
+/// different facts come out of it: the tokenizer's ratio, which sizes the history, and
+/// whether the prompt arrived whole.
+pub enum Observed {
+    /// Nothing that changes what the caller does.
+    Quiet,
+    /// The history budget moved enough to be worth saying.
+    Budget(String),
+    /// The backend read only this many tokens of what was sent, so it cut the prompt.
+    /// What it read is the window it serves.
+    Cut(usize),
+}
+
 /// What the standing instructions may hold of the window.
 ///
 /// An eighth of the budget, and half of what one tool result may take, because this text
@@ -260,29 +275,24 @@ impl Session {
     /// can be wrong in the dangerous direction without anyone noticing.
     ///
     /// Returns a note for the user when the correction moves the budget enough to matter.
-    pub fn observe(&mut self, sent_chars: usize, prompt_tokens: u32) -> Option<String> {
+    pub fn observe(&mut self, sent_chars: usize, prompt_tokens: u32) -> Observed {
         if sent_chars == 0 || prompt_tokens == 0 {
-            return None;
+            return Observed::Quiet;
         }
         let measured = sent_chars as f64 / prompt_tokens as f64;
         if !measured.is_finite() {
-            return None;
+            return Observed::Quiet;
         }
         // Far more characters than the tokens the server counted: no text tokenises that
         // compactly, so the server did not read all of what was sent. It cuts from the
         // front, which is where the standing instructions are, and answers fluently about
-        // a question it was only shown the end of. Said rather than swallowed: the window
-        // it serves is smaller than the one being asked for, and only the person running
-        // it can settle that.
+        // a question it was only shown the end of. What it did read is the window it
+        // serves, which is the one fact the caller needs to stop doing this.
         if measured > MAX_RATIO {
-            return Some(format!(
-                "the backend read only {prompt_tokens} tokens of what was sent, so it is \
-                 cutting the prompt: its window is smaller than the one asked for. Set \
-                 --context-tokens to what it serves."
-            ));
+            return Observed::Cut(prompt_tokens as usize);
         }
         if measured < MIN_RATIO {
-            return None;
+            return Observed::Quiet;
         }
 
         let before = self.budget_chars;
@@ -292,12 +302,13 @@ impl Session {
         // Only worth saying when the change is large enough to alter behaviour; the ratio
         // drifts a little on every request and narrating that would be noise.
         let moved = before.abs_diff(self.budget_chars);
-        (moved * 10 > before.max(1)).then(|| {
-            format!(
+        match moved * 10 > before.max(1) {
+            true => Observed::Budget(format!(
                 "context budget now {} chars ({:.1} chars/token, measured against the server)",
                 self.budget_chars, self.chars_per_token
-            )
-        })
+            )),
+            false => Observed::Quiet,
+        }
     }
 
     /// Drop the oldest steps until the history is comfortably inside the budget, and
@@ -406,17 +417,12 @@ mod tests {
     #[test]
     fn a_prompt_the_backend_only_partly_read_is_reported() {
         let mut s = Session::new("sys".into(), 32_768, 4096);
-        // Ten characters a token: no text does that, so the prompt was cut.
-        let said = s.observe(100_000, 10_000);
-        let said = said.expect("a cut prompt is worth saying");
-        assert!(said.contains("cutting the prompt"), "{said}");
-        assert!(said.contains("10000"), "{said}");
-        // An ordinary ratio is measured, not reported as damage.
+        // Ten characters a token: no text does that, so the prompt was cut - and what was
+        // read is the window the backend serves.
+        assert!(matches!(s.observe(100_000, 10_000), Observed::Cut(10_000)));
+        // An ordinary ratio is measured, not read as damage.
         let ordinary = Session::new("sys".into(), 32_768, 4096).observe(40_000, 10_000);
-        assert!(
-            ordinary.is_none_or(|s| !s.contains("cutting")),
-            "an ordinary ratio must not read as damage"
-        );
+        assert!(!matches!(ordinary, Observed::Cut(_)));
     }
 
     /// A reserve equal to the window leaves nothing to read with, which is how a client
@@ -569,9 +575,9 @@ mod tests {
     fn only_a_meaningful_correction_is_reported() {
         let mut s = Session::new("sys".into(), 8192, 4096);
         // Exactly the ratio already believed: nothing moves, nothing is said.
-        assert_eq!(s.observe(40_000, 10_000), None);
+        assert!(matches!(s.observe(40_000, 10_000), Observed::Quiet));
         // A tokenizer half as generous moves the budget a long way.
-        assert!(s.observe(20_000, 10_000).is_some());
+        assert!(matches!(s.observe(20_000, 10_000), Observed::Budget(_)));
     }
 
     /// A generous budget must leave the conversation exactly as it was.

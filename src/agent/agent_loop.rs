@@ -975,32 +975,48 @@ impl Agent {
         let Some(served) = self.backend.served_window() else {
             return;
         };
-        let per_model = self.cfg.models.get(&self.cfg.model);
-        let asked = per_model
+        let asked = self
+            .cfg
+            .models
+            .get(&self.cfg.model)
             .and_then(|m| m.context_tokens)
             .unwrap_or(self.cfg.context_tokens);
-        let window = asked.min(served);
-        if window == self.window_in_use {
+        self.adopt_window(asked.min(served), events).await;
+    }
+
+    /// Size the history to `window`, and say so when it moves.
+    ///
+    /// One place, because the window is learned two ways - a backend that answers the
+    /// question, and a backend that cuts a prompt and is caught at it - and a session
+    /// sized differently depending on which taught it would be a session whose budget
+    /// depends on how it found out.
+    async fn adopt_window(&mut self, window: usize, events: &mpsc::Sender<AgentEvent>) {
+        if window == 0 || window == self.window_in_use {
             return;
         }
+        let previous = self.window_in_use;
         self.window_in_use = window;
         let reserve = crate::agent::session::answer_reserve(
             window,
-            per_model
+            self.cfg
+                .models
+                .get(&self.cfg.model)
                 .and_then(|m| m.max_answer_tokens)
                 .unwrap_or(self.cfg.max_answer_tokens),
         );
         self.session.set_window(window, reserve);
         // What a tool result may contribute is a share of the same window, so it moves
-        // with it: a history resized upward that still reads files in two-kilobyte
-        // pieces has not gained anything worth having.
+        // with it: a history resized upward that still reads files in two-kilobyte pieces
+        // has not gained anything worth having.
         self.ctx.max_output_chars = crate::agent::session::tool_output_chars(window, reserve);
-        let _ = events
-            .send(AgentEvent::Notice(format!(
-                "the server serves {served} tokens for {}; the history is sized to {window}",
-                self.cfg.model
-            )))
-            .await;
+        if previous != 0 {
+            let _ = events
+                .send(AgentEvent::Notice(format!(
+                    "the history is sized to {window} tokens for {}",
+                    self.cfg.model
+                )))
+                .await;
+        }
     }
 
     /// Take the window a model needs and forget what the last one taught, which every
@@ -1524,8 +1540,24 @@ impl Agent {
                 self.this_turn.tokens_out += usage.completion_tokens as u64;
                 self.spend.prompt_tokens += usage.prompt_tokens as u64;
                 self.spend.completion_tokens += usage.completion_tokens as u64;
-                if let Some(note) = self.session.observe(sent_chars, usage.prompt_tokens) {
-                    let _ = events.send(AgentEvent::Notice(note)).await;
+                match self.session.observe(sent_chars, usage.prompt_tokens) {
+                    crate::agent::session::Observed::Quiet => {}
+                    crate::agent::session::Observed::Budget(note) => {
+                        let _ = events.send(AgentEvent::Notice(note)).await;
+                    }
+                    // The backend cut the prompt, and what it read is the window it
+                    // serves. Saying so and carrying on would send the next step the same
+                    // way: the history is sized to what was learned, which is the same
+                    // thing done when a backend answers the question directly.
+                    crate::agent::session::Observed::Cut(read) => {
+                        self.adopt_window(read, &events).await;
+                        let _ = events
+                            .send(AgentEvent::Notice(format!(
+                                "the backend read only {read} tokens of what was sent, so it \
+                                 is cutting the prompt: the history is now sized to that"
+                            )))
+                            .await;
+                    }
                 }
             }
             // A response stopped by the token limit is a truncated JSON object. Without
