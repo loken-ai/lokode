@@ -1408,6 +1408,12 @@ async fn run_ui(
                         if matches!(key.code, KeyCode::Char('e') | KeyCode::Char('E')) {
                             state.refusing = state.pending_approval.take();
                             state.waiting_since = None;
+                            // The pointer goes with the question. It was left on the
+                            // approval, where space unfolds what is being pointed at -
+                            // so every space in the reason being typed unfolded the diff
+                            // instead of reaching the line, and the model was told
+                            // "neverdeleteanything".
+                            state.at_entry = None;
                             state.entries.push(Entry::Notice(
                                 "not doing that - say what to do instead; enter sends it, \
                                  esc refuses without a reason"
