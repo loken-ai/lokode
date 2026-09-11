@@ -624,6 +624,20 @@ impl UiState {
         }
     }
 
+    /// Put the screen back to how it opened, keeping what a session is rather than what
+    /// was said in it.
+    fn start_again(&mut self) {
+        self.entries.clear();
+        self.tasks.clear();
+        self.unfolded.clear();
+        self.at_entry = None;
+        self.finding = None;
+        self.selecting = None;
+        self.scroll = 0;
+        self.step = 0;
+        self.context_percent = 0;
+    }
+
     /// Accumulate a piece of the model's scratchpad into one entry.
     fn push_reasoning(&mut self, chunk: &str) {
         match self.entries.last_mut() {
@@ -1300,6 +1314,10 @@ async fn run_ui(
                                         // One list may lead to another: choosing a server
                                         // is not yet choosing what to ask it.
                                         Ran::Choose(chooser) => state.choosing = Some(*chooser),
+                                        Ran::Cleared(said) => {
+                                            state.start_again();
+                                            state.entries.push(Entry::Notice(said));
+                                        }
                                         // Something to ask the model. Put on the line
                                         // rather than sent, so the person sees what they
                                         // are about to ask before it goes.
@@ -1709,6 +1727,17 @@ async fn run_ui(
                                         Ran::Choose(chooser) => {
                                             state.choosing = Some(*chooser);
                                             input = fresh_input("");
+                                            continue;
+                                        }
+                                        // The screen is the conversation, so it goes with
+                                        // it: a cleared session under a full screen of
+                                        // what it no longer holds is a lie about what the
+                                        // model can see.
+                                        Ran::Cleared(said) => {
+                                            state.start_again();
+                                            state.entries.push(Entry::Notice(said));
+                                            input = fresh_input("");
+                                            refresh_status(&control_tx, &mut state).await;
                                             continue;
                                         }
                                     }
@@ -2204,6 +2233,8 @@ enum Ran {
     Prompt(String),
     /// A list to choose from, and the command to run with what is chosen.
     Choose(Box<crate::ui::chooser::Chooser>),
+    /// The conversation is over and the screen goes with it.
+    Cleared(String),
 }
 
 /// Everything a command may need. One struct rather than nine arguments, since every new
@@ -2354,6 +2385,20 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
             }
             _ => return Ran::Said(mcp_summary.to_string()),
         }
+    }
+    if verb == "clear" {
+        if busy {
+            return Ran::Said("the agent is working; ask again when the turn is over".into());
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if control
+            .send(crate::agent::agent_loop::Control::Clear { reply: tx })
+            .await
+            .is_err()
+        {
+            return Ran::Said("the agent is not listening".into());
+        }
+        return Ran::Cleared(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
     }
     if verb == "tools" {
         return Ran::Said(tools.join("\n"));
@@ -2576,6 +2621,7 @@ const HELP: &str = "\
 /init   write a first draft of this project's instructions
 /tools  the tools this session can call, and where they came from
 /mcp    the tool servers, or /mcp <server> <prompt> to take one of their prompts
+/clear  start the conversation again, keeping the project and the model
 /help   this, and any command the project defines";
 
 /// Which decision a keystroke stands for at the approval modal.

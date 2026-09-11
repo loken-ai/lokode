@@ -45,6 +45,12 @@ pub enum Record {
     Notice {
         text: String,
     },
+    /// The conversation was started again from nothing.
+    ///
+    /// Recorded rather than erased: what was said was said, and a session is a record of
+    /// it. What it does is stop a resume from bringing back the messages the person had
+    /// just decided to be rid of.
+    Cleared,
 }
 
 /// Appends records to a session file without holding up the turn.
@@ -155,6 +161,8 @@ pub fn replay(path: &Path) -> Result<Replay> {
             }
             // A later switch wins over the one the session opened with.
             Record::Model { name } => model = Some(name),
+            // Everything before it was deliberately dropped, so it does not come back.
+            Record::Cleared => messages.clear(),
             Record::Message(m) if m.role != "system" => messages.push(m),
             _ => {}
         }

@@ -95,6 +95,10 @@ pub enum Control {
     Models {
         reply: tokio::sync::oneshot::Sender<Result<Models, String>>,
     },
+    /// Start the conversation again, keeping the project and the model.
+    Clear {
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
     /// Hold the session to a tool protocol, once something has found out which one works.
     Protocol(ToolProtocol),
     /// Take the conversation back to the last thing the user asked and hand it back, so it
@@ -1068,6 +1072,14 @@ impl Agent {
             }
             Control::Models { reply } => {
                 let _ = reply.send(self.models_on_offer().await);
+            }
+            Control::Clear { reply } => {
+                let dropped = self.session.clear();
+                tracing::info!(dropped, "conversation cleared");
+                let _ = reply.send(match dropped {
+                    0 => "nothing had been said yet".to_string(),
+                    n => format!("started again; {n} message(s) dropped"),
+                });
             }
             Control::Note(text) => {
                 // As something the person said, because that is what it is: they ran the

@@ -156,6 +156,20 @@ impl Session {
         self.history.extend(messages);
     }
 
+    /// Start the conversation again, keeping the contract and what was measured.
+    ///
+    /// The record keeps what was said - a session is a record, and choosing to start again
+    /// does not unsay anything - and carries a mark so that resuming it later does not
+    /// bring back what was just dropped.
+    pub fn clear(&mut self) -> usize {
+        let dropped = self.history.len().saturating_sub(1);
+        self.history.truncate(1);
+        if let Some(t) = &self.transcript {
+            t.append(Record::Cleared);
+        }
+        dropped
+    }
+
     pub fn transcript(&self) -> Option<&Transcript> {
         self.transcript.as_ref()
     }
@@ -407,6 +421,19 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    /// Starting again keeps the contract and drops everything said under it: a cleared
+    /// session still carrying the conversation is a session that was not cleared.
+    #[test]
+    fn starting_again_keeps_the_contract_and_nothing_else() {
+        let mut s = Session::new("the contract".into(), 8192, 1024);
+        s.push(Message::user("first"));
+        s.push(Message::assistant("second"));
+        assert_eq!(s.clear(), 2);
+        assert_eq!(s.size_chars(), "the contract".len() + "system".len());
+        // And again, with nothing said, is not an error.
+        assert_eq!(s.clear(), 0);
+    }
+
     /// A prompt the server only partly read is said, not swallowed.
     ///
     /// The client cannot always learn the window a backend serves - one that does not
