@@ -477,6 +477,12 @@ fn background_provider(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provid
         BackendClient::WINDOW_HEADER.to_string(),
         cfg.context_tokens.to_string(),
     ));
+    if !cfg.kv_format.is_empty() {
+        headers.push((
+            BackendClient::KV_FORMAT_HEADER.to_string(),
+            cfg.kv_format.clone(),
+        ));
+    }
     Ok(Arc::new(BackendClient::with_headers(
         cfg.backend_url.clone(),
         &headers,
@@ -521,6 +527,16 @@ fn provider_for(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Pro
                 BackendClient::WINDOW_HEADER.to_string(),
                 cfg.context_tokens.to_string(),
             ));
+            // Only when somebody has said. What a window costs per token is the
+            // server's to decide: it is the side that knows what its cards hold, and it
+            // already narrows the format for a model whose cache would not otherwise
+            // fit.
+            if !cfg.kv_format.is_empty() {
+                headers.push((
+                    BackendClient::KV_FORMAT_HEADER.to_string(),
+                    cfg.kv_format.clone(),
+                ));
+            }
             Ok(Arc::new(BackendClient::with_headers(
                 cfg.backend_url.clone(),
                 &headers,

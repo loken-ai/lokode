@@ -73,6 +73,13 @@ impl BackendClient {
     /// actually served rather than assumed to be what was asked.
     pub const WINDOW_HEADER: &'static str = "x-loken-num-ctx";
 
+    /// The header a server reads to be told how to store the key-value cache.
+    ///
+    /// Sent with the window rather than instead of it: the cache is what a window costs,
+    /// and a server asked for one it cannot allocate at native width serves the smaller
+    /// one it can.
+    pub const KV_FORMAT_HEADER: &'static str = "x-loken-kv-quant";
+
     pub fn new(base_url: impl Into<String>) -> Self {
         Self::with_headers(base_url, &[])
     }

@@ -10,6 +10,17 @@ mod default {
     pub const BACKEND_URL: &str = "http://127.0.0.1:11435";
     pub const MAX_STEPS: usize = 16;
     pub const CONTEXT_TOKENS: usize = 8192;
+
+    /// How to ask a local backend to store the key-value cache.
+    ///
+    /// Nothing, by default. What a window costs is its cache, and the server is the side
+    /// that knows what its cards can hold: loken already picks a narrower format for an
+    /// architecture whose cache would not otherwise fit. Naming one here would override
+    /// that with a figure chosen without seeing the machine.
+    ///
+    /// Set it to `q8`, `q4` or `off` to insist. Ignored by a backend that does not know
+    /// the header, which is every hosted one.
+    pub const KV_FORMAT: &str = "";
     pub const MAX_ANSWER_TOKENS: usize = 4096;
 }
 
@@ -54,6 +65,13 @@ struct Cli {
     /// Tokens held back from the window for the answer.
     #[arg(long)]
     max_answer_tokens: Option<usize>,
+
+    /// How a local backend should store the key-value cache: `q8`, `q4`, or `off`.
+    ///
+    /// What a window costs is this times its length. Ignored by a backend that cannot be
+    /// told, which is every hosted one.
+    #[arg(long)]
+    kv_format: Option<String>,
 
     /// Let `web_fetch` reach this host even though it resolves to a private address.
     ///
@@ -279,6 +297,10 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
                 .max_answer_tokens
                 .or(file.limits.max_answer_tokens)
                 .unwrap_or(default::MAX_ANSWER_TOKENS),
+            kv_format: cli
+                .kv_format
+                .or(file.limits.kv_format.clone())
+                .unwrap_or_else(|| default::KV_FORMAT.to_string()),
             allow_hosts: config::resolve_allow_hosts(&file, cli.allow_hosts),
             transcripts,
             resume,
@@ -345,6 +367,7 @@ fn print_config(cfg: &Resolved) {
     println!("  grammar            {}", a.grammar_enabled);
     println!("  max-steps          {}", a.max_steps);
     println!("  context-tokens     {}", a.context_tokens);
+    println!("  kv-format          {}", a.kv_format);
     println!("  max-answer-tokens  {}", a.max_answer_tokens);
     println!("  transcripts        {}", a.transcripts);
     println!(

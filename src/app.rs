@@ -28,6 +28,8 @@ pub struct AppConfig {
     pub max_steps: usize,
     pub context_tokens: usize,
     pub max_answer_tokens: usize,
+    /// How a local backend should store the key-value cache, when it can be told.
+    pub kv_format: String,
     /// Hosts `web_fetch` may reach even though they resolve to a private address.
     pub allow_hosts: HashSet<String>,
     /// Whether to record this session to disk.

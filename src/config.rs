@@ -346,6 +346,12 @@ pub struct LimitsSection {
     pub max_steps: Option<usize>,
     pub context_tokens: Option<usize>,
     pub max_answer_tokens: Option<usize>,
+    /// How a local backend should store the key-value cache: `q8`, `q4`, or `off`.
+    ///
+    /// What a window costs is this times its length, so it is the setting that decides
+    /// whether the window above can be allocated at all. Ignored by a backend that does
+    /// not know it.
+    pub kv_format: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -421,6 +427,11 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 .limits
                 .max_answer_tokens
                 .or(base.limits.max_answer_tokens),
+            kv_format: over
+                .limits
+                .kv_format
+                .clone()
+                .or(base.limits.kv_format.clone()),
         },
         web: WebSection {
             allow_hosts: {
