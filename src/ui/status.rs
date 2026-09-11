@@ -128,6 +128,35 @@ impl Status {
     ///
     /// `pointing` is true once the user has gone looking through the conversation, where
     /// a different set of keys is in force and the ones for typing are not.
+    /// The keys in force, in the width there is for them.
+    ///
+    /// Dropped from the least useful end rather than cut by the terminal: a line that runs
+    /// off the edge loses whichever key happens to be last, silently, and this project's
+    /// own reason for having the line at all is that a shortcut nobody can see is a
+    /// shortcut nobody uses. What is left ends in a mark, so a reader knows the list goes
+    /// on and that `/help` has the rest.
+    pub fn keys_within(&self, width: usize) -> Line<'static> {
+        let full = self.keys();
+        let shown: usize = full.spans.iter().map(|s| s.content.chars().count()).sum();
+        if width == 0 || shown <= width {
+            return full;
+        }
+        // Pairs, because a key without what it does is worse than no key.
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut used = 0usize;
+        for pair in full.spans.chunks(2) {
+            let cost: usize = pair.iter().map(|s| s.content.chars().count()).sum();
+            // Two columns kept back for the mark that says there is more.
+            if used + cost + 2 > width {
+                break;
+            }
+            used += cost;
+            spans.extend(pair.iter().cloned());
+        }
+        spans.push(Span::styled(" …", Style::default().fg(Color::DarkGray)));
+        Line::from(spans)
+    }
+
     pub fn keys(&self) -> Line<'static> {
         let key = |k: &str, what: &str| {
             vec![
@@ -159,7 +188,7 @@ impl Status {
         } else {
             spans.extend(key("enter", "send"));
             spans.extend(key("alt-↑", "steps"));
-            spans.extend(key("/copy", "take it"));
+            spans.extend(key("ctrl-f", "find"));
             spans.extend(key("/help", "more"));
         }
         // What the key does here, which is not the same thing twice: a turn in flight is
@@ -179,6 +208,31 @@ impl Status {
 
 #[cfg(test)]
 mod tests {
+    /// A narrow window drops keys deliberately and says it did.
+    ///
+    /// The terminal cutting the line loses whichever key is last, without a mark, which is
+    /// the same as not having written it - and the whole reason this line exists is that a
+    /// shortcut nobody can see is one nobody uses.
+    #[test]
+    fn the_keys_fit_the_width_they_are_given() {
+        let s = status(false, None, Duration::from_secs(0));
+        let width = |line: &Line<'static>| -> usize {
+            line.spans.iter().map(|x| x.content.chars().count()).sum()
+        };
+        let whole = s.keys();
+        // Given room, nothing is dropped and nothing is added.
+        assert_eq!(width(&s.keys_within(width(&whole))), width(&whole));
+        // Given less, what is shown fits and says there is more.
+        for room in [10, 24, 40, 60] {
+            let cut = s.keys_within(room);
+            assert!(width(&cut) <= room, "at {room}: {}", width(&cut));
+            assert!(
+                cut.spans.last().is_some_and(|x| x.content.contains('…')),
+                "at {room} nothing said the list goes on"
+            );
+        }
+    }
+
     use super::*;
 
     fn status(busy: bool, phase: Option<&str>, in_phase: Duration) -> Status {

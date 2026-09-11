@@ -721,7 +721,10 @@ async fn run_ui(
                 Paragraph::new(status.to_line()).style(Style::default().fg(Color::Gray)),
                 chunks[3],
             );
-            f.render_widget(Paragraph::new(status.keys()), chunks[4]);
+            f.render_widget(
+                Paragraph::new(status.keys_within(chunks[4].width as usize)),
+                chunks[4],
+            );
 
             if let Some(sheet) = state.sheet.as_mut() {
                 sheet.render(f, chunks[0]);
