@@ -2369,7 +2369,10 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         }
         return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
     }
-    Ran::Said(match command {
+    // On the verb, not on the whole line: matching the line meant a command given an
+    // argument was an unknown command, so anything typed after one of these got the help
+    // text back instead of being done.
+    Ran::Said(match verb {
         "help" | "" => help(root),
         "undo" => match checkpoints {
             None => "no change history for this session".into(),
