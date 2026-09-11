@@ -217,6 +217,14 @@ struct UiState {
     quit_asked: Option<Instant>,
     /// Whether writes go ahead unasked, for this stretch of work.
     accepting_writes: bool,
+    /// What is being looked for in the conversation, and which match is shown.
+    ///
+    /// A long session holds what a tool answered an hour ago, and the only way back to it
+    /// was the wheel. The match is pointed at rather than extracted, so what is found is
+    /// read in the place it happened.
+    finding: Option<(String, usize)>,
+    /// Which wrapped line each entry begins at, as the pane was last drawn.
+    entry_line: Vec<usize>,
     /// When Esc was last pressed with nothing for it to do. Pressed twice it takes the
     /// last question back, which is the shortcut for the commonest correction there is.
     esc_at: Option<Instant>,
@@ -278,6 +286,59 @@ struct UiState {
 }
 
 impl UiState {
+    /// Scroll so that an entry is on screen, when it is not already.
+    ///
+    /// Put at the top rather than centred: what a person wants to read starts there and
+    /// runs downward, and centring hides the half of it they were looking for.
+    fn show_entry(&mut self, at: usize) {
+        let Some(&line) = self.entry_line.get(at) else {
+            return;
+        };
+        let height = self.pane.height as usize;
+        let first = self.first_visible();
+        if line >= first && line < first + height {
+            return;
+        }
+        let from_bottom = self
+            .content_lines
+            .saturating_sub(height)
+            .saturating_sub(line);
+        self.scroll = from_bottom.min(u16::MAX as usize) as u16;
+    }
+
+    /// Point at the match being looked for, counting from the most recent.
+    ///
+    /// From the most recent because that is where a person is: what was said a moment ago
+    /// is what they are usually trying to find again, and walking forward from the start
+    /// of a long session would make them press the key a hundred times to get there.
+    fn point_at_match(&mut self) {
+        let Some((needle, nth)) = self.finding.clone() else {
+            return;
+        };
+        if needle.is_empty() {
+            self.at_entry = None;
+            return;
+        }
+        let needle = needle.to_lowercase();
+        let found: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, e)| e.to_text().to_lowercase().contains(&needle))
+            .map(|(i, _)| i)
+            .collect();
+        if found.is_empty() {
+            self.at_entry = None;
+            return;
+        }
+        // Round rather than stop: walking past the last match comes back to the first,
+        // which is what every search in a terminal does.
+        let at = found[nth % found.len()];
+        self.at_entry = Some(at);
+        self.show_entry(at);
+    }
+
     /// Which line and column a point on screen holds, or nothing when it is not in the
     /// conversation.
     ///
@@ -358,12 +419,20 @@ impl UiState {
         self.at_entry = (0..before)
             .rev()
             .find(|i| worth_pointing_at(&self.entries[*i]));
+        // Brought into view, since pointing at something off the top of the pane is
+        // pointing at nothing.
+        if let Some(at) = self.at_entry {
+            self.show_entry(at);
+        }
     }
 
     fn point_forward(&mut self) {
         let Some(after) = self.at_entry else { return };
         self.at_entry =
             (after + 1..self.entries.len()).find(|i| worth_pointing_at(&self.entries[*i]));
+        if let Some(at) = self.at_entry {
+            self.show_entry(at);
+        }
     }
 
     /// Accumulate a piece of the model's scratchpad into one entry.
@@ -538,15 +607,24 @@ async fn run_ui(
                 ])
                 .split(f.area());
 
+            // Wrapped entry by entry, so where each one begins is known. Pointing at a
+            // step said nothing about where it is: the mark went on an entry that could be
+            // a screen and a half above the pane, and the only way to see it was to guess
+            // how far to scroll.
             let mut lines: Vec<Line<'static>> = Vec::new();
+            let mut starts: Vec<usize> = Vec::with_capacity(state.entries.len());
             for (i, e) in state.entries.iter().enumerate() {
-                lines.extend(e.render(state.unfolded.contains(&i), state.at_entry == Some(i)));
+                starts.push(lines.len());
+                lines.extend(crate::ui::chat::wrap(
+                    e.render(state.unfolded.contains(&i), state.at_entry == Some(i)),
+                    chunks[0].width as usize,
+                ));
             }
-            // Wrapped here rather than by the widget. The program counted logical lines
+            state.entry_line = starts;
+            // Wrapped above rather than by the widget. The program counted logical lines
             // while the terminal showed rows, so scrolling was off by however much had
             // wrapped and nothing could say which line sits at a given row - which is what
             // pointing at text with the mouse needs to know.
-            let lines = crate::ui::chat::wrap(lines, chunks[0].width as usize);
             state.pane = chunks[0];
             let inner_h = chunks[0].height as usize;
             let total = lines.len();
@@ -928,6 +1006,36 @@ async fn run_ui(
                             // Any other key withdraws the offer: a person who carried on
                             // working did not mean to leave.
                             state.quit_asked = None;
+                        }
+                    }
+
+                    // A search owns the keyboard while it is open: enter walks the
+                    // matches, which is what enter means in every search, and the send
+                    // key had it first.
+                    if let Some((needle, nth)) = state.finding.clone() {
+                        match key.code {
+                            KeyCode::Esc => {
+                                state.finding = None;
+                                continue;
+                            }
+                            KeyCode::Enter => {
+                                state.finding = Some((needle.clone(), nth + 1));
+                                state.point_at_match();
+                                continue;
+                            }
+                            KeyCode::Backspace => {
+                                let mut needle = needle.clone();
+                                needle.pop();
+                                state.finding = Some((needle, 0));
+                                state.point_at_match();
+                                continue;
+                            }
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                state.finding = Some((format!("{needle}{c}"), 0));
+                                state.point_at_match();
+                                continue;
+                            }
+                            _ => {}
                         }
                     }
 
@@ -1395,6 +1503,14 @@ async fn run_ui(
                             }
                             _ => {}
                         }
+                    }
+                    if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        state.finding = Some((String::new(), 0));
+                        state.entries.push(Entry::Notice(
+                            "looking: type, enter for the next, esc to stop".into(),
+                        ));
+                        continue;
                     }
                     // Erasing to the start of the line, as it does in every shell. The
                     // editor underneath binds it to undo, so a habit that clears a line
