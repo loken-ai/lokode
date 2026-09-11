@@ -180,38 +180,74 @@ pub fn replay(path: &Path) -> Result<Replay> {
     })
 }
 
-/// The most recent session recorded against `root`.
+/// A session on disk, as much of it as is needed to recognise it.
+pub struct Recorded {
+    pub id: String,
+    pub path: PathBuf,
+    /// Seconds since the epoch, from when the file last changed.
+    pub when: u64,
+    /// The first thing asked in it, on one line. An id says nothing about which session
+    /// it is; the question it opened with says it in a glance.
+    pub opening: String,
+    /// How much was said in it.
+    pub messages: usize,
+}
+
+/// Every session recorded against `root`, most recent first.
 ///
-/// Matched on the root rather than on time alone, because `--continue` in one project
-/// should not pick up a session belonging to another.
-pub fn latest_for_root(dir: &Path, root: &Path) -> Option<PathBuf> {
-    let mut best: Option<(u64, PathBuf)> = None;
-    for entry in std::fs::read_dir(dir).ok()? {
-        let Ok(entry) = entry else { continue };
+/// Matched on the root rather than on time alone, because a session belonging to another
+/// project is not one of this project's to come back to.
+pub fn recorded_for_root(dir: &Path, root: &Path) -> Vec<Recorded> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Recorded> = Vec::new();
+    for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
         }
-        // Only the first line is needed, but these files are small enough that being
-        // clever about it would cost more in complexity than it saves in reads.
+        // The whole file is read, which these are small enough for; being clever about it
+        // would cost more in complexity than it saves.
         let Ok(replayed) = replay(&path) else {
             continue;
         };
         if replayed.root != root {
             continue;
         }
-        let Ok(modified) = entry.metadata().and_then(|m| m.modified()).and_then(|t| {
+        let Ok(when) = entry.metadata().and_then(|m| m.modified()).and_then(|t| {
             t.duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .map_err(|e| std::io::Error::other(e.to_string()))
         }) else {
             continue;
         };
-        if best.as_ref().is_none_or(|(t, _)| modified > *t) {
-            best = Some((modified, path));
-        }
+        out.push(Recorded {
+            id: replayed.id,
+            path,
+            when,
+            opening: replayed
+                .messages
+                .iter()
+                .find(|m| m.role == "user")
+                .and_then(|m| m.content.lines().find(|l| !l.trim().is_empty()))
+                .unwrap_or("nothing was asked")
+                .chars()
+                .take(90)
+                .collect(),
+            messages: replayed.messages.len(),
+        });
     }
-    best.map(|(_, p)| p)
+    out.sort_by_key(|r| std::cmp::Reverse(r.when));
+    out
+}
+
+/// The most recent session recorded against `root`.
+pub fn latest_for_root(dir: &Path, root: &Path) -> Option<PathBuf> {
+    recorded_for_root(dir, root)
+        .into_iter()
+        .next()
+        .map(|r| r.path)
 }
 
 /// Seconds since the epoch.

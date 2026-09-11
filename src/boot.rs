@@ -41,8 +41,8 @@ pub struct Booted {
     pub protocol: ToolProtocol,
     /// What the sessions started later read, once something has settled it.
     pub protocol_cell: crate::agent::protocol::SharedProtocol,
-    /// How many messages came back from a resumed session.
-    pub restored: usize,
+    /// What came back from a resumed session, for putting it on screen.
+    pub restored: Vec<crate::backend::wire::Message>,
     /// The change history, if one could be opened.
     /// What has been agreed to for this session, so the interface can set a standing
     /// decision as well as the prompt.
@@ -268,7 +268,10 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     };
     let system = Agent::build_system_prompt(&registry, protocol, mode, instructions.as_deref());
     let mut session = Session::new(system, context_tokens, max_answer_tokens);
-    let restored = earlier.as_ref().map(|e| e.messages.len()).unwrap_or(0);
+    let restored = earlier
+        .as_ref()
+        .map(|e| e.messages.clone())
+        .unwrap_or_default();
 
     let mut recorder = None;
     let session_id = match earlier {
@@ -302,7 +305,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         model = %model,
         root = %cfg.root.display(),
         protocol = protocol.label(),
-        restored_messages = restored,
+        restored_messages = restored.len(),
         "session ready"
     );
 

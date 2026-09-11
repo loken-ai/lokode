@@ -99,6 +99,11 @@ pub enum Control {
     Clear {
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// Come back to a session recorded earlier, by its id.
+    Resume {
+        id: String,
+        reply: tokio::sync::oneshot::Sender<Result<Resumed, String>>,
+    },
     /// Hold the session to a tool protocol, once something has found out which one works.
     Protocol(ToolProtocol),
     /// Take the conversation back to the last thing the user asked and hand it back, so it
@@ -660,6 +665,16 @@ pub struct StatusReport {
     pub protocol: ToolProtocol,
 }
 
+/// A session that has been come back to.
+pub struct Resumed {
+    pub id: String,
+    /// What was said in it, for putting back on screen: a conversation the model can see
+    /// and the person cannot is worse than no conversation at all.
+    pub messages: Vec<Message>,
+    /// What the model was changed to, when the session was last using another one.
+    pub model: Option<String>,
+}
+
 /// What could be answering, and what is.
 pub struct Models {
     /// The one answering now.
@@ -1073,6 +1088,9 @@ impl Agent {
             Control::Models { reply } => {
                 let _ = reply.send(self.models_on_offer().await);
             }
+            Control::Resume { id, reply } => {
+                let _ = reply.send(self.resume_session(&id).await);
+            }
             Control::Clear { reply } => {
                 let dropped = self.session.clear();
                 tracing::info!(dropped, "conversation cleared");
@@ -1199,6 +1217,39 @@ impl Agent {
             .map(|(role, model)| format!("  {role}: {model}"))
             .collect();
         format!("\nby kind of work:\n{}", rows.join("\n"))
+    }
+
+    /// Come back to a session recorded earlier.
+    ///
+    /// The record is appended to rather than replaced, so a session resumed three times is
+    /// one story rather than four, and the model it was last using comes back with it.
+    async fn resume_session(&mut self, id: &str) -> Result<Resumed, String> {
+        let dir = crate::paths::sessions_dir()
+            .ok_or_else(|| "no home directory, so no sessions to come back to".to_string())?;
+        let path = dir.join(format!("{id}.jsonl"));
+        if !path.exists() {
+            return Err(format!("no session recorded as {id}"));
+        }
+        let replayed =
+            crate::agent::transcript::replay(&path).map_err(|e| format!("{id}: {e:#}"))?;
+        let (transcript, _writer) = crate::agent::transcript::Transcript::create(path)
+            .map_err(|e| format!("{id}: {e:#}"))?;
+        let messages = replayed.messages.clone();
+        self.session
+            .adopt(transcript, replayed.id.clone(), replayed.messages);
+        let model = match replayed.model.is_empty() || replayed.model == self.cfg.model {
+            true => None,
+            false => {
+                self.switch_model(Some(replayed.model.clone())).await;
+                Some(replayed.model)
+            }
+        };
+        tracing::info!(session = %replayed.id, messages = messages.len(), "session resumed");
+        Ok(Resumed {
+            id: replayed.id,
+            messages,
+            model,
+        })
     }
 
     /// What could be answering, for a list to be chosen from.

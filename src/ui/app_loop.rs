@@ -90,6 +90,36 @@ async fn undo_command(checkpoints: Option<&Checkpoints>, rest: &str) -> Ran {
     )))
 }
 
+/// A conversation as entries, for putting an earlier session back on screen.
+///
+/// What a person said and what the model answered. The traffic between them - a tool
+/// called, what it printed - is in the record and reaches the model, but a screen of it
+/// on the way back into a session is a screen of what was already dealt with.
+fn what_was_said(messages: &[crate::backend::wire::Message]) -> Vec<Entry> {
+    messages
+        .iter()
+        .filter_map(|m| match m.role.as_str() {
+            "user" => Some(Entry::User(m.content.clone())),
+            "assistant" if !m.content.trim().is_empty() => {
+                Some(Entry::Assistant(m.content.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// How long ago something was, in the words a person uses for it.
+fn how_long_ago(when: u64) -> String {
+    let now = crate::agent::transcript::now_secs();
+    let seconds = now.saturating_sub(when);
+    match seconds {
+        0..=90 => "just now".to_string(),
+        91..=5400 => format!("{} min ago", seconds / 60),
+        5401..=172800 => format!("{} hour(s) ago", seconds / 3600),
+        _ => format!("{} day(s) ago", seconds / 86400),
+    }
+}
+
 /// Put what a command said where it belongs.
 ///
 /// A sentence belongs in the thread, where it reads as what just happened. A page of it
@@ -638,6 +668,25 @@ impl UiState {
         self.context_percent = 0;
     }
 
+    /// Put a resumed session on screen: what was said, where it was said.
+    ///
+    /// The count alone used to be reported as "back in view", which they were not: the
+    /// model could see a conversation the person could not, and the first question of the
+    /// new turn read as the first question of the session.
+    fn show_resumed(&mut self, resumed: crate::agent::agent_loop::Resumed) {
+        self.start_again();
+        let said = resumed.messages.len();
+        self.entries.extend(what_was_said(&resumed.messages));
+        if let Some(model) = resumed.model {
+            self.entries
+                .push(Entry::Notice(format!("back on {model}, as it was left")));
+        }
+        self.entries.push(Entry::Notice(format!(
+            "session {}: {said} message(s) back",
+            resumed.id
+        )));
+    }
+
     /// Accumulate a piece of the model's scratchpad into one entry.
     fn push_reasoning(&mut self, chunk: &str) {
         match self.entries.last_mut() {
@@ -716,7 +765,7 @@ async fn run_ui(
     checkpoint_error: Option<String>,
     startup_notices: Vec<String>,
     session_id: String,
-    restored: usize,
+    restored: Vec<crate::backend::wire::Message>,
     shutdown: &CancellationToken,
     input_tx: mpsc::Sender<TurnRequest>,
     control_tx: mpsc::Sender<crate::agent::agent_loop::Control>,
@@ -766,9 +815,14 @@ async fn run_ui(
     // of a model as it is being written, and asking at the first keystroke would put a
     // request between a key and the letter it puts on screen.
     refresh_models(&control_tx, &mut state).await;
-    if restored > 0 {
+    if !restored.is_empty() {
+        // In view, which used to be said of messages that were nowhere on screen: the
+        // model could see a conversation the person could not, and the first question of
+        // the new turn read as the first question of the session.
+        let said = restored.len();
+        state.entries.extend(what_was_said(&restored));
         state.entries.push(Entry::Notice(format!(
-            "resumed session {session_id}: {restored} earlier message(s) are back in view"
+            "resumed session {session_id}: {said} earlier message(s) are back"
         )));
     }
     if let Some(why) = &checkpoint_error {
@@ -1305,6 +1359,7 @@ async fn run_ui(
                                             digest: &digest,
                                             mcp: &mcp,
                                             mcp_summary: &mcp_summary,
+                                            session_id: &session_id,
                                             busy: state.busy,
                                         },
                                     )
@@ -1318,6 +1373,7 @@ async fn run_ui(
                                             state.start_again();
                                             state.entries.push(Entry::Notice(said));
                                         }
+                                        Ran::Resumed(resumed) => state.show_resumed(*resumed),
                                         // Something to ask the model. Put on the line
                                         // rather than sent, so the person sees what they
                                         // are about to ask before it goes.
@@ -1454,6 +1510,7 @@ async fn run_ui(
                                         digest: &digest,
                                         mcp: &mcp,
                                         mcp_summary: &mcp_summary,
+                                        session_id: &session_id,
                                         busy: state.busy,
                                     },
                                 )
@@ -1693,6 +1750,7 @@ async fn run_ui(
                                             digest: &digest,
                                             mcp: &mcp,
                                             mcp_summary: &mcp_summary,
+                                            session_id: &session_id,
                                             busy: state.busy,
                                         },
                                     )
@@ -1736,6 +1794,12 @@ async fn run_ui(
                                         Ran::Cleared(said) => {
                                             state.start_again();
                                             state.entries.push(Entry::Notice(said));
+                                            input = fresh_input("");
+                                            refresh_status(&control_tx, &mut state).await;
+                                            continue;
+                                        }
+                                        Ran::Resumed(resumed) => {
+                                            state.show_resumed(*resumed);
                                             input = fresh_input("");
                                             refresh_status(&control_tx, &mut state).await;
                                             continue;
@@ -2235,6 +2299,8 @@ enum Ran {
     Choose(Box<crate::ui::chooser::Chooser>),
     /// The conversation is over and the screen goes with it.
     Cleared(String),
+    /// Another session is now the one being had, and the screen shows it.
+    Resumed(Box<crate::agent::agent_loop::Resumed>),
 }
 
 /// Everything a command may need. One struct rather than nine arguments, since every new
@@ -2249,6 +2315,8 @@ struct CommandCtx<'a> {
     digest: &'a tokio::sync::Mutex<crate::agent::digest::Digest>,
     mcp: &'a [std::sync::Arc<crate::mcp::client::McpClient>],
     mcp_summary: &'a str,
+    /// The session being had now, so coming back to a session does not offer this one.
+    session_id: &'a str,
     /// A control request is answered between turns, so a command that needs one has to
     /// wait rather than sit silent behind a running turn.
     busy: bool,
@@ -2264,6 +2332,7 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         digest,
         mcp,
         mcp_summary,
+        session_id,
         busy,
     } = cx;
     let (verb, rest) = match command.split_once(char::is_whitespace) {
@@ -2385,6 +2454,58 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
             }
             _ => return Ran::Said(mcp_summary.to_string()),
         }
+    }
+    if verb == "resume" {
+        if busy {
+            return Ran::Said("the agent is working; ask again when the turn is over".into());
+        }
+        let Some(dir) = crate::paths::sessions_dir() else {
+            return Ran::Said("no home directory, so no sessions to come back to".into());
+        };
+        if rest.is_empty() {
+            let recorded: Vec<_> = crate::agent::transcript::recorded_for_root(&dir, root)
+                .into_iter()
+                .filter(|r| r.id != session_id)
+                .collect();
+            if recorded.is_empty() {
+                return Ran::Said("no other session has been recorded for this project".into());
+            }
+            return Ran::Choose(Box::new(crate::ui::chooser::Chooser::new(
+                "resume",
+                "come back to which session",
+                recorded
+                    .into_iter()
+                    .map(|r| {
+                        crate::ui::chooser::Choice::new(
+                            r.id,
+                            format!(
+                                "{}  {} message(s)  {}",
+                                how_long_ago(r.when),
+                                r.messages,
+                                r.opening
+                            ),
+                        )
+                    })
+                    .collect(),
+                None,
+            )));
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if control
+            .send(crate::agent::agent_loop::Control::Resume {
+                id: rest.to_string(),
+                reply: tx,
+            })
+            .await
+            .is_err()
+        {
+            return Ran::Said("the agent is not listening".into());
+        }
+        return match rx.await {
+            Err(_) => Ran::Said("the agent said nothing".into()),
+            Ok(Err(why)) => Ran::Said(why),
+            Ok(Ok(resumed)) => Ran::Resumed(Box::new(resumed)),
+        };
     }
     if verb == "clear" {
         if busy {
@@ -2622,6 +2743,7 @@ const HELP: &str = "\
 /tools  the tools this session can call, and where they came from
 /mcp    the tool servers, or /mcp <server> <prompt> to take one of their prompts
 /clear  start the conversation again, keeping the project and the model
+/resume come back to a session recorded earlier, choosing from what there is
 /help   this, and any command the project defines";
 
 /// Which decision a keystroke stands for at the approval modal.

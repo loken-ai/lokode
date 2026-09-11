@@ -149,6 +149,17 @@ impl Session {
         self
     }
 
+    /// Take over an earlier session: its record, its identity and what was said in it.
+    ///
+    /// The conversation is replaced rather than added to, because coming back to a session
+    /// means being in that one, not in both at once.
+    pub fn adopt(&mut self, transcript: Transcript, id: String, messages: Vec<Message>) {
+        self.clear();
+        self.id = id;
+        self.transcript = Some(transcript);
+        self.history.extend(messages);
+    }
+
     /// Put back the messages of an earlier session, after the system message.
     pub fn restore(&mut self, messages: Vec<Message>) {
         // Straight onto the history: these are already in the transcript, and writing
