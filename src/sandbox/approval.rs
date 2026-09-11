@@ -173,6 +173,28 @@ impl SessionApprovals {
         self.always.lock().await.insert(scope);
     }
 
+    /// What has been agreed to for the rest of this session, in the words the prompt
+    /// used when it was agreed to.
+    pub async fn standing(&self, root: &std::path::Path) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .always
+            .lock()
+            .await
+            .iter()
+            .map(|s| s.describe_under(root))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Take back every standing agreement, so the next call asks again.
+    pub async fn forget_always(&self) -> usize {
+        let mut held = self.always.lock().await;
+        let had = held.len();
+        held.clear();
+        had
+    }
+
     /// Let writes go ahead unasked, or stop doing so.
     pub fn accept_writes(&self, on: bool) {
         self.writes.store(on, Ordering::Relaxed);

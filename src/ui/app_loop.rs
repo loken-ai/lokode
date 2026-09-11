@@ -1402,6 +1402,7 @@ async fn run_ui(
                                             mcp: &mcp,
                                             mcp_summary: &mcp_summary,
                                             session_id: &session_id,
+                                            approvals: &session_approvals,
                                             busy: state.busy,
                                         },
                                     )
@@ -1553,6 +1554,7 @@ async fn run_ui(
                                         mcp: &mcp,
                                         mcp_summary: &mcp_summary,
                                         session_id: &session_id,
+                                        approvals: &session_approvals,
                                         busy: state.busy,
                                     },
                                 )
@@ -1825,6 +1827,7 @@ async fn run_ui(
                                             mcp: &mcp,
                                             mcp_summary: &mcp_summary,
                                             session_id: &session_id,
+                                            approvals: &session_approvals,
                                             busy: state.busy,
                                         },
                                     )
@@ -2391,6 +2394,8 @@ struct CommandCtx<'a> {
     mcp_summary: &'a str,
     /// The session being had now, so coming back to a session does not offer this one.
     session_id: &'a str,
+    /// What has been agreed to here, which is the half of the policy that can change.
+    approvals: &'a crate::sandbox::approval::SessionApprovals,
     /// A control request is answered between turns, so a command that needs one has to
     /// wait rather than sit silent behind a running turn.
     busy: bool,
@@ -2407,6 +2412,7 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         mcp,
         mcp_summary,
         session_id,
+        approvals,
         busy,
     } = cx;
     let (verb, rest) = match command.split_once(char::is_whitespace) {
@@ -2599,7 +2605,30 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         return Ran::Said(tools.join("\n"));
     }
     if verb == "approve" {
-        return Ran::Said(policy.describe());
+        // What is in force, which is two things: what the configuration settles without
+        // asking, and what was agreed to here. The second used to be invisible - a
+        // session could be running commands unasked because of a key pressed an hour ago,
+        // with nothing anywhere to say so and no way to take it back.
+        if rest == "forget" {
+            let had = approvals.forget_always().await;
+            return Ran::Said(match had {
+                0 => "nothing had been agreed to this session".to_string(),
+                n => format!("{n} standing agreement(s) taken back; they will be asked again"),
+            });
+        }
+        let standing = approvals.standing(root).await;
+        let mine = match standing.is_empty() {
+            true => "\n\nnothing has been agreed to for the rest of this session".to_string(),
+            false => format!(
+                "\n\nagreed to for the rest of this session, until /approve forget:\n{}",
+                standing
+                    .iter()
+                    .map(|s| format!("  {s}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        };
+        return Ran::Said(format!("{}{mine}", policy.describe()));
     }
     if verb == "plan" || verb == "act" {
         if busy {
@@ -2804,7 +2833,7 @@ const HELP: &str = "\
 /cost   what this session has spent, in tokens and time
 /context how full the window is, and what is holding it
 /compact elide the oldest steps now rather than when it fills
-/approve what the configuration settles without asking
+/approve what is in force, here and in the configuration, or /approve forget
 /plan   read and search, change nothing
 /act    leave planning, change things again
 /model  what the backend serves, or /model <name> to switch and remember it
