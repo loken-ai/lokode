@@ -1145,6 +1145,42 @@ async fn run_ui(
                                 // Handled before the turn is started so that `/undo` works
                                 // when the thing you want undone is what the model just did.
                                 state.remember(&text);
+                                // A line beginning with an exclamation is the person's own
+                                // command, run here and now. Asking the model to run it
+                                // costs a round trip, a share of the window and an
+                                // approval, for a decision that was already taken by
+                                // typing it. Its output joins the conversation, so the
+                                // model sees what you saw on the next question.
+                                if let Some(command) = text.strip_prefix('!') {
+                                    let command = command.trim().to_string();
+                                    if command.is_empty() {
+                                        continue;
+                                    }
+                                    let (is_error, body) =
+                                        run_shell(
+                                            &command,
+                                            &cfg.root,
+                                            crate::agent::session::tool_output_chars(
+                                                cfg.context_tokens,
+                                                cfg.max_answer_tokens,
+                                            ),
+                                        )
+                                        .await;
+                                    // Handed to the conversation as well: running a test
+                                    // and then asking about the failure only works if the
+                                    // failure is something the model has seen.
+                                    let _ = control_tx
+                                        .send(crate::agent::agent_loop::Control::Note(format!(
+                                            "I ran `{command}` myself. It said:\n{body}"
+                                        )))
+                                        .await;
+                                    state.entries.push(Entry::ToolResult {
+                                        name: command,
+                                        is_error,
+                                        body,
+                                    });
+                                    continue;
+                                }
                                 let mut text = text;
                                 if let Some(command) = text.clone().strip_prefix('/') {
                                     let verb = command.trim_start_matches('/').trim();
@@ -1282,6 +1318,51 @@ fn quit_intent(k: &KeyEvent) -> Option<Quit> {
         KeyCode::Char('q') => Some(Quit::Now),
         _ => None,
     }
+}
+
+/// Run one command the person typed, and give back what it said.
+///
+/// Theirs rather than the model's, so it is not approved and not confined: they typed it,
+/// which is the same decision they make at a shell prompt. It still goes through the
+/// project root, because that is where the question they are asking lives.
+///
+/// Bounded like any other result that lands in the pane, and the two streams are kept in
+/// the order the command wrote them as far as reading them separately allows: what a
+/// failing command prints is usually the only thing worth having.
+async fn run_shell(command: &str, root: &std::path::Path, cap: usize) -> (bool, String) {
+    let done = tokio::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(root)
+        .output()
+        .await;
+    let out = match done {
+        Ok(out) => out,
+        Err(e) => return (true, format!("could not run it: {e}")),
+    };
+    let mut body = String::from_utf8_lossy(&out.stdout).into_owned();
+    let errors = String::from_utf8_lossy(&out.stderr);
+    if !errors.trim().is_empty() {
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(&errors);
+    }
+    if body.trim().is_empty() {
+        body = match out.status.success() {
+            true => "(said nothing)".into(),
+            false => format!("(said nothing, {})", out.status),
+        };
+    }
+    if body.len() > cap {
+        let cut = (0..=cap)
+            .rev()
+            .find(|&i| body.is_char_boundary(i))
+            .unwrap_or(0);
+        body.truncate(cut);
+        body.push_str("\n… (truncated to fit the pane)");
+    }
+    (!out.status.success(), body)
 }
 
 /// Put the conversation where a person can take it: on the terminal's clipboard, and in a

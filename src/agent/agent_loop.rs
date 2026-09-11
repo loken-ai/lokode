@@ -126,6 +126,12 @@ pub enum Control {
     Why {
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// Something that happened outside the conversation, for the conversation to know
+    /// about: the output of a command the person ran themselves.
+    ///
+    /// Answered between turns like every other request here, so a note never lands in a
+    /// history a request is half-built against.
+    Note(String),
 }
 
 /// Events the agent loop emits so the UI can render progress.
@@ -1045,6 +1051,12 @@ impl Agent {
             Control::Model { name, reply } => {
                 let answer = self.switch_model(name).await;
                 let _ = reply.send(answer);
+            }
+            Control::Note(text) => {
+                // As something the person said, because that is what it is: they ran the
+                // command and they are handing over what it printed. A role of its own
+                // would be a role every backend renders differently.
+                self.session.push(Message::user(text));
             }
             Control::Protocol(protocol) => {
                 // Only where the protocol was left open. A session told which protocol to
