@@ -1247,6 +1247,29 @@ async fn run_ui(
                                 // Handled before the turn is started so that `/undo` works
                                 // when the thing you want undone is what the model just did.
                                 state.remember(&text);
+                                // A line beginning with a hash is a rule for this
+                                // project, written down where the next session will read
+                                // it. Deciding it in conversation and having to open an
+                                // editor to keep it is how a convention stays in one
+                                // person's head.
+                                if let Some(rule) = text.strip_prefix('#') {
+                                    let rule = rule.trim().to_string();
+                                    if rule.is_empty() {
+                                        continue;
+                                    }
+                                    let said = remember_rule(&rule, &cfg.root);
+                                    // Told to the model now as well: a rule that only
+                                    // applies from the next session is a rule that does
+                                    // not apply to the work it was written during.
+                                    let _ = control_tx
+                                        .send(crate::agent::agent_loop::Control::Note(format!(
+                                            "A standing rule for this project, from now on: \
+                                             {rule}"
+                                        )))
+                                        .await;
+                                    state.entries.push(Entry::Notice(said));
+                                    continue;
+                                }
                                 // A line beginning with an exclamation is the person's own
                                 // command, run here and now. Asking the model to run it
                                 // costs a round trip, a share of the window and an
@@ -1419,6 +1442,35 @@ fn quit_intent(k: &KeyEvent) -> Option<Quit> {
         KeyCode::Char('d') => Some(Quit::OnEmptyLine),
         KeyCode::Char('q') => Some(Quit::Now),
         _ => None,
+    }
+}
+
+/// Add one rule to what this project tells the agent, and say where it went.
+///
+/// Appended rather than rewritten: the file is the team's, it is in version control with
+/// the code it is about, and a tool that reorganises it would be a tool nobody lets near
+/// it twice.
+fn remember_rule(rule: &str, root: &std::path::Path) -> String {
+    use std::io::Write;
+    let path = crate::config::project_instructions_path(root);
+    let fresh = !path.exists();
+    let opened = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path);
+    let mut file = match opened {
+        Ok(f) => f,
+        Err(e) => return format!("could not write {}: {e}", path.display()),
+    };
+    // A heading only where the file is being started, so an existing one keeps whatever
+    // shape its authors gave it.
+    let text = match fresh {
+        true => format!("# What this project expects\n\n- {rule}\n"),
+        false => format!("- {rule}\n"),
+    };
+    match file.write_all(text.as_bytes()) {
+        Ok(()) => format!("written to {}", path.display()),
+        Err(e) => format!("could not write {}: {e}", path.display()),
     }
 }
 
