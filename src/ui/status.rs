@@ -28,6 +28,8 @@ pub struct Status {
     pub selected: bool,
     /// How many messages are waiting for this turn to end.
     pub queued: usize,
+    /// What is being searched for, and which match is being shown, while a search is on.
+    pub finding: Option<String>,
     /// Whether writes are going through unasked. A third setting beside planning and
     /// acting, and the one a person most needs reminding they are in.
     pub accepting_writes: bool,
@@ -122,6 +124,18 @@ impl Status {
         }
         // The phase is what a user is looking for when the screen has stopped changing, so
         // it goes last, where the eye lands, with the time it has been there beside it.
+        // A search owns the keyboard while it is open, so the line says so and says what
+        // the keys mean there: without it the only sign a search was on was that typing
+        // did not reach the input.
+        if let Some(finding) = self.finding.as_deref() {
+            spans.push(Span::styled(
+                format!("  {finding}"),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
         if self.queued > 0 {
             spans.push(Span::styled(
                 format!("  {} queued", self.queued),
@@ -204,6 +218,12 @@ impl Status {
                 (false, true) => "plan",
             },
         ));
+        if self.finding.is_some() {
+            spans.extend(key("enter", "next"));
+            spans.extend(key("↑", "previous"));
+            spans.extend(key("esc", "stop looking"));
+            return Line::from(spans);
+        }
         if self.busy {
             spans.extend(key("esc", "stop"));
             spans.extend(key("enter", "steer"));
@@ -271,6 +291,7 @@ mod tests {
             typing: false,
             selected: false,
             queued: 0,
+            finding: None,
             said: None,
             accepting_writes: false,
             context_percent: 40,

@@ -344,6 +344,8 @@ struct UiState {
     refusing: Option<crate::sandbox::approval::ApprovalPrompt>,
     /// What was typed during a turn to be asked once it is over.
     queued: Vec<String>,
+    /// How many entries the search matched, for saying which one is being shown.
+    found: usize,
     /// What the backend serves, for finishing the name of one that is being typed. Asked
     /// for once and after a switch, since a backend's catalogue does not move under a
     /// session.
@@ -448,6 +450,7 @@ impl UiState {
             .filter(|(_, e)| e.to_text().to_lowercase().contains(&needle))
             .map(|(i, _)| i)
             .collect();
+        self.found = found.len();
         if found.is_empty() {
             self.at_entry = None;
             return;
@@ -923,6 +926,13 @@ async fn run_ui(
                         _ => line.clone(),
                     }
                 })
+                // What was searched for, picked out where it is. Pointing at the entry
+                // left the word itself to be found by eye, which on a screenful of
+                // output is the part that takes the time.
+                .map(|line| match state.finding.as_ref() {
+                    Some((needle, _)) => crate::ui::chat::mark_found(&line, needle),
+                    None => line,
+                })
                 .collect();
             f.render_widget(Paragraph::new(visible), chunks[0]);
             // Kept for the mouse, which can only say which row was pointed at.
@@ -972,6 +982,14 @@ async fn run_ui(
                 accepting_writes: state.accepting_writes,
                 selected: state.selecting.is_some(),
                 queued: state.queued.len(),
+                finding: state
+                    .finding
+                    .as_ref()
+                    .map(|(needle, nth)| match state.found {
+                        0 if needle.is_empty() => "find:".to_string(),
+                        0 => format!("find: {needle}  nothing"),
+                        n => format!("find: {needle}  {} of {n}", nth % n + 1),
+                    }),
                 said: state
                     .said
                     .as_ref()
@@ -1285,8 +1303,20 @@ async fn run_ui(
                                 state.finding = None;
                                 continue;
                             }
-                            KeyCode::Enter => {
+                            KeyCode::Enter | KeyCode::Down => {
                                 state.finding = Some((needle.clone(), nth + 1));
+                                state.point_at_match();
+                                continue;
+                            }
+                            // Backwards, which every search has and this one did not: a
+                            // word gone past could only be reached by going round.
+                            KeyCode::Up => {
+                                let back = match (nth, state.found) {
+                                    (0, 0) => 0,
+                                    (0, n) => n - 1,
+                                    (nth, _) => nth - 1,
+                                };
+                                state.finding = Some((needle.clone(), back));
                                 state.point_at_match();
                                 continue;
                             }
@@ -1727,6 +1757,18 @@ async fn run_ui(
                                 state.at_entry = None;
                                 continue;
                             }
+                            // The two ends of the conversation, which had no key at all:
+                            // getting back to where a long session started meant holding
+                            // page-up, and getting back to now meant holding page-down.
+                            KeyCode::Home => {
+                                state.scroll_back(state.content_lines);
+                                continue;
+                            }
+                            KeyCode::End => {
+                                state.scroll = 0;
+                                state.at_entry = None;
+                                continue;
+                            }
                             KeyCode::PageUp => {
                                 state.scroll_back(state.view_height.max(1));
                                 continue;
@@ -1984,9 +2026,6 @@ async fn run_ui(
                     if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         state.finding = Some((String::new(), 0));
-                        state.entries.push(Entry::Notice(
-                            "looking: type, enter for the next, esc to stop".into(),
-                        ));
                         continue;
                     }
                     // Erasing to the start of the line, as it does in every shell. The

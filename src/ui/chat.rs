@@ -586,6 +586,34 @@ fn truncate(s: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// Pointing at the entry a word is in leaves the word itself to be found by eye,
+    /// which on a screenful of output is the part that takes the time.
+    #[test]
+    fn what_was_searched_for_is_picked_out_where_it_is() {
+        let line = Line::from("the session compacts the session");
+        let marked = mark_found(&line, "session");
+        // Same text, more spans: the two occurrences are cut out of the run around them.
+        assert_eq!(line_text(&marked), line_text(&line));
+        let lit: Vec<&str> = marked
+            .spans
+            .iter()
+            .filter(|s| s.style.bg == Some(Color::Yellow))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(lit, vec!["session", "session"]);
+        // Case is not what a person searching means.
+        assert_eq!(
+            mark_found(&Line::from("Session"), "session")
+                .spans
+                .iter()
+                .filter(|s| s.style.bg == Some(Color::Yellow))
+                .count(),
+            1
+        );
+        // Nothing to look for leaves the line alone.
+        assert_eq!(mark_found(&line, "").spans.len(), line.spans.len());
+    }
     /// What is taken is what the pane shows between the two ends.
     ///
     /// Both orders, because dragging upward is as ordinary as dragging down, and the
@@ -854,16 +882,55 @@ pub fn selected_text(lines: &[Line<'static>], a: Spot, b: Spot) -> String {
 }
 
 /// `line` with the columns between `from` and `to` shown as chosen.
-///
-/// Spans are split where the selection starts and ends: a span carries its colour, and the
-/// selection has to sit on top of whatever colour is already there rather than replace it.
 pub fn mark_selected(line: &Line<'static>, from: usize, to: usize) -> Line<'static> {
+    mark_range(
+        line,
+        from,
+        to,
+        Style::default()
+            .bg(Color::Blue)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+/// `line` with every occurrence of `needle` picked out.
+///
+/// Pointing at the entry a word is in leaves the word itself to be found by eye, which on
+/// a screenful of output is the part that takes the time.
+pub fn mark_found(line: &Line<'static>, needle: &str) -> Line<'static> {
+    if needle.is_empty() {
+        return line.clone();
+    }
+    let hay: Vec<char> = line_text(line).to_lowercase().chars().collect();
+    let want: Vec<char> = needle.to_lowercase().chars().collect();
+    if want.is_empty() || hay.len() < want.len() {
+        return line.clone();
+    }
+    let style = Style::default()
+        .bg(Color::Yellow)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
+    let mut out = line.clone();
+    let mut at = 0usize;
+    while at + want.len() <= hay.len() {
+        if hay[at..at + want.len()] == want[..] {
+            out = mark_range(&out, at, at + want.len(), style);
+            at += want.len();
+        } else {
+            at += 1;
+        }
+    }
+    out
+}
+
+/// `line` with the columns between `from` and `to` shown in `marked`.
+///
+/// Spans are split where the range starts and ends: a span carries its colour, and what is
+/// put on top has to sit over whatever colour is already there rather than replace it.
+fn mark_range(line: &Line<'static>, from: usize, to: usize, marked: Style) -> Line<'static> {
     if from >= to {
         return line.clone();
     }
-    let chosen = Style::default()
-        .bg(Color::Blue)
-        .add_modifier(Modifier::BOLD);
     let mut out: Vec<Span<'static>> = Vec::new();
     let mut at = 0usize;
     for span in &line.spans {
@@ -882,7 +949,7 @@ pub fn mark_selected(line: &Line<'static>, from: usize, to: usize) -> Line<'stat
             let take = edge.min(chars.len() - cut);
             let text: String = chars[cut..cut + take].iter().collect();
             let style = if here >= from && here < to {
-                span.style.patch(chosen)
+                span.style.patch(marked)
             } else {
                 span.style
             };
