@@ -3,14 +3,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -206,6 +206,17 @@ struct UiState {
     entries: Vec<Entry>,
     scroll: u16,
     pending_approval: Option<ApprovalPrompt>,
+    /// Where a drag with the mouse began and where it is now, in lines of the wrapped
+    /// pane. Both ends are kept because the person may drag in either direction.
+    selecting: Option<(crate::ui::chat::Spot, crate::ui::chat::Spot)>,
+    /// Whether the button is still down: a drag that has been let go stays on screen,
+    /// so it can be seen and so a second look does not have to be a second drag.
+    dragging: bool,
+    /// The pane as it was last drawn, wrapped to its width. What the mouse points at is a
+    /// row of this, and nothing else can say which line a row holds.
+    wrapped: Vec<Line<'static>>,
+    /// Where the pane sat on screen when it was last drawn.
+    pane: ratatui::layout::Rect,
     busy: bool,
     step: usize,
     /// What the turn is doing and since when, for the status line. `None` between turns.
@@ -256,6 +267,67 @@ struct UiState {
 }
 
 impl UiState {
+    /// Which line and column a point on screen holds, or nothing when it is not in the
+    /// conversation.
+    ///
+    /// The pane scrolls, so a row on screen is a row of what is visible rather than of
+    /// what there is; the first visible line is what turns one into the other.
+    fn spot_at(&self, column: u16, row: u16) -> Option<crate::ui::chat::Spot> {
+        let pane = self.pane;
+        if row < pane.y || row >= pane.y + pane.height || column < pane.x {
+            return None;
+        }
+        let first = self.first_visible();
+        let line = first + (row - pane.y) as usize;
+        if line >= self.wrapped.len() {
+            return None;
+        }
+        let width = crate::ui::chat::line_width(&self.wrapped[line]);
+        Some(crate::ui::chat::Spot {
+            line,
+            column: ((column - pane.x) as usize).min(width),
+        })
+    }
+
+    /// Where a drag has reached, pinned inside the conversation.
+    ///
+    /// A drag that leaves the pane is still a drag: letting go outside it must take what
+    /// was crossed rather than nothing, which is what a strict answer here would give.
+    fn spot_at_clamped(&self, column: u16, row: u16) -> crate::ui::chat::Spot {
+        if let Some(spot) = self.spot_at(column, row) {
+            return spot;
+        }
+        let last = self.wrapped.len().saturating_sub(1);
+        let first = self.first_visible();
+        let line = match row < self.pane.y {
+            true => first,
+            false => (first + self.pane.height.saturating_sub(1) as usize).min(last),
+        };
+        let width = self
+            .wrapped
+            .get(line)
+            .map(crate::ui::chat::line_width)
+            .unwrap_or(0);
+        crate::ui::chat::Spot {
+            line,
+            column: width,
+        }
+    }
+
+    /// The first line of the conversation now on screen.
+    fn first_visible(&self) -> usize {
+        let height = self.pane.height as usize;
+        let end = self.content_lines.saturating_sub(self.scroll as usize);
+        end.saturating_sub(height)
+    }
+
+    /// What the selection holds, or nothing when it is empty.
+    fn selection_text(&self) -> Option<String> {
+        let (a, b) = self.selecting?;
+        let text = crate::ui::chat::selected_text(&self.wrapped, a, b);
+        (!text.trim().is_empty()).then_some(text)
+    }
+
     /// Move towards older lines, stopping where they run out.
     fn scroll_back(&mut self, by: usize) {
         let max = self.content_lines.saturating_sub(self.view_height);
@@ -456,6 +528,12 @@ async fn run_ui(
             for (i, e) in state.entries.iter().enumerate() {
                 lines.extend(e.render(state.unfolded.contains(&i), state.at_entry == Some(i)));
             }
+            // Wrapped here rather than by the widget. The program counted logical lines
+            // while the terminal showed rows, so scrolling was off by however much had
+            // wrapped and nothing could say which line sits at a given row - which is what
+            // pointing at text with the mouse needs to know.
+            let lines = crate::ui::chat::wrap(lines, chunks[0].width as usize);
+            state.pane = chunks[0];
             let inner_h = chunks[0].height as usize;
             let total = lines.len();
             // Remembered for the scroll keys, which cannot know either of these.
@@ -467,10 +545,31 @@ async fn run_ui(
             state.scroll = scroll as u16;
             let end = total.saturating_sub(scroll);
             let start = end.saturating_sub(inner_h);
-            let visible: Vec<Line<'static>> =
-                lines.into_iter().skip(start).take(end - start).collect();
-            let chat = Paragraph::new(visible).wrap(Wrap { trim: false });
-            f.render_widget(chat, chunks[0]);
+            let chosen = state
+                .selecting
+                .map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
+            let visible: Vec<Line<'static>> = lines[start..end]
+                .iter()
+                .enumerate()
+                .map(|(row, line)| {
+                    let row = start + row;
+                    match chosen {
+                        Some((from, to)) if row >= from.line && row <= to.line => {
+                            let a = if row == from.line { from.column } else { 0 };
+                            let b = if row == to.line {
+                                to.column
+                            } else {
+                                crate::ui::chat::line_width(line)
+                            };
+                            crate::ui::chat::mark_selected(line, a, b)
+                        }
+                        _ => line.clone(),
+                    }
+                })
+                .collect();
+            f.render_widget(Paragraph::new(visible), chunks[0]);
+            // Kept for the mouse, which can only say which row was pointed at.
+            state.wrapped = lines;
 
             // The prompt mark, in its own column, so the text the user types starts where
             // the answers do and a wrapped line does not sit under the mark.
@@ -711,6 +810,44 @@ async fn run_ui(
                     match mouse.kind {
                         MouseEventKind::ScrollUp => state.scroll_back(3),
                         MouseEventKind::ScrollDown => state.scroll_forward(3),
+                        // Taking the mouse is what buys the wheel, and it is also what
+                        // takes the terminal's own drag-to-select away. So the pane does
+                        // the selecting itself: pressing starts one, moving extends it,
+                        // and letting go puts it on the clipboard. Both are had at once
+                        // rather than one being traded for the other.
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            match state.spot_at(mouse.column, mouse.row) {
+                                Some(spot) => {
+                                    state.selecting = Some((spot, spot));
+                                    state.dragging = true;
+                                }
+                                // Pressed outside the conversation: the previous selection
+                                // is let go, which is how a selection is dismissed.
+                                None => state.selecting = None,
+                            }
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) if state.dragging => {
+                            if let Some((from, _)) = state.selecting {
+                                let to = state.spot_at_clamped(mouse.column, mouse.row);
+                                state.selecting = Some((from, to));
+                            }
+                        }
+                        MouseEventKind::Up(MouseButton::Left) if state.dragging => {
+                            state.dragging = false;
+                            if let Some(text) = state.selection_text() {
+                                let said = match crate::ui::clipboard::put(&text) {
+                                    Ok(()) => format!(
+                                        "{} line(s) copied",
+                                        text.lines().count()
+                                    ),
+                                    // A terminal that ignores the sequence says so to
+                                    // nobody, so this does.
+                                    Err(e) => format!("could not reach the clipboard: {e}"),
+                                };
+                                state.entries.push(Entry::Notice(said));
+                                state.scroll = 0;
+                            }
+                        }
                         _ => {}
                     }
                     continue;
@@ -1558,6 +1695,62 @@ fn approval_key(k: &KeyEvent) -> Option<ApprovalDecision> {
 
 #[cfg(test)]
 mod tests {
+    /// A row on screen is a line of the conversation, and which line depends on where the
+    /// pane has been scrolled to.
+    ///
+    /// This is where a selection goes wrong without looking wrong: the highlight follows
+    /// the mouse, the text taken comes from somewhere else, and only reading the clipboard
+    /// afterwards shows it. So the mapping is pinned at the top of the pane, at its bottom,
+    /// scrolled back, and outside it.
+    #[test]
+    fn a_row_on_screen_is_the_line_the_pane_shows_there() {
+        let mut state = UiState {
+            wrapped: (0..100)
+                .map(|i| Line::from(format!("line {i} with some text")))
+                .collect(),
+            pane: ratatui::layout::Rect::new(0, 0, 40, 10),
+            ..Default::default()
+        };
+        state.content_lines = state.wrapped.len();
+
+        // At the foot of the conversation the last ten lines are shown, so the top row is
+        // line 90 and the bottom row is line 99.
+        assert_eq!(state.spot_at(0, 0).unwrap().line, 90);
+        assert_eq!(state.spot_at(0, 9).unwrap().line, 99);
+        // Scrolled back by five, everything moves with it.
+        state.scroll = 5;
+        assert_eq!(state.spot_at(0, 0).unwrap().line, 85);
+        assert_eq!(state.spot_at(0, 9).unwrap().line, 94);
+        // The column is where the pointer is, never past the end of what the line holds.
+        assert_eq!(state.spot_at(6, 0).unwrap().column, 6);
+        assert_eq!(
+            state.spot_at(39, 0).unwrap().column,
+            crate::ui::chat::line_width(&state.wrapped[85])
+        );
+        // Below the pane is not the conversation.
+        assert!(state.spot_at(0, 10).is_none());
+        // A drag that leaves the pane still reaches the row it left by.
+        assert_eq!(state.spot_at_clamped(0, 30).line, 94);
+        assert_eq!(state.spot_at_clamped(0, 0).line, 85);
+    }
+
+    /// An empty drag is not a selection: pressing without moving must not replace the
+    /// clipboard with nothing.
+    #[test]
+    fn a_press_that_selected_nothing_takes_nothing() {
+        let mut state = UiState {
+            wrapped: vec![Line::from("some text")],
+            pane: ratatui::layout::Rect::new(0, 0, 40, 1),
+            ..Default::default()
+        };
+        state.content_lines = 1;
+        let spot = crate::ui::chat::Spot { line: 0, column: 4 };
+        state.selecting = Some((spot, spot));
+        assert!(state.selection_text().is_none());
+        state.selecting = Some((crate::ui::chat::Spot { line: 0, column: 0 }, spot));
+        assert_eq!(state.selection_text().as_deref(), Some("some"));
+    }
+
     use super::*;
 
     fn press(code: KeyCode) -> KeyEvent {

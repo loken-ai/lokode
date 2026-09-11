@@ -580,6 +580,58 @@ fn truncate(s: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// What is taken is what the pane shows between the two ends.
+    ///
+    /// Both orders, because dragging upward is as ordinary as dragging down, and the
+    /// partial first and last rows are where an off-by-one would go unnoticed: the text
+    /// still looks like the right text, with a character missing at each end.
+    #[test]
+    fn a_selection_is_the_text_between_its_ends() {
+        let lines = vec![
+            Line::from("first line"),
+            Line::from("second line"),
+            Line::from("third line"),
+        ];
+        let a = Spot { line: 0, column: 6 };
+        let b = Spot { line: 2, column: 5 };
+        assert_eq!(selected_text(&lines, a, b), "line\nsecond line\nthird");
+        assert_eq!(selected_text(&lines, b, a), "line\nsecond line\nthird");
+        // Within one row.
+        let one = selected_text(
+            &lines,
+            Spot { line: 1, column: 0 },
+            Spot { line: 1, column: 6 },
+        );
+        assert_eq!(one, "second");
+    }
+
+    /// Marking a selection must not lose or reorder what the line says.
+    ///
+    /// The spans are split at the edges of the selection so the colour already on the text
+    /// survives under it; a split that dropped a character would show as text that reads
+    /// correctly on screen and comes out of the clipboard wrong.
+    #[test]
+    fn marking_a_selection_keeps_every_character() {
+        let line = Line::from(vec![
+            Span::styled("abc", Style::default().fg(Color::Red)),
+            Span::raw("def"),
+            Span::styled("ghi", Style::default().fg(Color::Green)),
+        ]);
+        for (from, to) in [(0, 9), (2, 5), (4, 4), (0, 1), (8, 9), (3, 6)] {
+            let marked = mark_selected(&line, from, to);
+            assert_eq!(line_text(&marked), "abcdefghi", "from {from} to {to}");
+        }
+        // The chosen columns, and only those, carry the selection colour.
+        let marked = mark_selected(&line, 2, 5);
+        let chosen: String = marked
+            .spans
+            .iter()
+            .filter(|s| s.style.bg == Some(Color::Blue))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(chosen, "cde");
+    }
+
     use super::*;
 
     fn text(lines: &[Line<'static>]) -> Vec<String> {
@@ -752,4 +804,86 @@ mod tests {
             .iter()
             .any(|l| l.spans.iter().any(|s| s.style.fg == Some(Color::Green))));
     }
+}
+
+/// One end of a selection: which line, and how many columns into it.
+///
+/// Counted in lines of the wrapped pane rather than in entries, because that is what the
+/// mouse points at: a row on screen is a line here, which is the whole reason the wrapping
+/// is done in this file rather than left to the widget.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+pub struct Spot {
+    pub line: usize,
+    pub column: usize,
+}
+
+/// The text between two spots, as the pane shows it.
+///
+/// Ends given in either order: what the mouse reports is where it was pressed and where it
+/// is now, and dragging upward is as ordinary as dragging down.
+pub fn selected_text(lines: &[Line<'static>], a: Spot, b: Spot) -> String {
+    let (from, to) = if a <= b { (a, b) } else { (b, a) };
+    let mut out = Vec::new();
+    for row in from.line..=to.line.min(lines.len().saturating_sub(1)) {
+        let Some(line) = lines.get(row) else { break };
+        let text: Vec<char> = line_text(line).chars().collect();
+        let start = if row == from.line { from.column } else { 0 };
+        let end = if row == to.line {
+            to.column.min(text.len())
+        } else {
+            text.len()
+        };
+        if start < end {
+            out.push(text[start..end].iter().collect::<String>());
+        } else {
+            out.push(String::new());
+        }
+    }
+    // A trailing run of blank rows is the empty part of the pane under the conversation,
+    // not something the person meant to take.
+    while out.last().is_some_and(|l| l.trim().is_empty()) && out.len() > 1 {
+        out.pop();
+    }
+    out.join("\n")
+}
+
+/// `line` with the columns between `from` and `to` shown as chosen.
+///
+/// Spans are split where the selection starts and ends: a span carries its colour, and the
+/// selection has to sit on top of whatever colour is already there rather than replace it.
+pub fn mark_selected(line: &Line<'static>, from: usize, to: usize) -> Line<'static> {
+    if from >= to {
+        return line.clone();
+    }
+    let chosen = Style::default()
+        .bg(Color::Blue)
+        .add_modifier(Modifier::BOLD);
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut at = 0usize;
+    for span in &line.spans {
+        let chars: Vec<char> = span.content.chars().collect();
+        let mut cut = 0usize;
+        while cut < chars.len() {
+            let here = at + cut;
+            // How far this run goes before it crosses into or out of the selection.
+            let edge = if here < from {
+                from - here
+            } else if here < to {
+                to - here
+            } else {
+                chars.len() - cut
+            };
+            let take = edge.min(chars.len() - cut);
+            let text: String = chars[cut..cut + take].iter().collect();
+            let style = if here >= from && here < to {
+                span.style.patch(chosen)
+            } else {
+                span.style
+            };
+            out.push(Span::styled(text, style));
+            cut += take;
+        }
+        at += chars.len();
+    }
+    Line::from(out)
 }
