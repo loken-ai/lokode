@@ -131,9 +131,16 @@ stated.
 | `Alt-Enter` while it works | ask it once the turn is over |
 | `Up` / `Down` | walk what you cleared, then what you have already sent |
 | `PageUp` / `PageDown`, `Home` / `End`, wheel | scroll |
-| drag with the mouse | select; dragging past an edge scrolls |
+| drag with the mouse | select here; dragging past an edge scrolls |
+| `Shift` + drag | select in the terminal itself, for its own copy key |
+| `Ctrl-T` | hand the mouse to the terminal, or take it back |
 | `Ctrl-C` | stop the turn, clear the line, or leave - twice, on an empty line |
 | `Ctrl-D`, `Ctrl-Q` | leave from an empty line; leave at once |
+
+Taking the mouse is what buys the wheel and a selection that scrolls past the edge of the
+pane, and it costs the terminal's own selection - and with it the terminal's own copy key,
+which never reaches a program to be reassigned. Both are kept within reach: hold `Shift`
+while dragging for a terminal selection, or press `Ctrl-T` to lend it the mouse entirely.
 
 A line beginning with `!` is a command of your own, run here rather than asked of the model,
 and what it printed joins the conversation. A line beginning with `#` is a rule for the

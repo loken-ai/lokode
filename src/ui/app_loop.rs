@@ -441,6 +441,14 @@ struct UiState {
     draft: Option<String>,
     /// What is being done for this session outside any turn, and since when.
     background: Option<(String, Instant)>,
+    /// Whether the mouse belongs to this program or to the terminal.
+    ///
+    /// Taking it buys the wheel and a selection that can scroll past the edge of the
+    /// pane. It costs the terminal's own selection, and with it the terminal's own copy
+    /// key - which is the one everybody's hands already know.
+    mouse_ours: bool,
+    /// Whether the two ways of copying have been said this session.
+    said_how_to_copy: bool,
     /// What the backend serves, for finishing the name of one that is being typed. Asked
     /// for once and after a switch, since a backend's catalogue does not move under a
     /// session.
@@ -902,6 +910,7 @@ async fn run_ui(
     let mut discovering: Option<CancellationToken> = None;
 
     let mut state = UiState {
+        mouse_ours: true,
         planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
         model: model.to_string(),
         protocol,
@@ -1091,6 +1100,7 @@ async fn run_ui(
                 typing: !input.is_empty(),
                 accepting_writes: state.accepting_writes,
                 selected: state.selecting.is_some(),
+                mouse_ours: state.mouse_ours,
                 queued: state.queued.len(),
                 rate: state.rate,
                 background: state
@@ -1329,6 +1339,19 @@ async fn run_ui(
                                 Some(spot) => {
                                     state.selecting = Some((spot, spot));
                                     state.dragging = true;
+                                    // Once a session, where it is about to matter: what
+                                    // is being selected here is this program's, and the
+                                    // terminal's copy key cannot see it.
+                                    if !state.said_how_to_copy {
+                                        state.said_how_to_copy = true;
+                                        state.entries.push(Entry::Notice(
+                                            "selecting here, not in the terminal: ctrl-y \
+                                             takes this. For the terminal's own selection \
+                                             and its copy key, hold shift while dragging, \
+                                             or press ctrl-t to hand it the mouse"
+                                                .into(),
+                                        ));
+                                    }
                                 }
                                 // Pressed outside the conversation: the previous selection
                                 // is let go, which is how a selection is dismissed.
@@ -2123,6 +2146,30 @@ async fn run_ui(
                             }
                             _ => {}
                         }
+                    }
+                    // Handing the mouse to the terminal, and taking it back. A terminal
+                    // whose own selection is turned off has nothing for its own copy key
+                    // to copy, and that key - ctrl-shift-c on most - never reaches a
+                    // program to be reassigned. So the mouse is lent back on request.
+                    if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        state.mouse_ours = !state.mouse_ours;
+                        state.selecting = None;
+                        state.dragging = false;
+                        state.drag_edge = None;
+                        let _ = crate::ui::term::capture_mouse(state.mouse_ours);
+                        state.entries.push(Entry::Notice(match state.mouse_ours {
+                            false => "the terminal has the mouse: drag to select and copy \
+                                      with the terminal's own key, usually ctrl-shift-c. \
+                                      The wheel scrolls the terminal, not the \
+                                      conversation. ctrl-t takes it back"
+                                .into(),
+                            true => "the mouse is back: the wheel scrolls the conversation \
+                                     and dragging selects here, ctrl-y takes what is \
+                                     selected"
+                                .to_string(),
+                        }));
+                        continue;
                     }
                     // Taking what is selected, when the person says so. The terminal's
                     // own copy key never reaches a program, so a pane that does its own

@@ -26,6 +26,9 @@ pub struct Status {
     pub typing: bool,
     /// Whether something is selected in the pane, which puts taking it on the line.
     pub selected: bool,
+    /// Whether this program holds the mouse. Never invisible: a wheel that has stopped
+    /// scrolling the conversation is otherwise a program that has broken.
+    pub mouse_ours: bool,
     /// How many messages are waiting for this turn to end.
     pub queued: usize,
     /// What is being searched for, and which match is being shown, while a search is on.
@@ -226,6 +229,9 @@ impl Status {
         let mut spans = Vec::new();
         // First while it is there: what to do with a selection is the question the person
         // has just now, and the keys behind it are the ones they always have.
+        if !self.mouse_ours {
+            spans.extend(key("ctrl-t", "mouse back"));
+        }
         if self.selected {
             spans.extend(key("ctrl-y", "take it"));
             spans.extend(key("esc", "let go"));
@@ -310,6 +316,7 @@ mod tests {
             pointing: false,
             typing: false,
             selected: false,
+            mouse_ours: true,
             queued: 0,
             finding: None,
             rate: None,
