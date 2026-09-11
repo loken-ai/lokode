@@ -31,6 +31,10 @@ pub struct Status {
     pub accepting_writes: bool,
     /// What the turn is doing, when it is doing something that prints nothing.
     pub phase: Option<String>,
+    /// What just happened, for a few seconds, when it happened somewhere the person is
+    /// not looking. A conversation scrolled back does not show what was appended to its
+    /// foot, so an answer to a key that was just pressed goes here instead.
+    pub said: Option<String>,
     /// How long it has been in that phase.
     pub in_phase: Duration,
     /// Advances while the turn is busy, so a screen with nothing else moving still says
@@ -116,6 +120,12 @@ impl Status {
         }
         // The phase is what a user is looking for when the screen has stopped changing, so
         // it goes last, where the eye lands, with the time it has been there beside it.
+        if let Some(said) = self.said.as_deref() {
+            spans.push(Span::styled(
+                format!("  {said}"),
+                Style::default().fg(Color::Cyan),
+            ));
+        }
         if let Some(phase) = self.phase.as_deref().filter(|_| self.busy) {
             spans.push(Span::styled(
                 format!("  {phase} {}", how_long(self.in_phase)),
@@ -251,6 +261,7 @@ mod tests {
             pointing: false,
             typing: false,
             selected: false,
+            said: None,
             accepting_writes: false,
             context_percent: 40,
             step: 2,

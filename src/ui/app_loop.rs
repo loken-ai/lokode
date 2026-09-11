@@ -33,6 +33,9 @@ use crate::ui::term;
 /// the exit before the process leaves anyway.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
+/// How long the status line keeps saying what was just done.
+const SAID_FOR: Duration = Duration::from_secs(4);
+
 /// How much of a running tool's output is kept on screen while it runs.
 const SHOWN_OUTPUT_LINES: usize = 12;
 
@@ -234,6 +237,8 @@ struct UiState {
     /// Which edge a drag is being held past, if any: the pane scrolls that way for as
     /// long as it is, because a terminal reports a moving pointer and not a still one.
     drag_edge: Option<i8>,
+    /// What was just done and when, for the status line to say while it is still news.
+    said: Option<(String, Instant)>,
     /// Whether the button is still down: a drag that has been let go stays on screen,
     /// so it can be seen and so a second look does not have to be a second drag.
     dragging: bool,
@@ -815,6 +820,11 @@ async fn run_ui(
                 typing: !input.is_empty(),
                 accepting_writes: state.accepting_writes,
                 selected: state.selecting.is_some(),
+                said: state
+                    .said
+                    .as_ref()
+                    .filter(|(_, at)| at.elapsed() < SAID_FOR)
+                    .map(|(text, _)| text.clone()),
                 phase: if waiting {
                     Some("waiting for your answer".to_string())
                 } else {
@@ -866,7 +876,7 @@ async fn run_ui(
         // event - a keystroke, a resize, a piece of the answer, an approval - and this arm
         // is a branch that never completes, so nothing wakes the loop.
         let tick = async {
-            if state.busy || state.drag_edge.is_some() {
+            if state.busy {
                 tokio::time::sleep(Duration::from_millis(120)).await;
             } else {
                 std::future::pending::<()>().await;
@@ -875,10 +885,7 @@ async fn run_ui(
         tokio::select! {
             biased;
 
-            _ = tick => {
-                state.tick = state.tick.wrapping_add(1);
-                state.follow_the_drag();
-            }
+            _ = tick => state.tick = state.tick.wrapping_add(1),
 
             Some(prompt) = approval_rx.recv() => {
                 // In the thread, where the conversation the change has to be judged
@@ -1025,13 +1032,15 @@ async fn run_ui(
                                 let to = state.spot_at_clamped(mouse.column, mouse.row);
                                 state.selecting = Some((from, to));
                             }
-                            // Dragged past an edge, the pane follows. Without it a
+                            // Dragged to an edge, the pane follows. Without it a
                             // selection could never be longer than the window it is made
                             // in, which is exactly when taking a copy is worth the
-                            // trouble.
-                            state.drag_edge = if mouse.row < state.pane.y {
+                            // trouble. The edge row itself counts, not only what is past
+                            // it: a pane that starts at the top of the terminal has no
+                            // row above it for a pointer to be reported on.
+                            state.drag_edge = if mouse.row <= state.pane.y {
                                 Some(-1)
-                            } else if mouse.row >= state.pane.y + state.pane.height {
+                            } else if mouse.row + 1 >= state.pane.y + state.pane.height {
                                 Some(1)
                             } else {
                                 None
@@ -1603,20 +1612,19 @@ async fn run_ui(
                     // selecting has to offer its own way to take it.
                     if key.code == KeyCode::Char('y') && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
-                        match state.selection_text() {
-                            Some(text) => {
-                                let said = match crate::ui::clipboard::put(&text) {
-                                    Ok(()) => format!("{} line(s) taken", text.lines().count()),
-                                    // A terminal that ignores the sequence says so to
-                                    // nobody, so this does.
-                                    Err(e) => format!("could not reach the clipboard: {e}"),
-                                };
-                                state.entries.push(Entry::Notice(said));
-                            }
-                            None => state
-                                .entries
-                                .push(Entry::Notice("nothing is selected".into())),
-                        }
+                        let said = match state.selection_text() {
+                            Some(text) => match crate::ui::clipboard::put(&text) {
+                                Ok(()) => format!("{} line(s) taken", text.lines().count()),
+                                // A terminal that ignores the sequence says so to nobody,
+                                // so this does.
+                                Err(e) => format!("could not reach the clipboard: {e}"),
+                            },
+                            None => "nothing is selected".to_string(),
+                        };
+                        // On the status line rather than at the foot of the conversation:
+                        // a selection long enough to be worth taking was made by
+                        // scrolling, and what is appended down there is not on screen.
+                        state.said = Some((said, Instant::now()));
                         continue;
                     }
                     // A long instruction written where writing is comfortable. The line
@@ -1660,7 +1668,11 @@ async fn run_ui(
                 }
             }
 
-            _ = tokio::time::sleep(Duration::from_millis(80)) => {}
+            // Nothing else had anything to say for 80 ms. That is where a drag held
+            // against an edge carries on from: the shortest sleep in the loop is the one
+            // that fires while a pointer sits still, which is exactly when the terminal
+            // stops reporting it and the selection would otherwise stop growing.
+            _ = tokio::time::sleep(Duration::from_millis(80)) => state.follow_the_drag(),
         }
     }
 }
