@@ -342,6 +342,8 @@ struct UiState {
     choosing: Option<crate::ui::chooser::Chooser>,
     /// A call being refused, while what to do instead is being typed.
     refusing: Option<crate::sandbox::approval::ApprovalPrompt>,
+    /// What was typed during a turn to be asked once it is over.
+    queued: Vec<String>,
     /// What the backend serves, for finishing the name of one that is being typed. Asked
     /// for once and after a switch, since a backend's catalogue does not move under a
     /// session.
@@ -969,6 +971,7 @@ async fn run_ui(
                 typing: !input.is_empty(),
                 accepting_writes: state.accepting_writes,
                 selected: state.selecting.is_some(),
+                queued: state.queued.len(),
                 said: state
                     .said
                     .as_ref()
@@ -1137,6 +1140,19 @@ async fn run_ui(
                         // asking about something that will not happen either way.
                         state.pending_approval = None;
                         state.waiting_since = None;
+                        // What was typed while it ran and held back for now. One at a
+                        // time: each is a turn, and the ones after it wait as they were.
+                        if !state.queued.is_empty() {
+                            let text = state.queued.remove(0);
+                            state.entries.push(Entry::User(text.clone()));
+                            state.remember(&text);
+                            state.busy = true;
+                            state.phase = Some(crate::agent::agent_loop::Phase::Preparing);
+                            state.phase_since = Some(Instant::now());
+                            let cancel = shutdown.child_token();
+                            state.turn_cancel = Some(cancel.clone());
+                            let _ = input_tx.send(TurnRequest { text, cancel }).await;
+                        }
                     }
                 }
             }
@@ -1882,6 +1898,19 @@ async fn run_ui(
                                             continue;
                                         }
                                     }
+                                }
+                                // Typed while a turn runs and sent with the modifier: it
+                                // waits for the turn to end rather than joining it. What a
+                                // person types mid-turn is as often the next thing to do
+                                // as a correction to this one, and steering the model with
+                                // the next thing sends it off before it has finished.
+                                if state.busy && key.modifiers.contains(KeyModifiers::ALT) {
+                                    state.entries.push(Entry::Notice(format!(
+                                        "queued for when this turn is over: {}",
+                                        text.lines().next().unwrap_or_default()
+                                    )));
+                                    state.queued.push(text);
+                                    continue;
                                 }
                                 // Typed while a turn runs, this steers it rather than
                                 // starting another: it joins the conversation at the next

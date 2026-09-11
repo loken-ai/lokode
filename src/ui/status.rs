@@ -26,6 +26,8 @@ pub struct Status {
     pub typing: bool,
     /// Whether something is selected in the pane, which puts taking it on the line.
     pub selected: bool,
+    /// How many messages are waiting for this turn to end.
+    pub queued: usize,
     /// Whether writes are going through unasked. A third setting beside planning and
     /// acting, and the one a person most needs reminding they are in.
     pub accepting_writes: bool,
@@ -120,6 +122,12 @@ impl Status {
         }
         // The phase is what a user is looking for when the screen has stopped changing, so
         // it goes last, where the eye lands, with the time it has been there beside it.
+        if self.queued > 0 {
+            spans.push(Span::styled(
+                format!("  {} queued", self.queued),
+                Style::default().fg(Color::Cyan),
+            ));
+        }
         if let Some(said) = self.said.as_deref() {
             spans.push(Span::styled(
                 format!("  {said}"),
@@ -199,6 +207,7 @@ impl Status {
         if self.busy {
             spans.extend(key("esc", "stop"));
             spans.extend(key("enter", "steer"));
+            spans.extend(key("alt-enter", "queue"));
         } else if self.pointing {
             spans.extend(key("alt-↑↓", "steps"));
             spans.extend(key("space", "unfold"));
@@ -261,6 +270,7 @@ mod tests {
             pointing: false,
             typing: false,
             selected: false,
+            queued: 0,
             said: None,
             accepting_writes: false,
             context_percent: 40,
