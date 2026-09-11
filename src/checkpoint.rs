@@ -40,6 +40,14 @@ pub enum Snapshot {
     Unchanged,
 }
 
+/// A turn that changed something and has not been put back.
+#[derive(Debug)]
+pub struct Turn {
+    pub turn: u32,
+    /// What that turn itself changed.
+    pub files: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct Undone {
     /// What was put back.
@@ -111,43 +119,51 @@ impl Checkpoints {
     /// in this history, and calling this again walks one turn further back rather than
     /// undoing the same one twice.
     pub async fn undo(&self) -> Result<Option<Undone>> {
-        self.commit("before undo", 0).await?;
-
-        let log = self
-            .git(&["log", "--format=%H %s", &format!("{}..HEAD", self.baseline)])
-            .await?;
-        let mut entries: Vec<(String, String)> = Vec::new();
-        let mut already_undone: Vec<u32> = Vec::new();
-        for line in log.lines() {
-            let Some((sha, subject)) = line.split_once(' ') else {
-                continue;
-            };
-            if let Some(t) = undone_turn(subject) {
-                already_undone.push(t);
-            }
-            entries.push((sha.to_string(), subject.to_string()));
-        }
-
-        // Newest first, so this is the latest turn still standing.
-        let Some(turn) = entries
-            .iter()
-            .map(|(_, s)| turn_of(s))
-            .find(|t| *t > 0 && !already_undone.contains(t))
-        else {
+        let Some(turn) = self.turns().await?.first().map(|t| t.turn) else {
             return Ok(None);
         };
-        // The state to return to is the one before that turn's first commit.
-        let target = match entries.iter().rev().find(|(_, s)| turn_of(s) == turn) {
-            Some((sha, _)) => format!("{sha}^"),
-            None => return Ok(None),
-        };
+        self.undo_turn(turn).await
+    }
 
-        let files = self
-            .git(&["diff", "--name-only", &target, "HEAD"])
-            .await?
-            .lines()
-            .map(str::to_string)
-            .collect();
+    /// The turns that changed something and have not been put back, newest first.
+    ///
+    /// What a person needs to choose one: which turn, and what it touched. Undoing is
+    /// otherwise a single step into the dark, offered without saying where it lands.
+    pub async fn turns(&self) -> Result<Vec<Turn>> {
+        self.commit("before listing", 0).await?;
+        let entries = self.entries().await?;
+        let undone: Vec<u32> = entries.iter().filter_map(|(_, s)| undone_turn(s)).collect();
+        let mut out: Vec<Turn> = Vec::new();
+        for turn in entries.iter().map(|(_, s)| turn_of(s)) {
+            if turn == 0 || undone.contains(&turn) || out.iter().any(|t| t.turn == turn) {
+                continue;
+            }
+            let Some(target) = Self::before(&entries, turn) else {
+                continue;
+            };
+            // What that turn changed, not what everything since changed: the second is
+            // what undoing it costs, and it is said at the point of choosing instead.
+            let last = entries
+                .iter()
+                .find(|(_, s)| turn_of(s) == turn)
+                .map(|(sha, _)| sha.clone())
+                .unwrap_or_else(|| "HEAD".to_string());
+            out.push(Turn {
+                turn,
+                files: self.changed(&target, &last).await?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Put the project back to how it stood before `turn`.
+    pub async fn undo_turn(&self, turn: u32) -> Result<Option<Undone>> {
+        self.commit("before undo", 0).await?;
+        let entries = self.entries().await?;
+        let Some(target) = Self::before(&entries, turn) else {
+            return Ok(None);
+        };
+        let files = self.changed(&target, "HEAD").await?;
 
         // The only place this writes to the user's files. `read-tree -u` moves the working
         // tree to the old state - removing files that turn created - without moving the
@@ -163,6 +179,36 @@ impl Checkpoints {
         .await?;
 
         Ok(Some(Undone { turn, files }))
+    }
+
+    /// Every commit since the baseline, newest first, as its hash and its subject.
+    async fn entries(&self) -> Result<Vec<(String, String)>> {
+        let log = self
+            .git(&["log", "--format=%H %s", &format!("{}..HEAD", self.baseline)])
+            .await?;
+        Ok(log
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .map(|(sha, subject)| (sha.to_string(), subject.to_string()))
+            .collect())
+    }
+
+    /// The state to return to for `turn`: the one before its first commit.
+    fn before(entries: &[(String, String)], turn: u32) -> Option<String> {
+        entries
+            .iter()
+            .rev()
+            .find(|(_, s)| turn_of(s) == turn)
+            .map(|(sha, _)| format!("{sha}^"))
+    }
+
+    async fn changed(&self, from: &str, to: &str) -> Result<Vec<String>> {
+        Ok(self
+            .git(&["diff", "--name-only", from, to])
+            .await?
+            .lines()
+            .map(str::to_string)
+            .collect())
     }
 
     async fn head(&self) -> Result<String> {
@@ -305,6 +351,35 @@ mod tests {
             !root.join("b.txt").exists(),
             "a file the turn created should be gone again"
         );
+    }
+
+    /// Undoing is otherwise a step into the dark: which turn, and what it touched, is
+    /// what a person needs to choose one.
+    #[tokio::test]
+    async fn the_turns_that_can_be_taken_back_are_named_with_what_they_touched() {
+        let f = fixture();
+        let root = f.root.path().canonicalize().unwrap();
+        write(&root, "a.txt", "original\n");
+        let cp = f.open().await;
+
+        write(&root, "a.txt", "turn one\n");
+        cp.snapshot("write_file", 1).await.unwrap();
+        write(&root, "b.txt", "turn two\n");
+        cp.snapshot("write_file", 2).await.unwrap();
+
+        let turns = cp.turns().await.unwrap();
+        assert_eq!(turns.iter().map(|t| t.turn).collect::<Vec<_>>(), vec![2, 1]);
+        assert_eq!(turns[0].files, vec!["b.txt"]);
+        assert_eq!(turns[1].files, vec!["a.txt"]);
+
+        // An older turn chosen puts the project back to before it, which is what going
+        // back to a point in a history means.
+        let undone = cp.undo_turn(1).await.unwrap().expect("something to undo");
+        assert_eq!(undone.turn, 1);
+        assert_eq!(read(&root, "a.txt"), "original\n");
+        assert!(!root.join("b.txt").exists(), "everything after it goes too");
+        // And it is not offered again.
+        assert!(cp.turns().await.unwrap().iter().all(|t| t.turn != 1));
     }
 
     /// Undoing must not be able to lose a change somebody made by hand in between. The

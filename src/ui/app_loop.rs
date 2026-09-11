@@ -43,6 +43,53 @@ fn chosen_move(state: &mut UiState, by: isize) {
     }
 }
 
+/// Put a turn back, or offer the turns that can be.
+///
+/// Asked rather than done: undoing used to take the most recent turn without saying which
+/// it was or what it held, which is a step into the dark on the one command whose whole
+/// purpose is to recover from one.
+async fn undo_command(checkpoints: Option<&Checkpoints>, rest: &str) -> Ran {
+    let Some(cp) = checkpoints else {
+        return Ran::Said("no change history for this session".into());
+    };
+    if let Ok(turn) = rest.trim().parse::<u32>() {
+        return Ran::Said(match cp.undo_turn(turn).await {
+            Err(e) => format!("undo failed: {e:#}"),
+            Ok(None) => format!("turn {turn} is not one that can be put back"),
+            Ok(Some(done)) => match done.files.is_empty() {
+                true => format!("turn {} put back", done.turn),
+                false => format!(
+                    "turn {} put back, {} file(s):\n{}",
+                    done.turn,
+                    done.files.len(),
+                    done.files.join("\n")
+                ),
+            },
+        });
+    }
+    let turns = match cp.turns().await {
+        Err(e) => return Ran::Said(format!("undo failed: {e:#}")),
+        Ok(t) => t,
+    };
+    if turns.is_empty() {
+        return Ran::Said("nothing to undo: the agent has not changed anything".into());
+    }
+    Ran::Choose(Box::new(crate::ui::chooser::Chooser::new(
+        "undo",
+        "put the project back to before which turn",
+        turns
+            .into_iter()
+            .map(|t| {
+                crate::ui::chooser::Choice::new(
+                    t.turn.to_string(),
+                    format!("turn {}: {}", t.turn, t.files.join(", ")),
+                )
+            })
+            .collect(),
+        None,
+    )))
+}
+
 /// Put what a command said where it belongs.
 ///
 /// A sentence belongs in the thread, where it reads as what just happened. A page of it
@@ -2206,8 +2253,22 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         return Ran::Prompt(text);
     }
     if verb == "digest" {
-        let mut d = digest.lock().await;
+        // Asked first, because this throws away everything a session worked out about the
+        // project and there is nothing to put it back with. A word typed by mistake is
+        // the cheapest way there is to lose an afternoon of reading.
         if rest == "forget" {
+            return Ran::Choose(Box::new(crate::ui::chooser::Chooser::new(
+                "digest forget",
+                "throw away what has been worked out about this project",
+                vec![
+                    crate::ui::chooser::Choice::new("no", "keep it"),
+                    crate::ui::chooser::Choice::new("yes", "it will be worked out again"),
+                ],
+                Some("no".into()),
+            )));
+        }
+        let mut d = digest.lock().await;
+        if rest == "forget yes" {
             d.forget();
             return Ran::Said("forgotten; it will be worked out again".into());
         }
@@ -2269,6 +2330,27 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                     Ok(text) => Ran::Prompt(text),
                     Err(e) => Ran::Said(format!("{server}/{prompt}: {e:#}")),
                 };
+            }
+            // A server named and nothing else: what it offers, to be chosen from. Its
+            // prompts are named by whoever wrote the server, and nobody keeps those in
+            // their head either.
+            (Some(server), None) => {
+                let Some(client) = mcp.iter().find(|c| c.server == server) else {
+                    return Ran::Said(format!("no server called {server}"));
+                };
+                let prompts = client.list_prompts().await;
+                if prompts.is_empty() {
+                    return Ran::Said(format!("{server} offers no prompt"));
+                }
+                return Ran::Choose(Box::new(crate::ui::chooser::Chooser::new(
+                    format!("mcp {server}"),
+                    format!("what to take from {server}"),
+                    prompts
+                        .into_iter()
+                        .map(|(name, about)| crate::ui::chooser::Choice::new(name, about))
+                        .collect(),
+                    None,
+                )));
             }
             _ => return Ran::Said(mcp_summary.to_string()),
         }
@@ -2374,25 +2456,7 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
     // text back instead of being done.
     Ran::Said(match verb {
         "help" | "" => help(root),
-        "undo" => match checkpoints {
-            None => "no change history for this session".into(),
-            Some(cp) => match cp.undo().await {
-                Err(e) => format!("undo failed: {e:#}"),
-                Ok(None) => "nothing to undo: the agent has not changed anything".into(),
-                Ok(Some(done)) => {
-                    if done.files.is_empty() {
-                        format!("turn {} put back", done.turn)
-                    } else {
-                        format!(
-                            "turn {} put back, {} file(s):\n{}",
-                            done.turn,
-                            done.files.len(),
-                            done.files.join("\n")
-                        )
-                    }
-                }
-            },
-        },
+        "undo" => return undo_command(checkpoints, rest).await,
         "init" => {
             let path = crate::config::project_instructions_path(root);
             if path.exists() {
