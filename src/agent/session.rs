@@ -265,7 +265,23 @@ impl Session {
             return None;
         }
         let measured = sent_chars as f64 / prompt_tokens as f64;
-        if !measured.is_finite() || !(MIN_RATIO..=MAX_RATIO).contains(&measured) {
+        if !measured.is_finite() {
+            return None;
+        }
+        // Far more characters than the tokens the server counted: no text tokenises that
+        // compactly, so the server did not read all of what was sent. It cuts from the
+        // front, which is where the standing instructions are, and answers fluently about
+        // a question it was only shown the end of. Said rather than swallowed: the window
+        // it serves is smaller than the one being asked for, and only the person running
+        // it can settle that.
+        if measured > MAX_RATIO {
+            return Some(format!(
+                "the backend read only {prompt_tokens} tokens of what was sent, so it is \
+                 cutting the prompt: its window is smaller than the one asked for. Set \
+                 --context-tokens to what it serves."
+            ));
+        }
+        if measured < MIN_RATIO {
             return None;
         }
 
@@ -380,6 +396,29 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    /// A prompt the server only partly read is said, not swallowed.
+    ///
+    /// The client cannot always learn the window a backend serves - one that does not
+    /// describe what it holds tells it nothing - so the only remaining sign is the token
+    /// count coming back for a prompt that should have produced far more. The server cuts
+    /// from the front, which is where the standing instructions are, so an answer to a
+    /// truncated prompt is fluent and about the wrong thing.
+    #[test]
+    fn a_prompt_the_backend_only_partly_read_is_reported() {
+        let mut s = Session::new("sys".into(), 32_768, 4096);
+        // Ten characters a token: no text does that, so the prompt was cut.
+        let said = s.observe(100_000, 10_000);
+        let said = said.expect("a cut prompt is worth saying");
+        assert!(said.contains("cutting the prompt"), "{said}");
+        assert!(said.contains("10000"), "{said}");
+        // An ordinary ratio is measured, not reported as damage.
+        let ordinary = Session::new("sys".into(), 32_768, 4096).observe(40_000, 10_000);
+        assert!(
+            ordinary.is_none_or(|s| !s.contains("cutting")),
+            "an ordinary ratio must not read as damage"
+        );
+    }
+
     /// A reserve equal to the window leaves nothing to read with, which is how a client
     /// ends up answering from what it can invent: the window is subtracted to zero, every
     /// tool result clamps to its own truncation notice, and nothing says so.

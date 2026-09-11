@@ -173,13 +173,35 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // was asked.
     if !cfg.context_was_set && per_model.and_then(|m| m.context_tokens).is_none() {
         if let Ok(http) = crate::tools::registry::tool_http_client() {
-            if let Some(said) = crate::backend::window::of(&http, &cfg.backend_url, &model).await {
-                if said != context_tokens {
+            let mut said = crate::backend::window::of(&http, &cfg.backend_url, &model).await;
+            // A server only describes the models it holds, and on a cold one it holds
+            // none - so the first session of the day learned nothing and kept whatever
+            // was configured, which is the case a wrong guess hurts most. Holding the
+            // model ready is what the next step needs anyway, so the question is asked
+            // again once there is something to ask about.
+            //
+            // Only where the weights are near: a hosted endpoint has nothing to hold
+            // ready and would bill the attempt.
+            if said.is_none()
+                && crate::config::backend_is_nearby(&cfg.backend_url)
+                && backend.warm(&model).await.is_ok()
+            {
+                said = crate::backend::window::of(&http, &cfg.backend_url, &model).await;
+            }
+            match said {
+                Some(said) if said != context_tokens => {
                     model_notes.push(format!(
                         "the backend offers {said} tokens for {model}; using that instead of {context_tokens}"
                     ));
                     context_tokens = said;
                 }
+                Some(_) => {}
+                // Nothing said, so nothing is known: the configured window stands, and
+                // a prompt cut to fit a smaller one is caught from what comes back.
+                None => model_notes.push(format!(
+                    "the backend does not say what window it serves; asking for {context_tokens} \
+                     and watching what comes back"
+                )),
             }
         }
     }
