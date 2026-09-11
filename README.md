@@ -119,16 +119,19 @@ stated.
 | `Enter` | send, take what the list offers, or bring back the question you are pointing at |
 | `Tab` | take what the list offers |
 | `Shift-Enter` | newline |
-| `Esc` | interrupt the turn, close a list, clear the line; twice, bring back the last question |
+| `Esc` | interrupt the turn, close a list, drop a selection, clear the line; twice, bring back the last question |
 | `Alt-Up` / `Alt-Down` | move between the steps of the session |
 | `Space` | open a block that was counted, while pointing at it |
-| `Ctrl-F` | find something said earlier; enter walks the matches |
+| `Ctrl-F` | find something said earlier; enter and up walk the matches |
 | `Ctrl-G` | write the prompt in `$EDITOR` and bring it back |
+| `Ctrl-Y` | take what is selected, or the block you are pointing at |
 | `y` / `a` / `n` | answer a change: once, always in the stated scope, no |
+| `e` / `x` | refuse and say what to do instead; refuse and correct the command yourself |
 | `Enter` while it works | hand the line to the turn in flight |
-| `Up` / `Down` | walk what you have already sent (from an empty input) |
-| `PageUp` / `PageDown`, wheel | scroll |
-| drag with the mouse | select, and take it on letting go |
+| `Alt-Enter` while it works | ask it once the turn is over |
+| `Up` / `Down` | walk what you cleared, then what you have already sent |
+| `PageUp` / `PageDown`, `Home` / `End`, wheel | scroll |
+| drag with the mouse | select; dragging past an edge scrolls |
 | `Ctrl-C` | stop the turn, clear the line, or leave - twice, on an empty line |
 | `Ctrl-D`, `Ctrl-Q` | leave from an empty line; leave at once |
 
@@ -139,13 +142,18 @@ project, appended to `.verve.md` and told to the model at once.
 | Command | |
 |---|---|
 | `/plan`, `/act` | plan without changing anything, then carry it out |
-| `/model`, `/model <name>` | what the backend serves, or switch and remember it |
+| `/model` | choose from what the backend serves, with the one answering marked |
+| `/clear`, `/resume` | start again; come back to a session recorded earlier |
 | `/retry`, `/retry <model>` | ask the last question again, of the same model or another |
 | `/copy`, `/copy last` | the conversation to the clipboard and to a file |
-| `/undo`, `/diff` | put back the last turn that changed something, or see it all |
+| `/undo`, `/diff` | put the project back to before a turn, or see everything changed |
 | `/context`, `/compact`, `/cost` | where the window stands, elide now, what it spent |
+| `/approve`, `/approve forget` | what is in force here and in the configuration; take it back |
 | `/why`, `/digest`, `/tools`, `/mcp` | what is in force, what is known, what can be called |
 | `@path` in a prompt | send that file, or that directory's listing, with the question |
+
+A command that takes a name offers the names: `/model`, `/undo`, `/resume` and `/mcp` open a
+list that filters as you type, and what you type after any of them is completed.
 
 `/help` lists them all, and the commands a project ships beside them.
 

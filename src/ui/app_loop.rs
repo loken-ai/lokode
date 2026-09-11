@@ -351,6 +351,8 @@ struct UiState {
     found: usize,
     /// How fast the last step came back, in tokens a second.
     rate: Option<f64>,
+    /// A line cleared off the input, kept for the up arrow to offer back.
+    draft: Option<String>,
     /// What the backend serves, for finishing the name of one that is being typed. Asked
     /// for once and after a switch, since a backend's catalogue does not move under a
     /// session.
@@ -1685,6 +1687,10 @@ async fn run_ui(
                                 continue;
                             }
                             KeyCode::Esc if !state.busy && !input.is_empty() => {
+                                // Kept, because clearing a line is not always meant to
+                                // destroy it: the up arrow offers it back before the
+                                // things that were actually sent.
+                                state.draft = Some(input.lines().join("\n"));
                                 input = fresh_input("");
                                 state.esc_at = None;
                                 continue;
@@ -1801,6 +1807,14 @@ async fn run_ui(
                             }
                             KeyCode::PageDown => {
                                 state.scroll_forward(state.view_height.max(1));
+                                continue;
+                            }
+                            // What was just cleared, before what was sent: it is the more
+                            // recent of the two and the one a person is reaching for.
+                            KeyCode::Up if at_start(&input) && input.is_empty() && state.draft.is_some() => {
+                                if let Some(draft) = state.draft.take() {
+                                    input = fresh_input(&draft);
+                                }
                                 continue;
                             }
                             KeyCode::Up if at_start(&input) => {
