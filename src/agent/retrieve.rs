@@ -137,10 +137,46 @@ fn terms(asked: &str) -> Vec<String> {
         "make", "made", "need", "want", "like", "just", "also", "some", "more", "most", "then",
         "than", "into", "over", "only", "very", "much", "about",
     ];
+    // Words that turn what follows them into something to leave out. A question that
+    // names a file in order to exclude it - "from the sources but not the README" - was
+    // read as a question about that file, and the one thing the person asked to be left
+    // alone came back ranked first, with an instruction to read further from it.
+    //
+    // Narrow on purpose: only the words immediately after one of these, and only until
+    // the next comma or the end of the clause. Anything cleverer would be guessing at the
+    // shape of a sentence, and guessing wrong here drops what the question was about.
+    const EXCEPT: [&str; 6] = ["not", "without", "except", "excluding", "besides", "ignore"];
+    let mut excluded: Vec<String> = Vec::new();
+    let mut dropping = false;
+    for token in asked.split_whitespace() {
+        let bare: String = token
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<String>()
+            .to_lowercase();
+        if EXCEPT.contains(&bare.as_str()) {
+            dropping = true;
+            continue;
+        }
+        if dropping {
+            if !bare.is_empty() && !GRAMMAR.contains(&bare.as_str()) {
+                excluded.push(bare);
+            }
+            // A comma ends the aside; so does the end of what was said.
+            if token.ends_with(',') || token.ends_with(';') {
+                dropping = false;
+            }
+        }
+    }
+
     let mut out: Vec<String> = Vec::new();
     for word in asked.split(|c: char| !c.is_alphanumeric() && c != '_') {
         let word = word.to_lowercase();
-        if word.len() < 4 || GRAMMAR.contains(&word.as_str()) || out.contains(&word) {
+        if word.len() < 4
+            || GRAMMAR.contains(&word.as_str())
+            || excluded.contains(&word)
+            || out.contains(&word)
+        {
             continue;
         }
         out.push(word);
@@ -179,6 +215,22 @@ mod tests {
         );
         // A question made only of grammar has nothing to look for.
         assert!(terms("what does this do").is_empty());
+    }
+
+    /// A file named in order to be left out is not what the question is about.
+    ///
+    /// Asked "from the sources but not the README", the search took README for the
+    /// subject, ranked it first, and put it in front of the model with an instruction to
+    /// read further from it - the one file the person had asked it to leave alone.
+    #[test]
+    fn a_word_named_to_be_excluded_is_not_searched_for() {
+        assert_eq!(
+            terms("using the sources but not the readme, what are the verve features"),
+            vec!["using", "verve"]
+        );
+        assert!(!terms("describe compaction without the digest").contains(&"digest".into()));
+        // The aside ends at the comma: what comes after it is the question again.
+        assert!(terms("not the readme, how does compaction work").contains(&"compaction".into()));
     }
 
     /// The passages come from the files that carry what was asked about, and say where.
