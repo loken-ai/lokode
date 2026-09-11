@@ -171,7 +171,24 @@ pub enum AgentEvent {
     Protocol(ToolProtocol),
     /// How full the window is, as of this step.
     Window(u8),
+    /// How fast the last step came back, in tokens a second.
+    ///
+    /// A turn that takes a minute with nothing on screen looks the same as a turn that
+    /// has stalled. This is the one number that tells them apart.
+    Rate(f64),
     TurnDone,
+}
+
+/// How fast a step came back, in tokens a second, when the backend said enough to tell.
+///
+/// Nothing is reported for a step that failed or for a backend that counts nothing: a made
+/// up number on a status line is worse than an empty space where one would be.
+fn step_rate(attempt: &anyhow::Result<Completion>, model_ms: u64) -> Option<f64> {
+    let usage = attempt.as_ref().ok()?.usage?;
+    if model_ms == 0 || usage.completion_tokens == 0 {
+        return None;
+    }
+    Some(usage.completion_tokens as f64 * 1000.0 / model_ms as f64)
 }
 
 /// The files a write tool says it changed, read from the result rather than the arguments:
@@ -1584,6 +1601,9 @@ impl Agent {
             }
             record.after.model_ms = asked_at.elapsed().as_millis() as u64;
             self.spend.model_ms += record.after.model_ms;
+            if let Some(rate) = step_rate(&attempt, record.after.model_ms) {
+                let _ = events.send(AgentEvent::Rate(rate)).await;
+            }
 
             // A backend that will not take native tool calls says so by refusing the
             // request. Nothing has been said to the user yet, so the same step can be run

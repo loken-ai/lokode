@@ -30,6 +30,8 @@ pub struct Status {
     pub queued: usize,
     /// What is being searched for, and which match is being shown, while a search is on.
     pub finding: Option<String>,
+    /// How fast the last step came back, in tokens a second.
+    pub rate: Option<f64>,
     /// Whether writes are going through unasked. A third setting beside planning and
     /// acting, and the one a person most needs reminding they are in.
     pub accepting_writes: bool,
@@ -119,6 +121,15 @@ impl Status {
         if self.busy {
             spans.push(Span::styled(
                 format!("  {}/{}", self.step, self.max_steps),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        // A turn that takes a minute with nothing on screen looks the same as a turn that
+        // has stalled. This is the number that tells them apart, and it is only shown
+        // while there is a turn for it to be about.
+        if let Some(rate) = self.rate.filter(|_| self.busy) {
+            spans.push(Span::styled(
+                format!("  {rate:.0} tok/s"),
                 Style::default().fg(Color::DarkGray),
             ));
         }
@@ -292,6 +303,7 @@ mod tests {
             selected: false,
             queued: 0,
             finding: None,
+            rate: None,
             said: None,
             accepting_writes: false,
             context_percent: 40,

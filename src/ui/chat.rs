@@ -176,7 +176,21 @@ impl Entry {
                     format!("  {name} …"),
                     Style::default().fg(Color::DarkGray),
                 ))];
-                out.extend(body.lines().map(|l| {
+                // The end of it, which is where a run that is going wrong says so. The
+                // rest is held and unfolds, rather than being dropped as it arrives and
+                // reachable only once the run has finished.
+                let held = body.lines().count();
+                let shown = match open {
+                    true => held,
+                    false => held.min(RUNNING_LINES),
+                };
+                if shown < held {
+                    out.push(Line::from(Span::styled(
+                        format!("    … {} earlier line(s), space to see them", held - shown),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                out.extend(body.lines().skip(held - shown).map(|l| {
                     Line::from(Span::styled(
                         format!("    {l}"),
                         Style::default().fg(Color::DarkGray),
@@ -462,6 +476,9 @@ const BODY_LINES: usize = 8;
 /// More than a result, because this is the one a person has to judge rather than read, and
 /// less than the pane, because the conversation it is judged against has to stay visible
 /// behind it.
+/// How much of a tool's output is shown while it is still running.
+const RUNNING_LINES: usize = 12;
+
 const DIFF_LINES: usize = 16;
 
 /// Whether a body is a unified diff.

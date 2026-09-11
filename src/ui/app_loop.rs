@@ -135,8 +135,11 @@ fn show(state: &mut UiState, verb: &str, reply: String) {
 /// How long the status line keeps saying what was just done.
 const SAID_FOR: Duration = Duration::from_secs(4);
 
-/// How much of a running tool's output is kept on screen while it runs.
-const SHOWN_OUTPUT_LINES: usize = 12;
+/// How much of a running tool's output is kept for the rest to be unfolded onto.
+///
+/// A build that fails a hundred lines before it stops used to have those hundred lines
+/// dropped as they arrived, so the only way to see them was to wait for the run to end.
+const KEPT_OUTPUT_LINES: usize = 400;
 
 /// One user turn handed to the agent, with the handle that abandons it.
 ///
@@ -346,6 +349,8 @@ struct UiState {
     queued: Vec<String>,
     /// How many entries the search matched, for saying which one is being shown.
     found: usize,
+    /// How fast the last step came back, in tokens a second.
+    rate: Option<f64>,
     /// What the backend serves, for finishing the name of one that is being typed. Asked
     /// for once and after a switch, since a backend's catalogue does not move under a
     /// session.
@@ -653,11 +658,12 @@ impl UiState {
         };
         body.push('\n');
         body.push_str(line);
-        // Only the tail is kept: the whole of it reaches the model in the result, and
-        // what a person wants while it runs is where it is now.
+        // Only the tail is kept, and only the end of that is shown: the whole of it
+        // reaches the model in the result, and what a person wants while it runs is where
+        // it is now, with the rest a keypress away.
         let lines: Vec<&str> = body.lines().collect();
-        if lines.len() > SHOWN_OUTPUT_LINES {
-            *body = lines[lines.len() - SHOWN_OUTPUT_LINES..].join("\n");
+        if lines.len() > KEPT_OUTPUT_LINES {
+            *body = lines[lines.len() - KEPT_OUTPUT_LINES..].join("\n");
         }
     }
 
@@ -935,6 +941,24 @@ async fn run_ui(
                 })
                 .collect();
             f.render_widget(Paragraph::new(visible), chunks[0]);
+            // Nothing used to say the conversation had been scrolled back, or by how
+            // much: a pane showing an hour-old answer looks exactly like a pane showing
+            // the newest one.
+            if total > inner_h {
+                let mut bar = ratatui::widgets::ScrollbarState::new(total.saturating_sub(inner_h))
+                    .position(total.saturating_sub(inner_h).saturating_sub(scroll));
+                f.render_stateful_widget(
+                    ratatui::widgets::Scrollbar::new(
+                        ratatui::widgets::ScrollbarOrientation::VerticalRight,
+                    )
+                    .begin_symbol(None)
+                    .end_symbol(None)
+                    .track_symbol(Some("│"))
+                    .thumb_symbol("┃"),
+                    chunks[0],
+                    &mut bar,
+                );
+            }
             // Kept for the mouse, which can only say which row was pointed at.
             state.wrapped = lines;
 
@@ -982,6 +1006,7 @@ async fn run_ui(
                 accepting_writes: state.accepting_writes,
                 selected: state.selecting.is_some(),
                 queued: state.queued.len(),
+                rate: state.rate,
                 finding: state
                     .finding
                     .as_ref()
@@ -1144,6 +1169,7 @@ async fn run_ui(
                         )));
                     }
                     AgentEvent::Window(percent) => state.context_percent = percent,
+                    AgentEvent::Rate(tokens_a_second) => state.rate = Some(tokens_a_second),
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
                     AgentEvent::TurnDone => {
                         // Asked once a turn is over, which is when the conversation has
@@ -1973,6 +1999,7 @@ async fn run_ui(
                                 }
                                 state.busy = true;
                                 state.step = 0;
+                                state.rate = None;
                                 state.phase = Some(crate::agent::agent_loop::Phase::Preparing);
                                 state.phase_since = Some(Instant::now());
                                 // A child of the shutdown token, so quitting cancels the
@@ -1990,7 +2017,16 @@ async fn run_ui(
                     // selecting has to offer its own way to take it.
                     if key.code == KeyCode::Char('y') && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
-                        let said = match state.selection_text() {
+                        // What is selected, or else what is being pointed at: taking one
+                        // answer out of a conversation is the common case, and dragging
+                        // over exactly its lines to do it is work the keyboard can save.
+                        let taking = state.selection_text().or_else(|| {
+                            state
+                                .at_entry
+                                .and_then(|at| state.entries.get(at))
+                                .map(|e| e.to_text())
+                        });
+                        let said = match taking {
                             Some(text) => match crate::ui::clipboard::put(&text) {
                                 Ok(()) => format!("{} line(s) taken", text.lines().count()),
                                 // A terminal that ignores the sequence says so to nobody,
@@ -2353,6 +2389,9 @@ fn worth_pointing_at(e: &Entry) -> bool {
             | Entry::AssistantStreaming(_)
             | Entry::ToolCall { .. }
             | Entry::ToolResult { .. }
+            // What a tool is printing now, so the lines it has already printed can be
+            // unfolded while it is still going.
+            | Entry::ToolOutput { .. }
     )
 }
 
@@ -3006,18 +3045,25 @@ mod tests {
         assert_eq!(state.output_being_printed("read_file"), None);
     }
 
-    /// Only the tail of a long run stays on screen.
+    /// A long run keeps its tail, and no more than that.
+    ///
+    /// Held rather than shown: the end of it is what says a run is going wrong, and the
+    /// lines before it used to be dropped as they arrived, so the only way to see them
+    /// was to wait for the run to finish.
     #[test]
-    fn a_tool_that_prints_for_minutes_keeps_only_its_tail() {
+    fn a_tool_that_prints_for_minutes_keeps_its_tail() {
         let mut state = UiState::default();
-        for i in 0..40 {
+        for i in 0..KEPT_OUTPUT_LINES + 50 {
             state.print_line("shell".into(), &format!("line {i}"));
         }
         let Entry::ToolOutput { body, .. } = &state.entries[0] else {
             panic!("one block of output")
         };
-        assert_eq!(body.lines().count(), SHOWN_OUTPUT_LINES);
-        assert!(body.ends_with("line 39"));
+        assert_eq!(body.lines().count(), KEPT_OUTPUT_LINES);
+        assert!(body.ends_with(&format!("line {}", KEPT_OUTPUT_LINES + 49)));
+        // Folded, only the end of it is on screen; unfolded, all of it is.
+        assert!(state.entries[0].render(false, false).len() < KEPT_OUTPUT_LINES);
+        assert!(state.entries[0].render(true, false).len() > KEPT_OUTPUT_LINES);
     }
 
     /// A row on screen is a line of the conversation, and which line depends on where the
