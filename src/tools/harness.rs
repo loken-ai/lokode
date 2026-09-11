@@ -92,6 +92,13 @@ impl Harness {
         h
     }
 
+    /// A harness whose shell may write to the project and nowhere else.
+    pub fn confined() -> Self {
+        let mut h = Self::new(Answer::Yes);
+        h.ctx.shell_writable = Some(Arc::new(vec![h.root.clone()]));
+        h
+    }
+
     pub fn path(&self, rel: &str) -> PathBuf {
         self.root.join(rel)
     }

@@ -147,6 +147,11 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
   outside the project read-only for an approved command and everything it starts. Linux
   only, and off by default, because it can make a build whose cache lives elsewhere fail in
   a way that looks like a bug in the build - name those directories with `[shell] writable`.
+  A `~` there is expanded and a relative name is taken against the project: a Landlock rule
+  is attached to an open directory, so `~/.cargo` written literally was no rule at all, and
+  the cache the build was promised silently was not writable. A named directory that does
+  not exist, and a request to confine on a kernel without Landlock, are both said at startup
+  instead of surfacing as a failed command later.
 
 - `grep` no longer requires ripgrep. It is still used when present, and without it the same
   search runs on the walker `glob` already uses, honouring the same ignore files - it was an

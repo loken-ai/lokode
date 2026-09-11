@@ -258,6 +258,9 @@ pub struct ShellSection {
     ///
     /// A build wants its caches - `~/.cargo`, `~/.npm`, a temporary directory - and without
     /// them confinement is strict enough that nobody leaves it on.
+    ///
+    /// A `~` is expanded against the home directory and a relative name against the
+    /// project; see `resolve_shell_writable`, which is where that has to happen.
     #[serde(default)]
     pub writable: Vec<PathBuf>,
 }
@@ -662,6 +665,64 @@ fn sends_secret_in_clear(url: &str) -> bool {
     }
 }
 
+/// The directories a confined shell command may write to.
+///
+/// The project first, then whatever `[shell] writable` named. The named ones are expanded
+/// here rather than handed to the kernel as written: a rule is attached to an open
+/// directory, so `~/.cargo` - which is what the documentation tells people to write - opens
+/// nothing and becomes no rule at all. The command then fails on a cache it was promised,
+/// which is the confusing build breakage confinement is already accused of.
+///
+/// What cannot be resolved is reported rather than dropped, because the difference between
+/// a directory that is writable and one that is silently not is a build that works and one
+/// that does not.
+pub fn resolve_shell_writable(
+    cfg: &FileConfig,
+    root: &Path,
+    warnings: &mut Vec<String>,
+) -> Vec<PathBuf> {
+    let mut dirs = vec![root.to_path_buf()];
+    for named in &cfg.shell.writable {
+        match expand_writable(named, root) {
+            Ok(dir) => {
+                if !dir.is_dir() {
+                    warnings.push(format!(
+                        "[shell] writable {} is not a directory that exists, so a confined \
+                         command will not be able to write there",
+                        dir.display()
+                    ));
+                }
+                dirs.push(dir);
+            }
+            Err(why) => warnings.push(why),
+        }
+    }
+    dirs
+}
+
+/// `~` against the home directory, anything relative against the project.
+fn expand_writable(dir: &Path, root: &Path) -> Result<PathBuf, String> {
+    // `strip_prefix` splits on components, so this is the `~` component and not any name
+    // that merely starts with one - `~other/x` is left alone rather than guessed at.
+    let expanded = match dir.strip_prefix("~") {
+        Ok(rest) => match std::env::var_os("HOME") {
+            Some(home) => PathBuf::from(home).join(rest),
+            None => {
+                return Err(format!(
+                    "[shell] writable {} starts with ~ and HOME is not set",
+                    dir.display()
+                ))
+            }
+        },
+        Err(_) => dir.to_path_buf(),
+    };
+    Ok(if expanded.is_absolute() {
+        expanded
+    } else {
+        root.join(expanded)
+    })
+}
+
 /// Hosts allowed for `web_fetch`, from the file and the command line together.
 pub fn resolve_allow_hosts(cfg: &FileConfig, cli: Vec<String>) -> HashSet<String> {
     cfg.web
@@ -702,6 +763,63 @@ mod tests {
         assert!(hosts.contains("docs.example.com"));
         assert!(hosts.contains("localhost"));
         assert!(hosts.contains("extra.example"));
+    }
+
+    /// `~/.cargo` is what SECURITY.md tells people to write, and a rule is attached to an
+    /// open directory - so if this is not expanded the cache is silently not writable and
+    /// the build fails for a reason nothing on screen explains.
+    #[test]
+    fn a_writable_directory_written_with_a_tilde_reaches_the_home_directory() {
+        let home = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".cargo")).unwrap();
+        crate::paths::with_env(&[("HOME", home.path().to_str())], || {
+            let cfg = parse("[shell]\nwritable = [\"~/.cargo\"]\n");
+            let mut warnings = Vec::new();
+            let dirs = resolve_shell_writable(&cfg, root.path(), &mut warnings);
+            assert_eq!(
+                dirs,
+                vec![root.path().to_path_buf(), home.path().join(".cargo")]
+            );
+            assert!(warnings.is_empty(), "{warnings:?}");
+        });
+    }
+
+    /// The project is writable whether or not anything was named.
+    #[test]
+    fn the_project_is_always_writable() {
+        let root = tempdir().unwrap();
+        let mut warnings = Vec::new();
+        let dirs = resolve_shell_writable(&parse(""), root.path(), &mut warnings);
+        assert_eq!(dirs, vec![root.path().to_path_buf()]);
+    }
+
+    /// A relative name means somewhere in the project, not somewhere in the process's
+    /// working directory, which is not a thing the user was thinking about.
+    #[test]
+    fn a_relative_writable_directory_is_taken_against_the_project() {
+        let root = tempdir().unwrap();
+        std::fs::create_dir(root.path().join("build-cache")).unwrap();
+        let cfg = parse("[shell]\nwritable = [\"build-cache\"]\n");
+        let mut warnings = Vec::new();
+        let dirs = resolve_shell_writable(&cfg, root.path(), &mut warnings);
+        assert_eq!(dirs[1], root.path().join("build-cache"));
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// Being told a directory will be writable when it will not is the failure this whole
+    /// resolution exists to prevent, so it has to be said out loud.
+    #[test]
+    fn a_writable_directory_that_is_not_there_is_reported() {
+        let root = tempdir().unwrap();
+        let cfg = parse("[shell]\nwritable = [\"/no/such/cache/anywhere\"]\n");
+        let mut warnings = Vec::new();
+        resolve_shell_writable(&cfg, root.path(), &mut warnings);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("/no/such/cache/anywhere"),
+            "{warnings:?}"
+        );
     }
 
     /// A key in a file anyone can read is not a key. Failing loudly beats using it.

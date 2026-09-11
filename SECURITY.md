@@ -56,7 +56,10 @@ cannot undo. Read what this does and does not do: `rm -rf ~` stops working and
 would stop every build tool from reaching a toolchain or a cache, and a protection that makes
 the shell useless is one nobody leaves on. It is off by default for the same reason - a build
 whose cache lives outside the project will fail with it on, so name those directories under
-`[shell] writable`.
+`[shell] writable`. A `~` there means your home directory and a relative name means somewhere
+in the project; anything named that does not exist is reported at startup rather than
+quietly left unwritable. If confinement is asked for and the kernel has no Landlock, `bash`
+refuses to run rather than run unconfined.
 
 **`run_tests` runs the project's own code.** `cargo test` builds `build.rs`, `npm test` runs
 lifecycle scripts, `pytest` imports `conftest.py`. Approving it on a repository you have not

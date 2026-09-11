@@ -217,7 +217,6 @@ struct Resolved {
 }
 
 fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved> {
-    let root_for_shell = root.clone();
     let mut sources = Vec::new();
     if let Some(p) = config::user_config_path() {
         if p.exists() {
@@ -274,6 +273,18 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
     } else {
         file.session.transcripts.unwrap_or(true)
     };
+
+    // Resolved before the rest so that asking for a confinement this machine cannot give
+    // is news at startup, rather than the first command of the session failing.
+    let shell_writable = (cli.confine_shell || file.shell.confine_writes.unwrap_or(false))
+        .then(|| config::resolve_shell_writable(&file, &root, &mut warnings));
+    if shell_writable.is_some() && verve::sandbox::confine::abi().is_none() {
+        warnings.push(
+            "shell confinement was asked for and this system has no Landlock: bash will \
+             refuse to run rather than run unconfined"
+                .into(),
+        );
+    }
 
     if warnings.is_empty() && headers.iter().any(|(k, _)| k == "Authorization") {
         tracing::info!("sending an Authorization header to {backend_url}");
@@ -337,14 +348,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             } else {
                 verve::agent::agent_loop::Mode::Act
             },
-            // The project itself is always writable; the rest is what was named.
-            shell_writable: (cli.confine_shell || file.shell.confine_writes.unwrap_or(false)).then(
-                || {
-                    let mut dirs = vec![root_for_shell.clone()];
-                    dirs.extend(file.shell.writable.iter().cloned());
-                    dirs
-                },
-            ),
+            shell_writable,
         },
     })
 }

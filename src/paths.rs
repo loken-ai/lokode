@@ -39,36 +39,42 @@ pub fn log_file() -> Option<PathBuf> {
     state_dir().map(|p| p.join("verve.log"))
 }
 
+/// Guards the process-wide environment, so tests that set a variable do not race each
+/// other. One lock for the whole crate rather than one per module: `HOME` is read here and
+/// in `config`, and two locks around one environment guard nothing.
+#[cfg(test)]
+pub(crate) fn with_env<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
+    use std::sync::Mutex;
+    static LOCK: Mutex<()> = Mutex::new(());
+    let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let saved: Vec<_> = vars
+        .iter()
+        .map(|(k, _)| (*k, std::env::var_os(k)))
+        .collect();
+    for (k, v) in vars {
+        match v {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
+    }
+    // Restored even if the case panics, so one failure does not cascade into the next.
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    for (k, v) in saved {
+        match v {
+            Some(v) => std::env::set_var(k, v),
+            None => std::env::remove_var(k),
+        }
+    }
+    match out {
+        Ok(v) => v,
+        Err(p) => std::panic::resume_unwind(p),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Guards the process-wide environment these functions read, so the cases below do
-    /// not race each other.
-    fn with_env<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let saved: Vec<_> = vars
-            .iter()
-            .map(|(k, _)| (*k, std::env::var_os(k)))
-            .collect();
-        for (k, v) in vars {
-            match v {
-                Some(v) => std::env::set_var(k, v),
-                None => std::env::remove_var(k),
-            }
-        }
-        let out = f();
-        for (k, v) in saved {
-            match v {
-                Some(v) => std::env::set_var(k, v),
-                None => std::env::remove_var(k),
-            }
-        }
-        out
-    }
 
     #[test]
     fn an_absolute_xdg_value_is_used() {

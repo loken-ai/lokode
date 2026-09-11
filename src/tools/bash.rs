@@ -292,6 +292,123 @@ mod tests {
         );
     }
 
+    /// The whole claim of `--confine-shell`, stated as the thing it prevents. Building a
+    /// ruleset is tested next door; this is whether the write actually fails.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_confined_command_cannot_write_outside_the_project() {
+        if crate::sandbox::confine::abi().is_none() {
+            return;
+        }
+        let h = Harness::confined();
+        // Somewhere real, outside the root, that this user can otherwise certainly write.
+        let outside = std::env::temp_dir().join("verve-confinement-escape");
+        let _ = std::fs::remove_file(&outside);
+
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": format!("echo escaped > {}", outside.display())}),
+            )
+            .await;
+
+        // The shell ran and its redirection was refused, so this is a report of a failure
+        // rather than a refusal to run.
+        succeeded(&out);
+        assert!(
+            !outside.exists(),
+            "a confined command wrote to {}",
+            outside.display()
+        );
+        assert!(
+            !out.content.contains("exit: 0"),
+            "the command claimed to succeed: {}",
+            out.content
+        );
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    /// The control for the test above. Without it, that one would keep passing if the
+    /// command had stopped writing for some reason of its own, and a confinement test that
+    /// cannot fail is worse than none. This is also the documented default: unconfined.
+    #[tokio::test]
+    async fn an_unconfined_command_does_write_outside_the_project() {
+        let h = Harness::new(Answer::Yes);
+        let outside = std::env::temp_dir().join("verve-unconfined-control");
+        let _ = std::fs::remove_file(&outside);
+
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": format!("echo wrote > {}", outside.display())}),
+            )
+            .await;
+
+        succeeded(&out);
+        assert!(out.content.contains("exit: 0"), "{}", out.content);
+        assert!(
+            outside.exists(),
+            "the control never wrote, so the confinement test proves nothing"
+        );
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    /// The other half: confinement that also stops the project working is not usable.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_confined_command_still_writes_inside_the_project() {
+        if crate::sandbox::confine::abi().is_none() {
+            return;
+        }
+        let h = Harness::confined();
+        let out = h.run(&Bash, json!({"cmd": "echo made > inside.txt"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("exit: 0"), "{}", out.content);
+        assert_eq!(h.read("inside.txt").trim(), "made");
+    }
+
+    /// Reading is deliberately not confined, and a protection has to be described by what
+    /// it does not do as much as by what it does.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_confined_command_can_still_read_outside_the_project() {
+        if crate::sandbox::confine::abi().is_none() {
+            return;
+        }
+        let h = Harness::confined();
+        let out = h.run(&Bash, json!({"cmd": "head -n1 /etc/hostname"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("exit: 0"), "{}", out.content);
+    }
+
+    /// A child cannot hand back what its parent gave up, which is the property that makes
+    /// this worth having at all: the approved command is not the only thing that runs.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn confinement_is_inherited_by_what_the_command_starts() {
+        if crate::sandbox::confine::abi().is_none() {
+            return;
+        }
+        let h = Harness::confined();
+        let outside = std::env::temp_dir().join("verve-confinement-child-escape");
+        let _ = std::fs::remove_file(&outside);
+
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": format!("sh -c 'echo escaped > {}'", outside.display())}),
+            )
+            .await;
+
+        succeeded(&out);
+        assert!(
+            !outside.exists(),
+            "a grandchild of the confined shell wrote to {}",
+            outside.display()
+        );
+        let _ = std::fs::remove_file(&outside);
+    }
+
     #[tokio::test]
     async fn an_abandoned_turn_stops_the_command_before_it_asks() {
         let h = Harness::cancelled();
