@@ -209,6 +209,10 @@ struct UiState {
     /// Where a drag with the mouse began and where it is now, in lines of the wrapped
     /// pane. Both ends are kept because the person may drag in either direction.
     selecting: Option<(crate::ui::chat::Spot, crate::ui::chat::Spot)>,
+    /// When quitting was last asked for and not confirmed. A session holds work nobody
+    /// else has - what was said, what was changed, what can still be put back - so leaving
+    /// it is asked for twice.
+    quit_asked: Option<Instant>,
     /// Whether the button is still down: a drag that has been let go stays on screen,
     /// so it can be seen and so a second look does not have to be a second drag.
     dragging: bool,
@@ -611,6 +615,7 @@ async fn run_ui(
                 step: state.step,
                 max_steps: cfg.max_steps,
                 busy: state.busy,
+                typing: !input.is_empty(),
                 phase: if waiting {
                     Some("waiting for your answer".to_string())
                 } else {
@@ -853,12 +858,50 @@ async fn run_ui(
                     continue;
                 }
                 if let Event::Key(key) = evt {
-                    // Quit is tested before anything else can swallow the key. It used to
-                    // sit after the approval branch, which returned early - so the one
+                    // Leaving is tested before anything else can swallow the key. It used
+                    // to sit after the approval branch, which returned early - so the one
                     // screen the user most wants to escape from was the one screen where
                     // Ctrl-C did nothing.
-                    if is_quit(&key) {
-                        return Ok(());
+                    //
+                    // What Ctrl-C means depends on what is in front of it, which is what
+                    // everyone who has used a terminal expects: stop what is running,
+                    // then clear what is typed, and only on an empty line does it offer to
+                    // leave - and then only when asked twice. It used to end the session
+                    // outright, in the middle of a turn, with a change history nobody had
+                    // looked at yet.
+                    match quit_intent(&key) {
+                        Some(Quit::Now) => return Ok(()),
+                        Some(Quit::OnEmptyLine) if input.is_empty() => return Ok(()),
+                        Some(Quit::OnEmptyLine) => {}
+                        Some(Quit::Ask) => {
+                            if state.busy {
+                                if let Some(cancel) = state.turn_cancel.take() {
+                                    cancel.cancel();
+                                    state.entries.push(Entry::Notice("interrupting…".into()));
+                                }
+                            } else if !input.is_empty() {
+                                // The emptied line is the answer; saying so as well would
+                                // be narrating what is already on screen.
+                                input = fresh_input("");
+                                state.quit_asked = None;
+                            } else if state
+                                .quit_asked
+                                .is_some_and(|at| at.elapsed() < ASK_AGAIN_WITHIN)
+                            {
+                                return Ok(());
+                            } else {
+                                state.quit_asked = Some(Instant::now());
+                                state.entries.push(Entry::Notice(
+                                    "press ctrl-c again to leave, or ctrl-d".into(),
+                                ));
+                            }
+                            continue;
+                        }
+                        None => {
+                            // Any other key withdraws the offer: a person who carried on
+                            // working did not mean to leave.
+                            state.quit_asked = None;
+                        }
                     }
 
                     if state.pending_approval.is_some() {
@@ -1180,14 +1223,33 @@ async fn run_ui(
     }
 }
 
-fn is_quit(k: &KeyEvent) -> bool {
-    if k.kind != KeyEventKind::Press {
-        return false;
+/// How long an offer to leave stands before it has to be made again.
+///
+/// Long enough to be a deliberate second press, short enough that a Ctrl-C typed minutes
+/// apart is two interruptions rather than an exit.
+const ASK_AGAIN_WITHIN: Duration = Duration::from_secs(3);
+
+/// What a key says about leaving.
+enum Quit {
+    /// Stop what is running, clear what is typed, or offer to leave - in that order,
+    /// because that is the order of what is in front of the person.
+    Ask,
+    /// The end-of-input key: on an empty line it means what it has always meant.
+    OnEmptyLine,
+    /// Asked for in a way that leaves no doubt.
+    Now,
+}
+
+fn quit_intent(k: &KeyEvent) -> Option<Quit> {
+    if k.kind != KeyEventKind::Press || !k.modifiers.contains(KeyModifiers::CONTROL) {
+        return None;
     }
-    matches!(
-        (k.code, k.modifiers),
-        (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), KeyModifiers::CONTROL)
-    )
+    match k.code {
+        KeyCode::Char('c') => Some(Quit::Ask),
+        KeyCode::Char('d') => Some(Quit::OnEmptyLine),
+        KeyCode::Char('q') => Some(Quit::Now),
+        _ => None,
+    }
 }
 
 /// Put the conversation where a person can take it: on the terminal's clipboard, and in a
@@ -1877,11 +1939,20 @@ mod tests {
         assert_eq!(s.history.len(), 1);
     }
 
+    /// What each of the leaving keys means, and what an ordinary key does not mean.
+    ///
+    /// Ctrl-C asks rather than ends: it used to end a session outright, in the middle of a
+    /// turn, taking with it a change history nobody had looked at. Ctrl-D is the
+    /// end-of-input key and means what it means everywhere, on an empty line. Ctrl-Q is
+    /// the one that leaves no doubt.
     #[test]
-    fn quit_is_recognised() {
-        assert!(is_quit(&ctrl('c')));
-        assert!(is_quit(&ctrl('q')));
-        assert!(!is_quit(&press(KeyCode::Char('c'))));
+    fn the_keys_that_leave_are_told_apart() {
+        assert!(matches!(quit_intent(&ctrl('c')), Some(Quit::Ask)));
+        assert!(matches!(quit_intent(&ctrl('d')), Some(Quit::OnEmptyLine)));
+        assert!(matches!(quit_intent(&ctrl('q')), Some(Quit::Now)));
+        // A letter is a letter.
+        assert!(quit_intent(&press(KeyCode::Char('c'))).is_none());
+        assert!(quit_intent(&press(KeyCode::Char('d'))).is_none());
         assert_eq!(approval_key(&ctrl('c')), None);
     }
 }

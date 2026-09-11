@@ -22,6 +22,8 @@ pub struct Status {
     pub step: usize,
     pub max_steps: usize,
     pub busy: bool,
+    /// Whether there is something in the input, which changes what leaving means.
+    pub typing: bool,
     /// What the turn is doing, when it is doing something that prints nothing.
     pub phase: Option<String>,
     /// How long it has been in that phase.
@@ -156,7 +158,17 @@ impl Status {
             spans.extend(key("/copy", "take it"));
             spans.extend(key("/help", "more"));
         }
-        spans.extend(key("ctrl-c", "quit"));
+        // What the key does here, which is not the same thing twice: a turn in flight is
+        // stopped, a line being typed is cleared, and only an empty line is offered the
+        // way out. A hint that said "quit" throughout was wrong two thirds of the time.
+        spans.extend(key(
+            "ctrl-c",
+            match (self.busy, self.typing) {
+                (true, _) => "stop",
+                (false, true) => "clear",
+                (false, false) => "leave",
+            },
+        ));
         Line::from(spans)
     }
 }
@@ -171,6 +183,7 @@ mod tests {
             root: "/p".into(),
             planning: false,
             pointing: false,
+            typing: false,
             context_percent: 40,
             step: 2,
             max_steps: 16,
