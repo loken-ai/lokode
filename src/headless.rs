@@ -106,6 +106,7 @@ pub async fn run(
         protocol,
         checkpoint_error,
         mut mcp,
+        instruction_notes,
         ..
     } = boot::boot(&cfg).await?;
 
@@ -172,6 +173,18 @@ pub async fn run(
         ok: true,
     };
     let text_output = format == OutputFormat::Text;
+
+    // What settling the session decided: which window the backend offers, where the
+    // standing instructions came from, what was capped. The interface shows these and a
+    // headless run dropped them, so a caller had no way to learn that its window had been
+    // settled at something other than what it asked for.
+    for notice in &instruction_notes {
+        tracing::info!(%notice, "settled");
+        if text_output {
+            eprintln!("· {notice}");
+        }
+        report.notices.push(notice.clone());
+    }
 
     // Said before the turn rather than after it: a tool server that would not start, or a
     // tool that was refused, explains what the model then failed to do. It belongs in the
