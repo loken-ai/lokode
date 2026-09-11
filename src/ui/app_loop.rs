@@ -33,6 +33,9 @@ use crate::ui::term;
 /// the exit before the process leaves anyway.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
+/// How much of a running tool's output is kept on screen while it runs.
+const SHOWN_OUTPUT_LINES: usize = 12;
+
 /// One user turn handed to the agent, with the handle that abandons it.
 ///
 /// The token is minted by the UI rather than the agent, because the side that has to
@@ -471,6 +474,76 @@ impl UiState {
         }
     }
 
+    /// Where the answer now being written sits, if one is.
+    ///
+    /// Searched for rather than assumed to be last. What arrives while a model writes is
+    /// not only its own words: a notice, a line from a tool still running, a budget that
+    /// moved. An answer with one of those under it is still the answer being written.
+    fn answer_being_written(&self) -> Option<usize> {
+        self.entries
+            .iter()
+            .rposition(|e| matches!(e, Entry::AssistantStreaming(_)))
+    }
+
+    /// Where the running output of `tool` sits, if it is on screen.
+    fn output_being_printed(&self, tool: &str) -> Option<usize> {
+        self.entries
+            .iter()
+            .rposition(|e| matches!(e, Entry::ToolOutput { name, .. } if name == tool))
+    }
+
+    /// Add a piece of the answer to the one entry it is being written into.
+    fn write_answer(&mut self, chunk: String) {
+        match self.answer_being_written() {
+            Some(at) => match &mut self.entries[at] {
+                Entry::AssistantStreaming(s) => s.push_str(&chunk),
+                _ => unreachable!("answer_being_written names an answer"),
+            },
+            None => self.entries.push(Entry::AssistantStreaming(chunk)),
+        }
+    }
+
+    /// Settle the answer in the place it was written, rather than at the end.
+    ///
+    /// The finished text used to be appended whenever anything had arrived under the
+    /// stream, leaving the half that had streamed above it and the whole of it again
+    /// below: the same answer twice, on every turn the session had something to say.
+    fn finish_answer(&mut self, text: String) {
+        match (self.answer_being_written(), text.trim().is_empty()) {
+            (Some(at), false) => self.entries[at] = Entry::Assistant(text),
+            (Some(at), true) => {
+                self.entries.remove(at);
+            }
+            (None, false) => self.entries.push(Entry::Assistant(text)),
+            (None, true) => {}
+        }
+    }
+
+    /// Add a line a tool just printed to the block it is printing into.
+    ///
+    /// One entry that grows rather than a line each: a build's output is one thing
+    /// happening, and a hundred entries would push the answer it belongs to off screen.
+    fn print_line(&mut self, tool: String, line: &str) {
+        let Some(at) = self.output_being_printed(&tool) else {
+            self.entries.push(Entry::ToolOutput {
+                name: tool,
+                body: line.to_string(),
+            });
+            return;
+        };
+        let Entry::ToolOutput { body, .. } = &mut self.entries[at] else {
+            unreachable!("output_being_printed names an output")
+        };
+        body.push('\n');
+        body.push_str(line);
+        // Only the tail is kept: the whole of it reaches the model in the result, and
+        // what a person wants while it runs is where it is now.
+        let lines: Vec<&str> = body.lines().collect();
+        if lines.len() > SHOWN_OUTPUT_LINES {
+            *body = lines[lines.len() - SHOWN_OUTPUT_LINES..].join("\n");
+        }
+    }
+
     /// Accumulate a piece of the model's scratchpad into one entry.
     fn push_reasoning(&mut self, chunk: &str) {
         match self.entries.last_mut() {
@@ -830,22 +903,7 @@ async fn run_ui(
                 // Kept as one entry that grows rather than a line each: a build's output
                 // is one thing happening, and a hundred entries would push the answer it
                 // belongs to off the screen.
-                match state.entries.last_mut() {
-                    Some(Entry::ToolOutput { name, body }) if *name == printed.tool => {
-                        body.push('\n');
-                        body.push_str(&printed.line);
-                        // Only the tail is kept: the whole of it reaches the model in the
-                        // result, and what a person wants while it runs is where it is now.
-                        let lines: Vec<&str> = body.lines().collect();
-                        if lines.len() > 12 {
-                            *body = lines[lines.len() - 12..].join("\n");
-                        }
-                    }
-                    _ => state.entries.push(Entry::ToolOutput {
-                        name: printed.tool,
-                        body: printed.line,
-                    }),
-                }
+                state.print_line(printed.tool, &printed.line);
             }
 
             Some(learned) = learn_rx.recv() => {
@@ -867,20 +925,8 @@ async fn run_ui(
                         state.phase_since = Some(Instant::now());
                     }
                     AgentEvent::Reasoning(p) => state.push_reasoning(&p),
-                    AgentEvent::AssistantDelta(chunk) => {
-                        match state.entries.last_mut() {
-                            Some(Entry::AssistantStreaming(s)) => s.push_str(&chunk),
-                            _ => state.entries.push(Entry::AssistantStreaming(chunk)),
-                        }
-                    }
-                    AgentEvent::AssistantText(s) => {
-                        if let Some(Entry::AssistantStreaming(_)) = state.entries.last() {
-                            state.entries.pop();
-                        }
-                        if !s.trim().is_empty() {
-                            state.entries.push(Entry::Assistant(s));
-                        }
-                    }
+                    AgentEvent::AssistantDelta(chunk) => state.write_answer(chunk),
+                    AgentEvent::AssistantText(s) => state.finish_answer(s),
                     AgentEvent::ToolCall { name, args_pretty } => {
                         state.step += 1;
                         state.entries.push(Entry::ToolCall { name, args: args_pretty });
@@ -888,11 +934,8 @@ async fn run_ui(
                     AgentEvent::ToolResult { name, output } => {
                         // The tail was what it was printing; the result is what it
                         // printed. Keeping both would show the same lines twice.
-                        if matches!(
-                            state.entries.last(),
-                            Some(Entry::ToolOutput { name: running, .. }) if *running == name
-                        ) {
-                            state.entries.pop();
+                        if let Some(at) = state.output_being_printed(&name) {
+                            state.entries.remove(at);
                         }
                         // The list is the model's, so it is read back after the call that
                         // may have changed it rather than kept in step by hand.
@@ -2283,6 +2326,88 @@ fn approval_key(k: &KeyEvent) -> Option<ApprovalDecision> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// An answer settles where it was written, however much arrived under it.
+    ///
+    /// The reported defect: the session said "context budget now 440055 chars" between
+    /// the last piece of an answer and the finished text, and the whole answer was shown
+    /// twice - once as it had streamed, once again below the notice.
+    #[test]
+    fn an_answer_interrupted_by_a_notice_is_still_shown_once() {
+        let mut state = UiState::default();
+        state.write_answer("the first half ".into());
+        state.write_answer("and the second".into());
+        state
+            .entries
+            .push(Entry::Notice("context budget now".into()));
+        state.finish_answer("the first half and the second".into());
+
+        assert_eq!(state.entries.len(), 2);
+        assert!(
+            matches!(&state.entries[0], Entry::Assistant(s) if s == "the first half and the second")
+        );
+        assert!(matches!(&state.entries[1], Entry::Notice(_)));
+    }
+
+    /// A second answer in the same turn is its own entry, not an addition to the first.
+    #[test]
+    fn each_answer_of_a_turn_is_its_own() {
+        let mut state = UiState::default();
+        state.write_answer("first".into());
+        state.finish_answer("first".into());
+        state.write_answer("second".into());
+        state.finish_answer("second".into());
+        assert_eq!(state.entries.len(), 2);
+        assert!(matches!(&state.entries[1], Entry::Assistant(s) if s == "second"));
+    }
+
+    /// An answer that turns out to be empty leaves nothing behind, wherever it sat.
+    #[test]
+    fn an_answer_that_came_to_nothing_is_taken_away() {
+        let mut state = UiState::default();
+        state.write_answer("  ".into());
+        state
+            .entries
+            .push(Entry::Notice("something happened".into()));
+        state.finish_answer("  ".into());
+        assert_eq!(state.entries.len(), 1);
+        assert!(matches!(&state.entries[0], Entry::Notice(_)));
+    }
+
+    /// What a tool printed while it ran is replaced by what it printed, not kept beside
+    /// it, even when a notice arrived in between.
+    #[test]
+    fn the_running_output_of_a_tool_is_found_under_what_interrupted_it() {
+        let mut state = UiState::default();
+        state.print_line("shell".into(), "compiling");
+        state
+            .entries
+            .push(Entry::Notice("context budget now".into()));
+        state.print_line("shell".into(), "linking");
+        assert_eq!(state.entries.len(), 2);
+        assert!(matches!(
+            &state.entries[0],
+            Entry::ToolOutput { body, .. } if body == "compiling\nlinking"
+        ));
+        assert_eq!(state.output_being_printed("shell"), Some(0));
+        assert_eq!(state.output_being_printed("read_file"), None);
+    }
+
+    /// Only the tail of a long run stays on screen.
+    #[test]
+    fn a_tool_that_prints_for_minutes_keeps_only_its_tail() {
+        let mut state = UiState::default();
+        for i in 0..40 {
+            state.print_line("shell".into(), &format!("line {i}"));
+        }
+        let Entry::ToolOutput { body, .. } = &state.entries[0] else {
+            panic!("one block of output")
+        };
+        assert_eq!(body.lines().count(), SHOWN_OUTPUT_LINES);
+        assert!(body.ends_with("line 39"));
+    }
+
     /// A row on screen is a line of the conversation, and which line depends on where the
     /// pane has been scrolled to.
     ///
@@ -2338,8 +2463,6 @@ mod tests {
         state.selecting = Some((crate::ui::chat::Spot { line: 0, column: 0 }, spot));
         assert_eq!(state.selection_text().as_deref(), Some("some"));
     }
-
-    use super::*;
 
     fn press(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
