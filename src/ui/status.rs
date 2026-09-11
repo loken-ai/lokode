@@ -24,6 +24,8 @@ pub struct Status {
     pub busy: bool,
     /// Whether there is something in the input, which changes what leaving means.
     pub typing: bool,
+    /// Whether something is selected in the pane, which puts taking it on the line.
+    pub selected: bool,
     /// Whether writes are going through unasked. A third setting beside planning and
     /// acting, and the one a person most needs reminding they are in.
     pub accepting_writes: bool,
@@ -170,6 +172,12 @@ impl Status {
             ]
         };
         let mut spans = Vec::new();
+        // First while it is there: what to do with a selection is the question the person
+        // has just now, and the keys behind it are the ones they always have.
+        if self.selected {
+            spans.extend(key("ctrl-y", "take it"));
+            spans.extend(key("esc", "let go"));
+        }
         spans.extend(key(
             "shift-tab",
             match (self.planning, self.accepting_writes) {
@@ -242,6 +250,7 @@ mod tests {
             planning: false,
             pointing: false,
             typing: false,
+            selected: false,
             accepting_writes: false,
             context_percent: 40,
             step: 2,

@@ -228,6 +228,9 @@ struct UiState {
     /// When Esc was last pressed with nothing for it to do. Pressed twice it takes the
     /// last question back, which is the shortcut for the commonest correction there is.
     esc_at: Option<Instant>,
+    /// Which edge a drag is being held past, if any: the pane scrolls that way for as
+    /// long as it is, because a terminal reports a moving pointer and not a still one.
+    drag_edge: Option<i8>,
     /// Whether the button is still down: a drag that has been let go stays on screen,
     /// so it can be seen and so a second look does not have to be a second drag.
     dragging: bool,
@@ -391,6 +394,39 @@ impl UiState {
         let height = self.pane.height as usize;
         let end = self.content_lines.saturating_sub(self.scroll as usize);
         end.saturating_sub(height)
+    }
+
+    /// Keep scrolling while a drag is held past an edge, and take the selection with it.
+    ///
+    /// A terminal reports a pointer that moves. Held still outside the pane it says
+    /// nothing more, so without this a selection stopped growing the moment the person
+    /// stopped moving - which is exactly when they were waiting for it to catch up.
+    fn follow_the_drag(&mut self) {
+        let Some(edge) = self.drag_edge else { return };
+        let Some((from, _)) = self.selecting else {
+            return;
+        };
+        match edge {
+            -1 => self.scroll_back(1),
+            _ => self.scroll_forward(1),
+        }
+        // The far end goes to the line now at that edge, so what is highlighted is what
+        // has been dragged over.
+        let first = self.first_visible();
+        let line = match edge {
+            -1 => first,
+            _ => (first + self.pane.height.saturating_sub(1) as usize)
+                .min(self.wrapped.len().saturating_sub(1)),
+        };
+        let column = match edge {
+            -1 => 0,
+            _ => self
+                .wrapped
+                .get(line)
+                .map(crate::ui::chat::line_width)
+                .unwrap_or(0),
+        };
+        self.selecting = Some((from, crate::ui::chat::Spot { line, column }));
     }
 
     /// What the selection holds, or nothing when it is empty.
@@ -705,6 +741,7 @@ async fn run_ui(
                 busy: state.busy,
                 typing: !input.is_empty(),
                 accepting_writes: state.accepting_writes,
+                selected: state.selecting.is_some(),
                 phase: if waiting {
                     Some("waiting for your answer".to_string())
                 } else {
@@ -756,7 +793,7 @@ async fn run_ui(
         // event - a keystroke, a resize, a piece of the answer, an approval - and this arm
         // is a branch that never completes, so nothing wakes the loop.
         let tick = async {
-            if state.busy {
+            if state.busy || state.drag_edge.is_some() {
                 tokio::time::sleep(Duration::from_millis(120)).await;
             } else {
                 std::future::pending::<()>().await;
@@ -767,6 +804,7 @@ async fn run_ui(
 
             _ = tick => {
                 state.tick = state.tick.wrapping_add(1);
+                state.follow_the_drag();
             }
 
             Some(prompt) = approval_rx.recv() => {
@@ -944,22 +982,26 @@ async fn run_ui(
                                 let to = state.spot_at_clamped(mouse.column, mouse.row);
                                 state.selecting = Some((from, to));
                             }
+                            // Dragged past an edge, the pane follows. Without it a
+                            // selection could never be longer than the window it is made
+                            // in, which is exactly when taking a copy is worth the
+                            // trouble.
+                            state.drag_edge = if mouse.row < state.pane.y {
+                                Some(-1)
+                            } else if mouse.row >= state.pane.y + state.pane.height {
+                                Some(1)
+                            } else {
+                                None
+                            };
                         }
+                        // Letting go ends the drag and leaves the selection where it
+                        // is. Taking it is a separate act: copying the moment a button
+                        // comes up replaces whatever was on the clipboard before, which
+                        // nobody asked for and which is noticed only once something
+                        // wanted is gone.
                         MouseEventKind::Up(MouseButton::Left) if state.dragging => {
                             state.dragging = false;
-                            if let Some(text) = state.selection_text() {
-                                let said = match crate::ui::clipboard::put(&text) {
-                                    Ok(()) => format!(
-                                        "{} line(s) copied",
-                                        text.lines().count()
-                                    ),
-                                    // A terminal that ignores the sequence says so to
-                                    // nobody, so this does.
-                                    Err(e) => format!("could not reach the clipboard: {e}"),
-                                };
-                                state.entries.push(Entry::Notice(said));
-                                state.scroll = 0;
-                            }
+                            state.drag_edge = None;
                         }
                         _ => {}
                     }
@@ -1217,6 +1259,12 @@ async fn run_ui(
                             // thing left for Esc to mean is the line being typed. It did
                             // nothing at all there, which is a key that works everywhere
                             // except where it was pressed.
+                            // A selection let go of, which is the first thing Esc should
+                            // reach while one is on screen.
+                            KeyCode::Esc if state.selecting.is_some() => {
+                                state.selecting = None;
+                                continue;
+                            }
                             KeyCode::Esc if !state.busy && !input.is_empty() => {
                                 input = fresh_input("");
                                 state.esc_at = None;
@@ -1506,6 +1554,27 @@ async fn run_ui(
                             }
                             _ => {}
                         }
+                    }
+                    // Taking what is selected, when the person says so. The terminal's
+                    // own copy key never reaches a program, so a pane that does its own
+                    // selecting has to offer its own way to take it.
+                    if key.code == KeyCode::Char('y') && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        match state.selection_text() {
+                            Some(text) => {
+                                let said = match crate::ui::clipboard::put(&text) {
+                                    Ok(()) => format!("{} line(s) taken", text.lines().count()),
+                                    // A terminal that ignores the sequence says so to
+                                    // nobody, so this does.
+                                    Err(e) => format!("could not reach the clipboard: {e}"),
+                                };
+                                state.entries.push(Entry::Notice(said));
+                            }
+                            None => state
+                                .entries
+                                .push(Entry::Notice("nothing is selected".into())),
+                        }
+                        continue;
                     }
                     // A long instruction written where writing is comfortable. The line
                     // grows to a few rows and then scrolls, which is right for a sentence
