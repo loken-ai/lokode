@@ -213,6 +213,9 @@ struct UiState {
     /// else has - what was said, what was changed, what can still be put back - so leaving
     /// it is asked for twice.
     quit_asked: Option<Instant>,
+    /// When Esc was last pressed with nothing for it to do. Pressed twice it takes the
+    /// last question back, which is the shortcut for the commonest correction there is.
+    esc_at: Option<Instant>,
     /// Whether the button is still down: a drag that has been let go stays on screen,
     /// so it can be seen and so a second look does not have to be a second drag.
     dragging: bool,
@@ -1071,6 +1074,37 @@ async fn run_ui(
                             // except where it was pressed.
                             KeyCode::Esc if !state.busy && !input.is_empty() => {
                                 input = fresh_input("");
+                                state.esc_at = None;
+                                continue;
+                            }
+                            // Twice over, on a line with nothing on it: the last question
+                            // comes back to be asked differently. Pointing at it and
+                            // pressing enter does the same thing to any question; this is
+                            // the one everybody wants, on the key the habit is already on.
+                            KeyCode::Esc if !state.busy => {
+                                if state
+                                    .esc_at
+                                    .is_some_and(|at| at.elapsed() < ASK_AGAIN_WITHIN)
+                                {
+                                    state.esc_at = None;
+                                    match take_back(&control_tx).await {
+                                        Some(text) => {
+                                            let at = state
+                                                .entries
+                                                .iter()
+                                                .rposition(|e| matches!(e, Entry::User(_)));
+                                            if let Some(at) = at {
+                                                state.entries.truncate(at);
+                                            }
+                                            input = fresh_input(&text);
+                                        }
+                                        None => state.entries.push(Entry::Notice(
+                                            "nothing has been asked yet".into(),
+                                        )),
+                                    }
+                                } else {
+                                    state.esc_at = Some(Instant::now());
+                                }
                                 continue;
                             }
                             KeyCode::Esc if state.busy => {
@@ -1088,6 +1122,40 @@ async fn run_ui(
                             }
                             KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
                                 state.point_forward();
+                                continue;
+                            }
+                            // A question taken back to be asked differently. Getting a
+                            // word wrong is the commonest way a turn goes astray, and the
+                            // only answer to it was to ask again from scratch and leave
+                            // the failed attempt in the window for the model to read.
+                            //
+                            // What follows it leaves the conversation, so the next attempt
+                            // starts where the first one did rather than after it.
+                            KeyCode::Enter
+                                if !state.busy
+                                    && state
+                                        .at_entry
+                                        .is_some_and(|i| matches!(state.entries.get(i), Some(Entry::User(_)))) =>
+                            {
+                                let at = state.at_entry.expect("checked just above");
+                                let later = state.entries[at..]
+                                    .iter()
+                                    .filter(|e| matches!(e, Entry::User(_)))
+                                    .count();
+                                let mut taken = None;
+                                for _ in 0..later {
+                                    taken = take_back(&control_tx).await;
+                                }
+                                match taken {
+                                    Some(text) => {
+                                        state.entries.truncate(at);
+                                        state.at_entry = None;
+                                        input = fresh_input(&text);
+                                    }
+                                    None => state.entries.push(Entry::Notice(
+                                        "that question is no longer in the conversation".into(),
+                                    )),
+                                }
                                 continue;
                             }
                             // What was counted, shown whole, and back again.
@@ -1318,6 +1386,23 @@ fn quit_intent(k: &KeyEvent) -> Option<Quit> {
         KeyCode::Char('q') => Some(Quit::Now),
         _ => None,
     }
+}
+
+/// Take the last question out of the conversation and give it back as text.
+///
+/// The conversation is rewound past it, so what the agent did in answer leaves with it: a
+/// second attempt that can still see the first one is a model reading its own failure
+/// while it tries again.
+async fn take_back(control: &mpsc::Sender<crate::agent::agent_loop::Control>) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    control
+        .send(crate::agent::agent_loop::Control::Retry {
+            model: None,
+            reply: tx,
+        })
+        .await
+        .ok()?;
+    rx.await.ok()?.ok()
 }
 
 /// Run one command the person typed, and give back what it said.
