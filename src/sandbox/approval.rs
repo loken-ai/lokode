@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 /// What an `Always` answer covers for the rest of the session.
@@ -135,6 +137,12 @@ pub fn channel() -> (ApprovalSender, ApprovalReceiver) {
 #[derive(Default, Debug)]
 pub struct SessionApprovals {
     always: Mutex<HashSet<ApprovalScope>>,
+    /// Whether writes go ahead without being asked about, for as long as it is set.
+    ///
+    /// Writes and nothing else. A shell command and a request leaving the machine are the
+    /// two things a person most wants to see before they happen, and a mode meant to stop
+    /// the interruptions of a long editing run must not quietly cover them as well.
+    writes: AtomicBool,
 }
 
 impl SessionApprovals {
@@ -148,6 +156,16 @@ impl SessionApprovals {
 
     pub async fn mark_always(&self, scope: ApprovalScope) {
         self.always.lock().await.insert(scope);
+    }
+
+    /// Let writes go ahead unasked, or stop doing so.
+    pub fn accept_writes(&self, on: bool) {
+        self.writes.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether this scope is covered by that standing decision.
+    pub fn writes_accepted(&self, scope: &ApprovalScope) -> bool {
+        matches!(scope, ApprovalScope::Path { .. }) && self.writes.load(Ordering::Relaxed)
     }
 }
 

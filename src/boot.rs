@@ -44,6 +44,9 @@ pub struct Booted {
     /// How many messages came back from a resumed session.
     pub restored: usize,
     /// The change history, if one could be opened.
+    /// What has been agreed to for this session, so the interface can set a standing
+    /// decision as well as the prompt.
+    pub session_approvals: Arc<SessionApprovals>,
     pub checkpoints: Option<Arc<Checkpoints>>,
     /// Why there is no history, when there is not one.
     pub checkpoint_error: Option<String>,
@@ -85,6 +88,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // Small on purpose: what a screen cannot keep up with is dropped rather than queued,
     // because a line that arrives late is worth less than the build finishing on time.
     let (live_tx, live_rx) = tokio::sync::mpsc::channel(64);
+    let session_approvals = Arc::new(SessionApprovals::new());
     let mut ctx = ToolCtx {
         policy: Arc::new(cfg.policy.clone()),
         auto_used: auto_used.clone(),
@@ -94,7 +98,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         live: (!cfg.headless).then(|| live_tx.clone()),
         root: cfg.root.clone(),
         approval: approval_tx,
-        session_approvals: Arc::new(SessionApprovals::new()),
+        session_approvals: session_approvals.clone(),
         max_output_chars: crate::agent::session::tool_output_chars(
             cfg.context_tokens,
             cfg.max_answer_tokens,
@@ -437,6 +441,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // given the same tools, this one included - a delegated turn that delegates again is
     // bounded by its own step limit.
     Ok(Booted {
+        session_approvals,
         protocol_cell,
         agent,
         lsp,

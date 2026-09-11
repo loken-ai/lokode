@@ -24,6 +24,9 @@ pub struct Status {
     pub busy: bool,
     /// Whether there is something in the input, which changes what leaving means.
     pub typing: bool,
+    /// Whether writes are going through unasked. A third setting beside planning and
+    /// acting, and the one a person most needs reminding they are in.
+    pub accepting_writes: bool,
     /// What the turn is doing, when it is doing something that prints nothing.
     pub phase: Option<String>,
     /// How long it has been in that phase.
@@ -69,18 +72,18 @@ impl Status {
                 Color::DarkGray
             }),
         ));
+        let (badge, colour) = match (self.planning, self.accepting_writes) {
+            (true, _) => (" PLAN ", Color::Cyan),
+            // Loudest of the three, because it is the one where things happen without
+            // being shown first.
+            (false, true) => (" WRITE", Color::Yellow),
+            (false, false) => (" ACT  ", Color::Green),
+        };
         spans.push(Span::styled(
-            match self.planning {
-                true => " PLAN ",
-                false => " ACT  ",
-            },
+            badge,
             Style::default()
                 .fg(Color::Black)
-                .bg(if self.planning {
-                    Color::Cyan
-                } else {
-                    Color::Green
-                })
+                .bg(colour)
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::raw("  "));
@@ -140,9 +143,10 @@ impl Status {
         let mut spans = Vec::new();
         spans.extend(key(
             "shift-tab",
-            match self.planning {
-                true => "act",
-                false => "plan",
+            match (self.planning, self.accepting_writes) {
+                (true, _) => "act",
+                (false, false) => "write",
+                (false, true) => "plan",
             },
         ));
         if self.busy {
@@ -184,6 +188,7 @@ mod tests {
             planning: false,
             pointing: false,
             typing: false,
+            accepting_writes: false,
             context_percent: 40,
             step: 2,
             max_steps: 16,

@@ -44,6 +44,7 @@ struct TurnRequest {
 
 pub async fn run(cfg: AppConfig) -> Result<()> {
     let boot::Booted {
+        session_approvals,
         mut agent,
         lsp,
         mut approval_rx,
@@ -158,6 +159,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         &mut live,
         mcp.clients.clone(),
         mcp_summary,
+        session_approvals,
         &mut agent_evt_rx,
         &mut approval_rx,
     )
@@ -213,6 +215,8 @@ struct UiState {
     /// else has - what was said, what was changed, what can still be put back - so leaving
     /// it is asked for twice.
     quit_asked: Option<Instant>,
+    /// Whether writes go ahead unasked, for this stretch of work.
+    accepting_writes: bool,
     /// When Esc was last pressed with nothing for it to do. Pressed twice it takes the
     /// last question back, which is the shortcut for the commonest correction there is.
     esc_at: Option<Instant>,
@@ -461,6 +465,9 @@ async fn run_ui(
     // them and still shuts them down.
     mcp: Vec<std::sync::Arc<crate::mcp::client::McpClient>>,
     mcp_summary: String,
+    // What has been agreed to for this session, so a standing decision can be taken from
+    // the keyboard as well as at the prompt.
+    session_approvals: std::sync::Arc<crate::sandbox::approval::SessionApprovals>,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
 ) -> Result<()> {
@@ -619,6 +626,7 @@ async fn run_ui(
                 max_steps: cfg.max_steps,
                 busy: state.busy,
                 typing: !input.is_empty(),
+                accepting_writes: state.accepting_writes,
                 phase: if waiting {
                     Some("waiting for your answer".to_string())
                 } else {
@@ -1042,6 +1050,27 @@ async fn run_ui(
                             // The one setting a person changes several times an hour, on
                             // the key every agent puts it on. A command for it exists and
                             // nobody finds a command they have to read about first.
+                            //
+                            // Three settings rather than two: reading without changing
+                            // anything, changing with every change shown first, and a
+                            // stretch of editing where the changes go through. The third
+                            // was only reachable by writing a file or by answering the
+                            // prompt over and over, which is the thing it exists to stop.
+                            KeyCode::BackTab | KeyCode::Tab
+                                if key.modifiers.contains(KeyModifiers::SHIFT)
+                                    && !state.busy
+                                    && !state.planning
+                                    && !state.accepting_writes =>
+                            {
+                                state.accepting_writes = true;
+                                session_approvals.accept_writes(true);
+                                state.entries.push(Entry::Notice(
+                                    "writing without asking: changes go through, commands \
+                                     and anything leaving the machine are still asked about"
+                                        .into(),
+                                ));
+                                continue;
+                            }
                             KeyCode::BackTab
                             | KeyCode::Tab
                                 if key.modifiers.contains(KeyModifiers::SHIFT)
@@ -1066,6 +1095,11 @@ async fn run_ui(
                                     state.planning = !state.planning;
                                     state.entries.push(Entry::Notice(text));
                                 }
+                                // Leaving the stretch of editing, whichever way the toggle
+                                // went: a standing decision that outlived the work it was
+                                // taken for is a decision nobody remembers taking.
+                                state.accepting_writes = false;
+                                session_approvals.accept_writes(false);
                                 continue;
                             }
                             // Nothing to interrupt, nothing open, not pointing: the one

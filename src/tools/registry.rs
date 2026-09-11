@@ -158,6 +158,13 @@ impl ToolCtx {
             crate::sandbox::policy::Verdict::Allowed => {}
             crate::sandbox::policy::Verdict::Ask => {}
         }
+        // A standing decision for writes, taken deliberately for a stretch of work. It
+        // covers writes and nothing else: a command and a request leaving the machine stay
+        // asked about, because those are the two a person most wants to see coming.
+        if self.session_approvals.writes_accepted(&req.scope) {
+            tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by accepting writes");
+            return Approval::Proceed;
+        }
         if self.session_approvals.is_always(&req.scope).await {
             tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by an earlier agreement");
             return Approval::Proceed;
