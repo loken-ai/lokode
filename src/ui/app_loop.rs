@@ -1507,6 +1507,24 @@ async fn run_ui(
                             _ => {}
                         }
                     }
+                    // A long instruction written where writing is comfortable. The line
+                    // grows to a few rows and then scrolls, which is right for a sentence
+                    // and wrong for a specification: the editor a person already knows is
+                    // a better place to write thirty lines than a box six rows tall.
+                    if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        let carried = input.lines().join("\n");
+                        match write_elsewhere(term, &carried).await {
+                            Ok(Some(text)) => input = fresh_input(&text),
+                            // Left empty or unchanged: the editor was opened and thought
+                            // better of, which is not a failure to report.
+                            Ok(None) => {}
+                            Err(e) => state
+                                .entries
+                                .push(Entry::Notice(format!("could not open an editor: {e}"))),
+                        }
+                        continue;
+                    }
                     if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         state.finding = Some((String::new(), 0));
@@ -1562,6 +1580,42 @@ fn quit_intent(k: &KeyEvent) -> Option<Quit> {
         KeyCode::Char('q') => Some(Quit::Now),
         _ => None,
     }
+}
+
+/// Hand the line being typed to the editor named by the environment, and take back what
+/// comes out.
+///
+/// The terminal is given up for as long as it runs and taken again afterwards, because two
+/// programs drawing on one screen is one program's output. `None` when nothing came back
+/// that was worth taking: an editor closed without saving has said no.
+async fn write_elsewhere(
+    term: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    carried: &str,
+) -> Result<Option<String>> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let path = std::env::temp_dir().join(format!("verve-{}.md", std::process::id()));
+    std::fs::write(&path, carried)?;
+
+    crate::ui::term::restore();
+    let ran = tokio::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$1\""))
+        .arg("sh")
+        .arg(&path)
+        .status()
+        .await;
+    // Taken back whatever the editor did, including failing to start: the alternative is a
+    // terminal in the state an editor left it and an interface drawing into it.
+    let _ = crate::ui::term::TerminalGuard::new();
+    let _ = term.clear();
+    ran?;
+
+    let written = std::fs::read_to_string(&path).unwrap_or_default();
+    let _ = std::fs::remove_file(&path);
+    let written = written.trim_end_matches('\n').to_string();
+    Ok((written != carried && !written.trim().is_empty()).then_some(written))
 }
 
 /// Add one rule to what this project tells the agent, and say where it went.

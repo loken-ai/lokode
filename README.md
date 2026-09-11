@@ -115,18 +115,26 @@ stated.
 
 | Key | |
 |---|---|
-| `Shift-Tab` | plan and act, the one setting you change several times an hour |
-| `Enter` | send, or take what the list offers while it is open |
+| `Shift-Tab` | act, write without asking, plan - the setting you change several times an hour |
+| `Enter` | send, take what the list offers, or bring back the question you are pointing at |
 | `Tab` | take what the list offers |
 | `Shift-Enter` | newline |
-| `Esc` | interrupt the running turn, close a list or a page, stop pointing |
+| `Esc` | interrupt the turn, close a list, clear the line; twice, bring back the last question |
 | `Alt-Up` / `Alt-Down` | move between the steps of the session |
 | `Space` | open a block that was counted, while pointing at it |
+| `Ctrl-F` | find something said earlier; enter walks the matches |
+| `Ctrl-G` | write the prompt in `$EDITOR` and bring it back |
 | `y` / `a` / `n` | answer a change: once, always in the stated scope, no |
 | `Enter` while it works | hand the line to the turn in flight |
 | `Up` / `Down` | walk what you have already sent (from an empty input) |
 | `PageUp` / `PageDown`, wheel | scroll |
-| `Ctrl-C`, `Ctrl-Q` | quit |
+| drag with the mouse | select, and take it on letting go |
+| `Ctrl-C` | stop the turn, clear the line, or leave - twice, on an empty line |
+| `Ctrl-D`, `Ctrl-Q` | leave from an empty line; leave at once |
+
+A line beginning with `!` is a command of your own, run here rather than asked of the model,
+and what it printed joins the conversation. A line beginning with `#` is a rule for the
+project, appended to `.verve.md` and told to the model at once.
 
 | Command | |
 |---|---|
@@ -149,10 +157,11 @@ wall of JSON nobody read.
 
 There are no borders. They cost four columns and two lines, they land in every selection
 made with the mouse, and they separate nothing that a blank line and a prompt mark do not
-separate better. The wheel scrolls the pane, which is what taking the mouse buys; most
-terminals give drag-to-select back when Shift is held, and `/copy` puts the conversation on
-the terminal's own clipboard - through ssh and tmux, no daemon - and writes it to a file
-besides, because a terminal that ignores the sequence says so to nobody.
+separate better. The wheel scrolls the pane and dragging selects in it, which is what
+taking the mouse buys and what it would otherwise cost: letting go puts what was selected
+on the terminal's own clipboard - through ssh and tmux, no daemon. `/copy` does the same
+for the whole conversation and writes it to a file besides, because a terminal that ignores
+the sequence says so to nobody.
 
 The shape of the project goes in with the contract, and the contract says never to ask for
 a file: a model told nothing about the tree asks for the source to be pasted in, because
