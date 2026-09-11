@@ -263,6 +263,10 @@ struct UiState {
     said: Option<(String, Instant)>,
     /// A list a command opened, waiting to be chosen from.
     choosing: Option<crate::ui::chooser::Chooser>,
+    /// What the backend serves, for finishing the name of one that is being typed. Asked
+    /// for once and after a switch, since a backend's catalogue does not move under a
+    /// session.
+    models: Vec<String>,
     /// Whether the button is still down: a drag that has been let go stays on screen,
     /// so it can be seen and so a second look does not have to be a second drag.
     dragging: bool,
@@ -697,6 +701,10 @@ async fn run_ui(
     state
         .entries
         .push(Entry::Notice(format!("backend {}", cfg.backend_url)));
+    // Once, before anything is typed: what the backend serves is what finishes the name
+    // of a model as it is being written, and asking at the first keystroke would put a
+    // request between a key and the letter it puts on screen.
+    refresh_models(&control_tx, &mut state).await;
     if restored > 0 {
         state.entries.push(Entry::Notice(format!(
             "resumed session {session_id}: {restored} earlier message(s) are back in view"
@@ -1746,7 +1754,15 @@ async fn run_ui(
                     input.input(key);
                     // Opened, narrowed or closed by what is now on the line, rather than
                     // by the key that was pressed: the two cannot disagree that way.
-                    state.picker = open_picker(&input, state.picker.take(), &cfg.root);
+                    state.picker = open_picker(
+                        &input,
+                        state.picker.take(),
+                        &cfg.root,
+                        &Known {
+                            models: &state.models,
+                            mcp: &mcp,
+                        },
+                    );
                 }
             }
 
@@ -1963,21 +1979,53 @@ fn open_picker(
     input: &TextArea,
     open: Option<crate::ui::picker::Picker>,
     root: &std::path::Path,
+    known: &Known<'_>,
 ) -> Option<crate::ui::picker::Picker> {
+    use crate::ui::picker::Kind;
     let line = input.lines().join("\n");
-    let (sigil, _, token) = crate::ui::picker::token_at(&line)?;
+    let (kind, _, token) = crate::ui::picker::token_at(&line)?;
     let mut picker = match open {
-        Some(p) if p.sigil() == sigil => p,
+        Some(p) if *p.kind() == kind => p,
         _ => crate::ui::picker::Picker::new(
-            sigil,
-            match sigil {
-                '/' => command_choices(root),
-                _ => path_choices(root),
+            kind.clone(),
+            match &kind {
+                Kind::Command => command_choices(root),
+                Kind::Path => path_choices(root),
+                Kind::Argument(verb) => argument_choices(verb, known),
             },
         ),
     };
     picker.narrow(&token);
     (!picker.is_empty()).then_some(picker)
+}
+
+/// What the interface can offer as the argument of a command.
+struct Known<'a> {
+    models: &'a [String],
+    mcp: &'a [std::sync::Arc<crate::mcp::client::McpClient>],
+}
+
+/// What a command may be given, for finishing it as it is typed.
+///
+/// A command whose argument is a name nobody keeps in their head is a command that can
+/// only be used by somebody who does. The names are all known here already.
+fn argument_choices(verb: &str, known: &Known<'_>) -> Vec<crate::ui::picker::Choice> {
+    use crate::ui::picker::Choice;
+    match verb {
+        "model" | "retry" => known
+            .models
+            .iter()
+            .map(|m| Choice::new(m.clone(), ""))
+            .collect(),
+        "mcp" => known
+            .mcp
+            .iter()
+            .map(|c| Choice::new(c.server.clone(), "tool server"))
+            .collect(),
+        "digest" => vec![Choice::new("forget", "throw away what was worked out")],
+        "copy" => vec![Choice::new("last", "the answer alone")],
+        _ => Vec::new(),
+    }
 }
 
 /// Whether what is typed already is what is highlighted.
@@ -1995,14 +2043,16 @@ fn nothing_left_to_complete(input: &TextArea, picker: &Option<crate::ui::picker:
 
 /// The line with the token being completed replaced by what was chosen.
 fn accept_choice(input: &TextArea, picker: Option<&crate::ui::picker::Picker>) -> Option<String> {
+    use crate::ui::picker::Kind;
     let line = input.lines().join("\n");
     let chosen = picker?.chosen()?;
-    let (sigil, at, _) = crate::ui::picker::token_at(&line)?;
-    // A command is the whole line and is ready to send; a file is one word in a sentence
-    // and the sentence carries on after it.
-    Some(match sigil {
-        '/' => format!("/{chosen}"),
-        _ => format!("{}@{chosen}", &line[..at]),
+    let (kind, at, _) = crate::ui::picker::token_at(&line)?;
+    // A command is the whole line and is ready to send; an argument finishes one; a file
+    // is one word in a sentence and the sentence carries on after it.
+    Some(match kind {
+        Kind::Command => format!("/{chosen}"),
+        Kind::Argument(_) => format!("{}{chosen}", &line[..at]),
+        Kind::Path => format!("{}@{chosen}", &line[..at]),
     })
 }
 
@@ -2041,6 +2091,27 @@ const INPUT_MAX_LINES: usize = 6;
 ///
 /// Both move under the interface, and both are drawn every frame, so they are read back
 /// at the moments they can have changed rather than watched.
+/// Ask what the backend serves, for completing a name that is being typed.
+///
+/// Between turns only: the agent reads control requests where it is safe to, so asking
+/// while one runs would hang the interface until the turn ended.
+async fn refresh_models(
+    control: &mpsc::Sender<crate::agent::agent_loop::Control>,
+    state: &mut UiState,
+) {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if control
+        .send(crate::agent::agent_loop::Control::Models { reply: tx })
+        .await
+        .is_err()
+    {
+        return;
+    }
+    if let Ok(Ok(models)) = rx.await {
+        state.models = models.all;
+    }
+}
+
 async fn refresh_status(
     control: &mpsc::Sender<crate::agent::agent_loop::Control>,
     state: &mut UiState,

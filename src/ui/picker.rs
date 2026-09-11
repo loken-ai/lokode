@@ -43,22 +43,22 @@ pub struct Picker {
     filter: String,
     /// Where the highlight is, among what the filter leaves.
     at: usize,
-    /// The sigil the token started with, so the accepted value goes back with it.
-    sigil: char,
+    /// What is being completed, so the accepted value goes back the way it came.
+    kind: Kind,
 }
 
 impl Picker {
-    pub fn new(sigil: char, all: Vec<Choice>) -> Self {
+    pub fn new(kind: Kind, all: Vec<Choice>) -> Self {
         Self {
             all,
             filter: String::new(),
             at: 0,
-            sigil,
+            kind,
         }
     }
 
-    pub fn sigil(&self) -> char {
-        self.sigil
+    pub fn kind(&self) -> &Kind {
+        &self.kind
     }
 
     /// Narrow to `filter`, keeping the highlight inside what is left.
@@ -151,18 +151,38 @@ impl Picker {
     }
 }
 
-/// The token the cursor is in, when it is one this can complete.
+/// What is being typed, when it is something the list can finish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kind {
+    /// The name of a command.
+    Command,
+    /// What a command was given, with the command that wants it.
+    ///
+    /// An argument is where a name has to be exact and is least likely to be remembered:
+    /// the model to switch to, the server to ask. Left uncompleted, a command that takes
+    /// one can only be used by somebody who already knows what to type.
+    Argument(String),
+    /// A path in the project, anywhere in a sentence.
+    Path,
+}
+
+/// The token the cursor is in, and what it is, when it is one this can complete.
 ///
 /// A slash only opens the list at the start of the line: a slash inside a sentence is a
 /// path separator or a date, and a list that opens on those is a list in the way.
-pub fn token_at(line: &str) -> Option<(char, usize, String)> {
+pub fn token_at(line: &str) -> Option<(Kind, usize, String)> {
     if let Some(rest) = line.strip_prefix('/') {
-        // Only while the command itself is being typed; once there is a space the
-        // argument belongs to whatever the command wants.
-        if !rest.contains(char::is_whitespace) {
-            return Some(('/', 0, rest.to_string()));
-        }
-        return None;
+        return match rest.split_once(char::is_whitespace) {
+            None => Some((Kind::Command, 0, rest.to_string())),
+            // One argument, and only while it is the last thing on the line: a command
+            // given two of them is being told something this cannot guess at.
+            Some((verb, arg)) if !arg.contains(char::is_whitespace) => Some((
+                Kind::Argument(verb.to_string()),
+                line.len() - arg.len(),
+                arg.to_string(),
+            )),
+            Some(_) => None,
+        };
     }
     let at = line.rfind('@')?;
     let before = line[..at].chars().next_back();
@@ -170,7 +190,7 @@ pub fn token_at(line: &str) -> Option<(char, usize, String)> {
         return None;
     }
     let token = &line[at + 1..];
-    (!token.contains(char::is_whitespace)).then(|| ('@', at, token.to_string()))
+    (!token.contains(char::is_whitespace)).then(|| (Kind::Path, at, token.to_string()))
 }
 
 #[cfg(test)]
@@ -179,7 +199,7 @@ mod tests {
 
     fn picker() -> Picker {
         Picker::new(
-            '/',
+            Kind::Command,
             vec![
                 Choice::new("model", "switch model"),
                 Choice::new("mcp", "tool servers"),
@@ -221,16 +241,30 @@ mod tests {
     /// those is a list in the way.
     #[test]
     fn a_slash_opens_the_list_only_at_the_start() {
-        assert_eq!(token_at("/mod").unwrap().0, '/');
+        assert_eq!(token_at("/mod").unwrap().0, Kind::Command);
         assert_eq!(token_at("/mod").unwrap().2, "mod");
         assert!(token_at("see src/main.rs").is_none());
-        assert!(token_at("/model qwen").is_none());
+    }
+
+    /// What a command was given is where a name has to be exact and is least likely to be
+    /// remembered. Left uncompleted, a command that takes one can only be used by somebody
+    /// who already knows what to type.
+    #[test]
+    fn what_a_command_was_given_is_completed_too() {
+        let (kind, at, token) = token_at("/model qwen").unwrap();
+        assert_eq!(kind, Kind::Argument("model".into()));
+        assert_eq!(at, 7);
+        assert_eq!(token, "qwen");
+        // The space is enough to offer the whole list.
+        assert_eq!(token_at("/model ").unwrap().2, "");
+        // Two arguments in, the command is being told something this cannot guess at.
+        assert!(token_at("/mcp server say something").is_none());
     }
 
     #[test]
     fn an_at_opens_it_on_a_word_of_its_own() {
-        let (sigil, at, token) = token_at("why does @src/ma").unwrap();
-        assert_eq!(sigil, '@');
+        let (kind, at, token) = token_at("why does @src/ma").unwrap();
+        assert_eq!(kind, Kind::Path);
         assert_eq!(at, 9);
         assert_eq!(token, "src/ma");
         // Part of a longer word - an address, say - is not a file being named.
