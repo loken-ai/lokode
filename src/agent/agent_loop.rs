@@ -99,6 +99,9 @@ pub enum Control {
     Clear {
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// The window the backend turned out to serve, found out while the session was
+    /// already on screen.
+    SeeWindow(usize),
     /// Come back to a session recorded earlier, by its id.
     Resume {
         id: String,
@@ -176,6 +179,14 @@ pub enum AgentEvent {
     /// A turn that takes a minute with nothing on screen looks the same as a turn that
     /// has stalled. This is the one number that tells them apart.
     Rate(f64),
+    /// What is being done in the background, or nothing once it is done.
+    ///
+    /// Work that belongs to no turn still takes time - holding a model ready is a minute
+    /// on a cold server - and a screen that says nothing about it is a screen that looks
+    /// broken.
+    Background(Option<String>),
+    /// What the backend serves, for completing the name of one that is being typed.
+    Models(Vec<String>),
     TurnDone,
 }
 
@@ -1096,7 +1107,7 @@ impl Agent {
 
     /// Answer one control request. Between turns, which is where the session can change
     /// under the model without a request being half-built against the old one.
-    pub async fn control(&mut self, request: Control) {
+    pub async fn control(&mut self, request: Control, events: &mpsc::Sender<AgentEvent>) {
         match request {
             Control::Model { name, reply } => {
                 let answer = self.switch_model(name).await;
@@ -1104,6 +1115,15 @@ impl Agent {
             }
             Control::Models { reply } => {
                 let _ = reply.send(self.models_on_offer().await);
+            }
+            Control::SeeWindow(served) => {
+                let asked = self
+                    .cfg
+                    .models
+                    .get(&self.cfg.model)
+                    .and_then(|m| m.context_tokens)
+                    .unwrap_or(self.cfg.context_tokens);
+                self.adopt_window(asked.min(served), events).await;
             }
             Control::Resume { id, reply } => {
                 let _ = reply.send(self.resume_session(&id).await);

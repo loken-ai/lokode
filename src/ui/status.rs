@@ -32,6 +32,9 @@ pub struct Status {
     pub finding: Option<String>,
     /// How fast the last step came back, in tokens a second.
     pub rate: Option<f64>,
+    /// What is being done outside any turn, and for how long. Work that belongs to no
+    /// turn still takes time, and a screen that says nothing about it looks broken.
+    pub background: Option<(String, Duration)>,
     /// Whether writes are going through unasked. A third setting beside planning and
     /// acting, and the one a person most needs reminding they are in.
     pub accepting_writes: bool,
@@ -122,6 +125,12 @@ impl Status {
             spans.push(Span::styled(
                 format!("  {}/{}", self.step, self.max_steps),
                 Style::default().fg(Color::DarkGray),
+            ));
+        }
+        if let Some((what, since)) = self.background.as_ref() {
+            spans.push(Span::styled(
+                format!("  {what} {}", how_long(*since)),
+                Style::default().fg(Color::Cyan),
             ));
         }
         // A turn that takes a minute with nothing on screen looks the same as a turn that
@@ -304,6 +313,7 @@ mod tests {
             queued: 0,
             finding: None,
             rate: None,
+            background: None,
             said: None,
             accepting_writes: false,
             context_percent: 40,

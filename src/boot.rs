@@ -43,6 +43,9 @@ pub struct Booted {
     pub protocol_cell: crate::agent::protocol::SharedProtocol,
     /// What came back from a resumed session, for putting it on screen.
     pub restored: Vec<crate::backend::wire::Message>,
+    /// Whether the window the backend serves is still to be found out, which is done
+    /// once there is a screen to say it on.
+    pub find_window: bool,
     /// The change history, if one could be opened.
     /// What has been agreed to for this session, so the interface can set a standing
     /// decision as well as the prompt.
@@ -168,47 +171,18 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // A window belongs to a model: the one named for this session takes what the
     // configuration says it needs, and the default only when it says nothing.
     let per_model = cfg.models.get(&model);
-    let mut context_tokens = per_model
+    let context_tokens = per_model
         .and_then(|m| m.context_tokens)
         .unwrap_or(cfg.context_tokens);
     // What the backend actually offers, when nobody has said. A guess is wrong in both
     // directions: too small wastes the window that is there, and too large sends prompts
     // the server cuts, which produces an answer that is fluent and wrong about what it
     // was asked.
-    if !cfg.context_was_set && per_model.and_then(|m| m.context_tokens).is_none() {
-        if let Ok(http) = crate::tools::registry::tool_http_client() {
-            let mut said = crate::backend::window::of(&http, &cfg.backend_url, &model).await;
-            // A server only describes the models it holds, and on a cold one it holds
-            // none - so the first session of the day learned nothing and kept whatever
-            // was configured, which is the case a wrong guess hurts most. Holding the
-            // model ready is what the next step needs anyway, so the question is asked
-            // again once there is something to ask about.
-            //
-            // Only where the weights are near: a hosted endpoint has nothing to hold
-            // ready and would bill the attempt.
-            if said.is_none()
-                && crate::config::backend_is_nearby(&cfg.backend_url)
-                && backend.warm(&model).await.is_ok()
-            {
-                said = crate::backend::window::of(&http, &cfg.backend_url, &model).await;
-            }
-            match said {
-                Some(said) if said != context_tokens => {
-                    model_notes.push(format!(
-                        "the backend offers {said} tokens for {model}; using that instead of {context_tokens}"
-                    ));
-                    context_tokens = said;
-                }
-                Some(_) => {}
-                // Nothing said, so nothing is known: the configured window stands, and
-                // a prompt cut to fit a smaller one is caught from what comes back.
-                None => model_notes.push(format!(
-                    "the backend does not say what window it serves; asking for {context_tokens} \
-                     and watching what comes back"
-                )),
-            }
-        }
-    }
+    // Found out after the interface is on screen, not before it. Asking a cold server
+    // what window it serves means holding the model ready first, which is the whole load
+    // of it - a minute of a blank terminal, with nothing anywhere saying why, because
+    // none of this runs until there is a screen to say it on.
+    let find_window = !cfg.context_was_set && per_model.and_then(|m| m.context_tokens).is_none();
     let asked_answer_tokens = per_model
         .and_then(|m| m.max_answer_tokens)
         .unwrap_or(cfg.max_answer_tokens);
@@ -456,6 +430,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         instruction_notes: [notes, model_notes].concat(),
         protocol,
         restored,
+        find_window,
         checkpoints,
         checkpoint_error,
         mcp,

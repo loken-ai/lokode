@@ -163,6 +163,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         protocol,
         protocol_cell,
         restored,
+        find_window,
         checkpoints,
         checkpoint_error,
         instruction_notes,
@@ -211,6 +212,91 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         });
     }
 
+    // What window the backend serves, found out with the screen already up. Asking a
+    // server that holds no model means holding one ready first, which is the whole load
+    // of it: a minute of blank terminal before anything was drawn, because none of this
+    // used to run until it was finished.
+    {
+        let backend = agent.backend.clone();
+        let model_asked = agent.cfg.model.clone();
+        let url = cfg.backend_url.clone();
+        let nearby = crate::config::backend_is_nearby(&cfg.backend_url);
+        // What this session asked for, so what comes back is only remarked on when it
+        // differs.
+        let asked = cfg
+            .models
+            .get(&agent.cfg.model)
+            .and_then(|m| m.context_tokens)
+            .unwrap_or(cfg.context_tokens);
+        let control = control_tx.clone();
+        let events = agent_evt_tx.clone();
+        let token = shutdown.child_token();
+        tokio::spawn(async move {
+            if let (true, Ok(http)) = (find_window, crate::tools::registry::tool_http_client()) {
+                let mut said = crate::backend::window::of(&http, &url, &model_asked).await;
+                // A server describes the models it holds, and a cold one holds none. What
+                // the next request needs anyway is the model held ready, so it is asked
+                // for - and said, because it is the slowest thing a session ever waits on.
+                //
+                // Only where the weights are near: a hosted endpoint has nothing to hold
+                // ready and would bill the attempt.
+                if said.is_none() && nearby && !token.is_cancelled() {
+                    let _ = events
+                        .send(AgentEvent::Background(Some(format!(
+                            "holding {model_asked} ready on the backend"
+                        ))))
+                        .await;
+                    let warmed = tokio::select! {
+                        _ = token.cancelled() => None,
+                        done = backend.warm(&model_asked) => Some(done),
+                    };
+                    let _ = events.send(AgentEvent::Background(None)).await;
+                    // Asked again only if it was held: a backend that could not hold the
+                    // model has nothing new to say about the window. The catalogue below
+                    // is still worth having - it is what finishes a name being typed, and
+                    // skipping it left completion silently empty.
+                    if matches!(warmed, Some(Ok(()))) {
+                        said = crate::backend::window::of(&http, &url, &model_asked).await;
+                    }
+                }
+                match said {
+                    Some(served) => {
+                        let _ = control
+                            .send(crate::agent::agent_loop::Control::SeeWindow(served))
+                            .await;
+                        // Said when it is not what was asked for, which is the case worth
+                        // knowing: the history is about to be sized to somebody else's
+                        // number rather than the one in the configuration.
+                        if served != asked {
+                            let _ = events
+                                .send(AgentEvent::Notice(format!(
+                                    "the backend serves {served} tokens for {model_asked}, \
+                                     not the {asked} asked for"
+                                )))
+                                .await;
+                        }
+                    }
+                    // Nothing said, so nothing is known: the window the session was
+                    // configured with stands, and a prompt cut to fit a smaller one is
+                    // caught from what comes back.
+                    None => {
+                        let _ = events
+                            .send(AgentEvent::Notice(
+                                "the backend does not say what window it serves; watching \
+                                 what comes back instead"
+                                    .into(),
+                            ))
+                            .await;
+                    }
+                }
+            }
+            // The catalogue, for finishing the name of a model as it is being typed.
+            if let Ok(models) = backend.models().await {
+                let _ = events.send(AgentEvent::Models(models)).await;
+            }
+        });
+    }
+
     let agent_task = tokio::spawn(async move {
         loop {
             // A control request is answered between turns: the turn channel is read
@@ -231,7 +317,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                 }
                 request = control_rx.recv() => {
                     let Some(request) = request else { break };
-                    agent.control(request).await;
+                    agent.control(request, &agent_evt_tx_for_loop).await;
                 }
             }
         }
@@ -353,6 +439,8 @@ struct UiState {
     rate: Option<f64>,
     /// A line cleared off the input, kept for the up arrow to offer back.
     draft: Option<String>,
+    /// What is being done for this session outside any turn, and since when.
+    background: Option<(String, Instant)>,
     /// What the backend serves, for finishing the name of one that is being typed. Asked
     /// for once and after a switch, since a backend's catalogue does not move under a
     /// session.
@@ -826,10 +914,6 @@ async fn run_ui(
     state
         .entries
         .push(Entry::Notice(format!("backend {}", cfg.backend_url)));
-    // Once, before anything is typed: what the backend serves is what finishes the name
-    // of a model as it is being written, and asking at the first keystroke would put a
-    // request between a key and the letter it puts on screen.
-    refresh_models(&control_tx, &mut state).await;
     if !restored.is_empty() {
         // In view, which used to be said of messages that were nowhere on screen: the
         // model could see a conversation the person could not, and the first question of
@@ -1009,6 +1093,10 @@ async fn run_ui(
                 selected: state.selecting.is_some(),
                 queued: state.queued.len(),
                 rate: state.rate,
+                background: state
+                    .background
+                    .as_ref()
+                    .map(|(what, since)| (what.clone(), since.elapsed())),
                 finding: state
                     .finding
                     .as_ref()
@@ -1172,6 +1260,10 @@ async fn run_ui(
                     }
                     AgentEvent::Window(percent) => state.context_percent = percent,
                     AgentEvent::Rate(tokens_a_second) => state.rate = Some(tokens_a_second),
+                    AgentEvent::Background(doing) => {
+                        state.background = doing.map(|what| (what, Instant::now()))
+                    }
+                    AgentEvent::Models(models) => state.models = models,
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
                     AgentEvent::TurnDone => {
                         // Asked once a turn is over, which is when the conversation has
@@ -2435,27 +2527,6 @@ const INPUT_MAX_LINES: usize = 6;
 ///
 /// Both move under the interface, and both are drawn every frame, so they are read back
 /// at the moments they can have changed rather than watched.
-/// Ask what the backend serves, for completing a name that is being typed.
-///
-/// Between turns only: the agent reads control requests where it is safe to, so asking
-/// while one runs would hang the interface until the turn ended.
-async fn refresh_models(
-    control: &mpsc::Sender<crate::agent::agent_loop::Control>,
-    state: &mut UiState,
-) {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    if control
-        .send(crate::agent::agent_loop::Control::Models { reply: tx })
-        .await
-        .is_err()
-    {
-        return;
-    }
-    if let Ok(Ok(models)) = rx.await {
-        state.models = models.all;
-    }
-}
-
 async fn refresh_status(
     control: &mpsc::Sender<crate::agent::agent_loop::Control>,
     state: &mut UiState,

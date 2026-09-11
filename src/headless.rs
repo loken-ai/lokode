@@ -134,6 +134,7 @@ pub async fn run(
         }
     });
 
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(128);
     // Asked before the turn rather than discovered during it. A run with one prompt has
     // no second chance: a step spent finding out that the backend drops the tool
     // definitions is a step of the budget, and its answer is a fragment of a tool call
@@ -147,9 +148,12 @@ pub async fn run(
         .await
     {
         agent
-            .control(crate::agent::agent_loop::Control::Protocol(
-                crate::agent::protocol::ToolProtocol::Envelope,
-            ))
+            .control(
+                crate::agent::agent_loop::Control::Protocol(
+                    crate::agent::protocol::ToolProtocol::Envelope,
+                ),
+                &tx,
+            )
             .await;
         mcp.notices.push(
             "the backend accepts tool definitions and ignores them; tool calls travel as \
@@ -158,7 +162,6 @@ pub async fn run(
         );
     }
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentEvent>(128);
     let cancel = shutdown.child_token();
     let driver = tokio::spawn(async move { agent.run_user_turn(prompt, cancel, tx).await });
 
@@ -247,7 +250,10 @@ pub async fn run(
             // What the backend turned out to do, which changes how the turn was run and
             // belongs with the rest of what the run has to say for itself.
             // A number for a status line nobody is watching.
-            AgentEvent::Window(_) | AgentEvent::Rate(_) => {}
+            AgentEvent::Window(_)
+            | AgentEvent::Rate(_)
+            | AgentEvent::Background(_)
+            | AgentEvent::Models(_) => {}
             AgentEvent::Protocol(protocol) => {
                 report
                     .notices
