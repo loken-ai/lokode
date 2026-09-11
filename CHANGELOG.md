@@ -4,7 +4,48 @@ All notable changes to `verve`. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- Commands open a list instead of printing one. `/model` shows what the backend serves with
+  the one answering marked, filters as it is typed into, and switches to what is chosen;
+  `/undo` offers the turns that can be put back with the files each touched; `/mcp` offers a
+  server's prompts; `/digest forget` asks before throwing anything away.
+- What a command was given is completed too, not only its name: the model to switch to or
+  retry with, the tool server to ask, the one word a command accepts.
+- `/clear` starts the conversation again without leaving the session, and `/resume` comes back
+  to a session recorded earlier, chosen from a list of what there is - how long ago, how much
+  was said, and the question each opened with - putting its conversation back on screen.
+- A call can be refused with a reason the model can act on, or corrected: `e` hands the line
+  to the input so what is typed travels with the refusal, and `x` puts the proposed shell
+  command on the input line to be fixed and run.
+- `/approve` lists what this session has agreed to as well as what the configuration settles,
+  and `/approve forget` takes the standing agreements back.
+- Alt-enter holds a message back until the running turn is over, and the status line says how
+  many are waiting.
+- The status line carries the rate of the last step while a turn runs, and what is being done
+  outside a turn with the time it has been going.
+- A scrollbar tracks the pane, `Home` and `End` reach the two ends of the conversation, a
+  search picks out every occurrence and walks both ways, and `Ctrl-Y` takes what is selected
+  or the block being pointed at.
+- `Ctrl-T` lends the mouse to the terminal and takes it back, so a terminal's own selection
+  and copy key can be used where they are preferred.
+
 ### Fixed
+
+- The interface waited for the backend before drawing anything: asking a cold server what
+  window it serves means loading the model first, so a session against a large model showed
+  nothing at all for ten to twenty-five seconds. The screen is drawn first and the finding out
+  happens behind it, saying so while it does.
+- An answer was shown twice when anything arrived between the last piece of it and the
+  finished text, because the finished text only replaced the streamed one when it was last.
+- Four commands were dispatched on the whole line rather than on the verb, so any of them
+  given an argument got the help text back instead of being carried out.
+- The reason typed at a refusal lost its spaces: the pointer was left on the approval, where
+  space unfolds what is pointed at.
+- A drag held against an edge did not scroll, and a selection could never be longer than the
+  window it was made in.
+- Escape cleared the input and the text was gone; it is now offered back by the up arrow.
+- A resumed session announced how many messages came back while showing none of them.
 
 - A panic left the terminal in raw mode with no cursor, printing the message you needed to
   read in a mode where it was unreadable. Raw mode and the alternate screen now belong to a
