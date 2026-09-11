@@ -811,6 +811,22 @@ async fn run_ui(
                 let Some(Ok(evt)) = maybe_evt else { continue };
                 // Mouse capture was turned on from the beginning and nothing ever read an
                 // event, so the wheel did nothing in a pane whose purpose is scrolling.
+                // Pasted text arrives whole, so the newlines in it are newlines. Handed
+                // over a keystroke at a time - which is what a terminal does when nobody
+                // has asked otherwise - every one of them was the send key, and pasting
+                // ten lines asked ten questions made of fragments.
+                if let Event::Paste(text) = evt {
+                    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+                    let mut lines = text.split('\n');
+                    if let Some(first) = lines.next() {
+                        input.insert_str(first);
+                    }
+                    for line in lines {
+                        input.insert_newline();
+                        input.insert_str(line);
+                    }
+                    continue;
+                }
                 if let Event::Mouse(mouse) = evt {
                     match mouse.kind {
                         MouseEventKind::ScrollUp => state.scroll_back(3),
@@ -1049,6 +1065,14 @@ async fn run_ui(
                                 }
                                 continue;
                             }
+                            // Nothing to interrupt, nothing open, not pointing: the one
+                            // thing left for Esc to mean is the line being typed. It did
+                            // nothing at all there, which is a key that works everywhere
+                            // except where it was pressed.
+                            KeyCode::Esc if !state.busy && !input.is_empty() => {
+                                input = fresh_input("");
+                                continue;
+                            }
                             KeyCode::Esc if state.busy => {
                                 if let Some(cancel) = state.turn_cancel.take() {
                                     cancel.cancel();
@@ -1210,6 +1234,14 @@ async fn run_ui(
                             }
                             _ => {}
                         }
+                    }
+                    // Erasing to the start of the line, as it does in every shell. The
+                    // editor underneath binds it to undo, so a habit that clears a line
+                    // put back the word the last one had removed.
+                    if key.code == KeyCode::Char('u') && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        input.delete_line_by_head();
+                        continue;
                     }
                     input.input(key);
                     // Opened, narrowed or closed by what is now on the line, rather than

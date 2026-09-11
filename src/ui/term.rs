@@ -9,7 +9,9 @@ use std::io;
 
 use anyhow::Result;
 use crossterm::cursor::Show;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -27,6 +29,7 @@ pub fn restore() {
         io::stdout(),
         LeaveAlternateScreen,
         DisableMouseCapture,
+        DisableBracketedPaste,
         Show
     );
 }
@@ -37,14 +40,20 @@ pub struct TerminalGuard {
 }
 
 impl TerminalGuard {
-    /// The wheel scrolls the pane, which is what a captured mouse buys.
+    /// The wheel scrolls the pane, and the pane does its own selecting, which is what a
+    /// captured mouse buys and costs.
     ///
-    /// It costs the terminal's own drag-to-select, which most terminals give back when
-    /// Shift is held. Selecting a pane with no borders in it is worth having either way,
-    /// and `/copy` is there for the conversation as text rather than as a rectangle.
+    /// Paste is asked for as well. Without it a terminal hands pasted text over one
+    /// keystroke at a time, so every newline in it reads as the send key: pasting ten
+    /// lines of a stack trace asked ten questions, each of them a fragment.
     pub fn new() -> Result<Self> {
         enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        )?;
         Ok(Self { _private: () })
     }
 }
