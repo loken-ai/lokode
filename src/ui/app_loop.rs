@@ -33,6 +33,28 @@ use crate::ui::term;
 /// the exit before the process leaves anyway.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
+/// How far a page key moves in a list, which is what a page of it is.
+const ROWS_AT_A_TIME: usize = 12;
+
+/// Move the highlight in the list now open, if one is.
+fn chosen_move(state: &mut UiState, by: isize) {
+    if let Some(chooser) = state.choosing.as_mut() {
+        chooser.move_by(by);
+    }
+}
+
+/// Put what a command said where it belongs.
+///
+/// A sentence belongs in the thread, where it reads as what just happened. A page of it
+/// does not: it is read once, it is not part of the conversation, and left there it sits
+/// between two questions for the rest of the session.
+fn show(state: &mut UiState, verb: &str, reply: String) {
+    match reply.lines().count() > SHEET_LINES {
+        true => state.sheet = Some(crate::ui::sheet::Sheet::new(format!("/{verb}"), &reply)),
+        false => state.entries.push(Entry::Notice(reply)),
+    }
+}
+
 /// How long the status line keeps saying what was just done.
 const SAID_FOR: Duration = Duration::from_secs(4);
 
@@ -239,6 +261,8 @@ struct UiState {
     drag_edge: Option<i8>,
     /// What was just done and when, for the status line to say while it is still news.
     said: Option<(String, Instant)>,
+    /// A list a command opened, waiting to be chosen from.
+    choosing: Option<crate::ui::chooser::Chooser>,
     /// Whether the button is still down: a drag that has been let go stays on screen,
     /// so it can be seen and so a second look does not have to be a second drag.
     dragging: bool,
@@ -849,6 +873,11 @@ async fn run_ui(
             if let Some(sheet) = state.sheet.as_mut() {
                 sheet.render(f, chunks[0]);
             }
+            // Last, so it is over everything: a question being asked of the person is not
+            // something anything else may cover.
+            if let Some(chooser) = state.choosing.as_ref() {
+                chooser.render(f, chunks[0]);
+            }
         })?;
 
         // Nothing is happening, there is something to find out, and nobody is waiting:
@@ -1169,6 +1198,66 @@ async fn run_ui(
                     // A page over the conversation takes the keys until it is closed: it
                     // is the only thing on screen and anything else would act on what it
                     // is covering.
+                    // A list a command opened owns the keyboard. It is a question being
+                    // asked of the person, and any key let through would answer a
+                    // different one.
+                    if key.kind == KeyEventKind::Press && state.choosing.is_some() {
+                        let step = ROWS_AT_A_TIME as isize;
+                        match key.code {
+                            KeyCode::Esc => state.choosing = None,
+                            KeyCode::Up => chosen_move(&mut state, -1),
+                            KeyCode::Down => chosen_move(&mut state, 1),
+                            KeyCode::PageUp => chosen_move(&mut state, -step),
+                            KeyCode::PageDown => chosen_move(&mut state, step),
+                            KeyCode::Backspace => {
+                                if let Some(c) = state.choosing.as_mut() {
+                                    c.pop();
+                                }
+                            }
+                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                if let Some(chooser) = state.choosing.as_mut() {
+                                    chooser.push(c);
+                                }
+                            }
+                            KeyCode::Enter => {
+                                let taken = state.choosing.as_ref().and_then(|c| {
+                                    c.chosen().map(|value| (c.verb().to_string(), value))
+                                });
+                                state.choosing = None;
+                                if let Some((verb, value)) = taken {
+                                    let ran = run_command(
+                                        &format!("{verb} {value}"),
+                                        CommandCtx {
+                                            checkpoints: checkpoints.as_deref(),
+                                            root: &cfg.root,
+                                            control: &control_tx,
+                                            policy: &cfg.policy,
+                                            tools: &tools,
+                                            digest: &digest,
+                                            mcp: &mcp,
+                                            mcp_summary: &mcp_summary,
+                                            busy: state.busy,
+                                        },
+                                    )
+                                    .await;
+                                    match ran {
+                                        Ran::Said(reply) => show(&mut state, &verb, reply),
+                                        // One list may lead to another: choosing a server
+                                        // is not yet choosing what to ask it.
+                                        Ran::Choose(chooser) => state.choosing = Some(*chooser),
+                                        // Something to ask the model. Put on the line
+                                        // rather than sent, so the person sees what they
+                                        // are about to ask before it goes.
+                                        Ran::Prompt(prompt) => input = fresh_input(&prompt),
+                                    }
+                                    refresh_status(&control_tx, &mut state).await;
+                                }
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     if key.kind == KeyEventKind::Press && state.sheet.is_some() {
                         let height = state.view_height.saturating_sub(2);
                         match key.code {
@@ -1555,25 +1644,18 @@ async fn run_ui(
                                             // the conversation, and left there it sits
                                             // between two questions for the rest of the
                                             // session.
-                                            match reply.lines().count() > SHEET_LINES {
-                                                true => {
-                                                    state.sheet = Some(
-                                                        crate::ui::sheet::Sheet::new(
-                                                            format!("/{verb}"),
-                                                            &reply,
-                                                        ),
-                                                    )
-                                                }
-                                                false => {
-                                                    state.entries.push(Entry::Notice(reply))
-                                                }
-                                            }
+                                            show(&mut state, verb, reply);
                                             refresh_status(&control_tx, &mut state).await;
                                             continue;
                                         }
                                         // A command the project defines is a way of
                                         // asking, so it becomes this turn's prompt.
                                         Ran::Prompt(prompt) => text = prompt,
+                                        Ran::Choose(chooser) => {
+                                            state.choosing = Some(*chooser);
+                                            input = fresh_input("");
+                                            continue;
+                                        }
                                     }
                                 }
                                 // Typed while a turn runs, this steers it rather than
@@ -2002,6 +2084,8 @@ enum Ran {
     Said(String),
     /// Instructions to hand the model as this turn's prompt.
     Prompt(String),
+    /// A list to choose from, and the command to run with what is chosen.
+    Choose(Box<crate::ui::chooser::Chooser>),
 }
 
 /// Everything a command may need. One struct rather than nine arguments, since every new
@@ -2166,6 +2250,43 @@ async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         // wait for the turn to end with nothing on screen explaining the silence.
         if busy {
             return Ran::Said("the agent is working; ask again when the turn is over".into());
+        }
+        // Named, it switches. Unnamed, it offers the list: printing the catalogue and
+        // leaving the person to type a name back exactly is not a way to choose.
+        if rest.is_empty() {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if control
+                .send(crate::agent::agent_loop::Control::Models { reply: tx })
+                .await
+                .is_err()
+            {
+                return Ran::Said("the agent is not listening".into());
+            }
+            return match rx.await {
+                Err(_) => Ran::Said("the agent said nothing".into()),
+                Ok(Err(why)) => Ran::Said(format!("{why}; name one with /model <name>")),
+                Ok(Ok(models)) => Ran::Choose(Box::new(crate::ui::chooser::Chooser::new(
+                    "model",
+                    "which model answers",
+                    models
+                        .all
+                        .iter()
+                        .map(|m| {
+                            // What else a model is used for, beside its name: a session
+                            // that plans with one model and edits with another has to be
+                            // able to see which is which before it changes one of them.
+                            let roles: Vec<&str> = models
+                                .roles
+                                .iter()
+                                .filter(|(_, model)| model == m)
+                                .map(|(role, _)| role.as_str())
+                                .collect();
+                            crate::ui::chooser::Choice::new(m, roles.join(", "))
+                        })
+                        .collect(),
+                    Some(models.current),
+                ))),
+            };
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
         let request = crate::agent::agent_loop::Control::Model {

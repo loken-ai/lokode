@@ -91,6 +91,10 @@ pub enum Control {
         name: Option<String>,
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// What the backend serves, for choosing from rather than reading.
+    Models {
+        reply: tokio::sync::oneshot::Sender<Result<Models, String>>,
+    },
     /// Hold the session to a tool protocol, once something has found out which one works.
     Protocol(ToolProtocol),
     /// Take the conversation back to the last thing the user asked and hand it back, so it
@@ -652,6 +656,16 @@ pub struct StatusReport {
     pub protocol: ToolProtocol,
 }
 
+/// What could be answering, and what is.
+pub struct Models {
+    /// The one answering now.
+    pub current: String,
+    /// Every model the backend serves that can hold a conversation, as it named them.
+    pub all: Vec<String>,
+    /// Which model does which kind of work, where that has been settled.
+    pub roles: Vec<(String, String)>,
+}
+
 /// What a session has spent, so far.
 ///
 /// The server already counts the tokens and nothing showed them: a person deciding
@@ -1052,6 +1066,9 @@ impl Agent {
                 let answer = self.switch_model(name).await;
                 let _ = reply.send(answer);
             }
+            Control::Models { reply } => {
+                let _ = reply.send(self.models_on_offer().await);
+            }
             Control::Note(text) => {
                 // As something the person said, because that is what it is: they ran the
                 // command and they are handing over what it printed. A role of its own
@@ -1170,6 +1187,36 @@ impl Agent {
             .map(|(role, model)| format!("  {role}: {model}"))
             .collect();
         format!("\nby kind of work:\n{}", rows.join("\n"))
+    }
+
+    /// What could be answering, for a list to be chosen from.
+    ///
+    /// Only what can hold a conversation: a backend that also serves speech and image
+    /// models offers them here too, and none of them can take a turn.
+    async fn models_on_offer(&self) -> Result<Models, String> {
+        let served = self
+            .backend
+            .models()
+            .await
+            .map_err(|e| format!("the backend does not say what it serves ({e:#})"))?;
+        let all: Vec<String> = served
+            .into_iter()
+            .filter(|m| can_hold_a_conversation(m))
+            .collect();
+        if all.is_empty() {
+            return Err("the backend serves no model that can hold a conversation".to_string());
+        }
+        Ok(Models {
+            current: self.cfg.model.clone(),
+            all,
+            roles: self
+                .cfg
+                .roles
+                .named()
+                .into_iter()
+                .map(|(role, model)| (role.to_string(), model.to_string()))
+                .collect(),
+        })
     }
 
     /// Switch to `name`, or describe what is on offer when there is none.

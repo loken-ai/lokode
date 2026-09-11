@@ -1,5 +1,6 @@
 pub mod app_loop;
 pub mod chat;
+pub mod chooser;
 pub mod clipboard;
 pub mod picker;
 pub mod sheet;
