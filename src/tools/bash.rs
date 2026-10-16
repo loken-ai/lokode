@@ -55,7 +55,13 @@ impl Tool for Bash {
         let cwd = match a.cwd.as_ref() {
             Some(p) => match allowlist::resolve(&ctx.root, p, true) {
                 Ok(resolved) => resolved,
-                Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, p, &e))),
+                // The command can always run at the root, which a refused directory names.
+                Err(e) => {
+                    return Ok(ToolOutput::err(format!(
+                        "{}; leave cwd out to run at the project root",
+                        allowlist::refusal(&ctx.root, p, &e)
+                    )))
+                }
             },
             None => ctx.root.clone(),
         };
@@ -256,6 +262,25 @@ mod tests {
         let h = Harness::new(Answer::Yes);
         let out = h.run(&Bash, json!({"cmd": "ls", "cwd": "/etc"})).await;
         refused(&out, "outside the project root");
+        assert!(out.content.contains("leave cwd out"), "{}", out.content);
+        assert!(
+            h.asked().is_empty(),
+            "the user was asked about a command that could not run"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_working_directory_names_the_root_as_the_way_out() {
+        let h = Harness::new(Answer::Yes);
+        let out = h
+            .run(&Bash, json!({"cmd": "ls", "cwd": "/workspace/project"}))
+            .await;
+        assert!(
+            out.content
+                .contains("leave cwd out to run at the project root"),
+            "{}",
+            out.content
+        );
         assert!(
             h.asked().is_empty(),
             "the user was asked about a command that could not run"

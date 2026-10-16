@@ -19,6 +19,7 @@ All notable changes to verve. The format follows [Keep a Changelog](https://keep
 ### Fixed
 
 - Prompt: the contract says paths are relative to the project root.
+- Bash: a refused working directory says to leave cwd out to run at the root.
 - Backend: guesses, reviews and the readiness probe went unanswered by reasoning models.
 - UI: blanked 10-25s waiting on a cold model; now draws first, probes behind.
 - Output: an answer showed twice when final text arrived on a later chunk.
