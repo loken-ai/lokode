@@ -35,6 +35,9 @@ pub struct TurnRequest {
     pub temperature: f32,
     /// The session id, passed where a backend can use it to key its own caches.
     pub user: Option<String>,
+    /// Whether the model may reason before it answers. A short question beside the turn, a
+    /// guess or a review, asks for no reasoning, so its whole budget goes to the answer.
+    pub reason: bool,
 }
 
 /// What a provider can actually do, so the agent asks for nothing it cannot deliver.

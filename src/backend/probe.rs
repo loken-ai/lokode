@@ -51,6 +51,8 @@ pub async fn ignores_native_tools(
         max_tokens: 32,
         temperature: 0.0,
         user: None,
+        // A readiness check answers in a few tokens; a reasoning model would spend them thinking.
+        reason: false,
     };
     let mut stream = match backend.stream(req).await {
         Ok(s) => s,

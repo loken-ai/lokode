@@ -52,6 +52,8 @@ pub struct BackendClient {
     /// Cleared the first time the server rejects `stream_options`, so the cost of finding
     /// out is paid once per session rather than on every request.
     usage_supported: AtomicBool,
+    /// Whether the server takes `reasoning_effort`; learned, as `usage_supported` is.
+    effort_supported: AtomicBool,
     /// The window the server last said it served, or zero if it has never said.
     served_window: AtomicUsize,
 }
@@ -115,6 +117,7 @@ impl BackendClient {
                 .expect("reqwest client"),
             base: base_url.into(),
             usage_supported: AtomicBool::new(true),
+            effort_supported: AtomicBool::new(true),
             served_window: AtomicUsize::new(0),
         }
     }
@@ -149,27 +152,42 @@ impl BackendClient {
         req.stream_options = None;
         let url = self.url();
 
-        let text = self
-            .with_retries(|| {
-                let req = req.clone();
-                let url = url.clone();
-                async move {
-                    let resp = self
-                        .http
-                        .post(&url)
-                        .json(&req)
-                        .send()
-                        .await
-                        .map_err(|e| classify_transport(e, &url))?;
-                    let status = resp.status();
-                    let body = resp.text().await.map_err(|e| Retry::Fatal(e.into()))?;
-                    if !status.is_success() {
-                        return Err(classify(status, &body));
+        let text = loop {
+            if !self.effort_supported.load(Ordering::Relaxed) {
+                req.reasoning_effort = None;
+            }
+            let asked_for_effort = req.reasoning_effort.is_some();
+            let attempt = self
+                .with_retries(|| {
+                    let req = req.clone();
+                    let url = url.clone();
+                    async move {
+                        let resp = self
+                            .http
+                            .post(&url)
+                            .json(&req)
+                            .send()
+                            .await
+                            .map_err(|e| classify_transport(e, &url))?;
+                        let status = resp.status();
+                        let body = resp.text().await.map_err(|e| Retry::Fatal(e.into()))?;
+                        if !status.is_success() {
+                            return Err(classify(status, &body));
+                        }
+                        Ok(body)
                     }
-                    Ok(body)
+                })
+                .await;
+            match attempt {
+                Ok(body) => break body,
+                // A server that does not know the field says so with a 4xx. Ask without it.
+                Err(e) if asked_for_effort && mentions(&e, &["reasoning_effort"]) => {
+                    tracing::warn!(why = %e, "backend will not take reasoning_effort; asking without it");
+                    self.effort_supported.store(false, Ordering::Relaxed);
                 }
-            })
-            .await?;
+                Err(e) => return Err(e),
+            }
+        };
 
         let body: serde_json::Value =
             serde_json::from_str(&text).with_context(|| "decoding chat completion response")?;
@@ -515,12 +533,36 @@ impl BackendClient {
             stream_options: None,
             tools: req.tools,
             tool_choice: native.then(|| "auto".to_string()),
+            reasoning_effort: (!req.reason && self.effort_supported.load(Ordering::Relaxed))
+                .then(|| "minimal".to_string()),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    /// A question beside the turn asks the server for as little reasoning as it allows; the
+    /// turn itself asks nothing of the kind.
+    #[test]
+    fn a_side_question_asks_for_no_reasoning() {
+        let c = BackendClient::new("http://127.0.0.1:1");
+        let req = |reason| crate::backend::provider::TurnRequest {
+            model: "m".into(),
+            messages: Vec::new(),
+            tools: None,
+            grammar: None,
+            max_tokens: 8,
+            temperature: 0.0,
+            user: None,
+            reason,
+        };
+        assert_eq!(
+            c.render(req(false)).reasoning_effort.as_deref(),
+            Some("minimal")
+        );
+        assert_eq!(c.render(req(true)).reasoning_effort, None);
+    }
+
     /// What the server says it served is read from the answer, because a request that
     /// asks for a window can be clamped without the body saying so.
     #[test]

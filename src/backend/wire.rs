@@ -161,6 +161,10 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<ToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<String>,
+    /// How much a reasoning model thinks before answering. Sent only to ask for as little as
+    /// it allows, and dropped for the session by a server that rejects the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

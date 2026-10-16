@@ -362,6 +362,7 @@ impl Guess {
             max_tokens: 160,
             temperature: 0.0,
             user: Some(format!("{}-guess", self.session)),
+            reason: false,
         };
         let answer = tokio::select! {
             biased;
@@ -2260,6 +2261,7 @@ impl Agent {
             max_tokens: 120,
             temperature: 0.0,
             user: Some(format!("{}-review", self.session.id)),
+            reason: false,
         };
         let answer = tokio::select! {
             biased;
@@ -2515,6 +2517,7 @@ impl Agent {
             max_tokens: self.cfg.max_answer_tokens as u32,
             temperature: 0.2,
             user: Some(self.session.id.clone()),
+            reason: true,
         };
 
         let mut stream: ChunkStream = tokio::select! {
@@ -2646,6 +2649,7 @@ impl Agent {
                 max_tokens: 4096,
                 temperature: 0.0,
                 user: Some(format!("{}-repair", self.session.id)),
+                reason: true,
             };
             current = tokio::select! {
                 biased;
