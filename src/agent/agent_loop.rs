@@ -2553,10 +2553,10 @@ impl Agent {
                     None => break,
                 },
             };
-            // Something arrived, so the prompt has been read: from here a silence is a
-            // stall rather than work.
+            // Something arrived, so the server is at work: from here a silence is a stall.
             patience = STREAM_IDLE_TIMEOUT;
             match next? {
+                StreamEvent::Alive => {}
                 StreamEvent::Delta(p) => {
                     if !answering {
                         answering = true;

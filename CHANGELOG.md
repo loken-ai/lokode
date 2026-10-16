@@ -18,6 +18,7 @@ All notable changes to verve. The format follows [Keep a Changelog](https://keep
 
 ### Fixed
 
+- Backend: a long streamed answer is no longer cut at fifteen minutes.
 - Prompt: the contract says paths are relative to the project root.
 - Bash: a refused working directory says to leave cwd out to run at the root.
 - Backend: guesses, reviews and the readiness probe went unanswered by reasoning models.

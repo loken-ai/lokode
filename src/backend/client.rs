@@ -21,6 +21,8 @@ pub enum StreamEvent {
     Reasoning(String),
     /// A fragment of a native tool call, to be reassembled by index.
     Call(ToolCallDelta),
+    /// The server said it is still at work and has nothing to send yet: a keep-alive.
+    Alive,
     /// The end of generation, carrying what the server was willing to say about it.
     End {
         finish_reason: Option<String>,
@@ -111,7 +113,9 @@ impl BackendClient {
 
         Self {
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(900))
+                // A silence, not a duration: a stream the server keeps alive runs as long as it
+                // produces, and an answer that is not streamed is still bounded.
+                .read_timeout(std::time::Duration::from_secs(900))
                 .default_headers(map)
                 .build()
                 .expect("reqwest client"),
@@ -263,7 +267,20 @@ impl BackendClient {
 
         // One splitter per response: the tags it tracks can straddle chunk boundaries, so
         // the state has to outlive a single chunk and must not outlive the stream.
-        let sse = resp.bytes_stream().eventsource();
+        // A keep-alive is an SSE comment, which an event parser drops; it is turned into an
+        // event of its own so a server reading a long prompt is known to be working.
+        let sse = resp
+            .bytes_stream()
+            .map(|chunk| {
+                chunk.map(|b| {
+                    if is_keep_alive(&b) {
+                        b"event: alive\ndata: {}\n\n"[..].into()
+                    } else {
+                        b
+                    }
+                })
+            })
+            .eventsource();
         // One chunk can carry several things at once - a piece of prose, fragments of more
         // than one tool call, and the reason generation ended - so a chunk becomes a list
         // of events rather than one.
@@ -274,6 +291,7 @@ impl BackendClient {
         let mapped = sse.flat_map(move |ev| {
             let events: Vec<Result<StreamEvent>> = match ev {
                 Err(e) => vec![Err(anyhow!("sse: {e}"))],
+                Ok(event) if event.event == "alive" => vec![Ok(StreamEvent::Alive)],
                 Ok(event) if event.data.trim() == "[DONE]" => {
                     let _ = event;
                     Vec::new()
@@ -318,6 +336,13 @@ impl BackendClient {
         }
         unreachable!("the loop returns on its last attempt")
     }
+}
+
+/// Whether `chunk` holds nothing but SSE comment lines.
+fn is_keep_alive(chunk: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(chunk);
+    let mut lines = text.lines().filter(|l| !l.is_empty()).peekable();
+    lines.peek().is_some() && lines.all(|l| l.starts_with(':'))
 }
 
 /// Everything one chunk has to say.
@@ -541,6 +566,16 @@ impl BackendClient {
 
 #[cfg(test)]
 mod tests {
+    /// A chunk of comments alone is a keep-alive; one that carries data, or nothing, is not.
+    #[test]
+    fn a_comment_only_chunk_is_a_keep_alive() {
+        assert!(super::is_keep_alive(b":\n\n"));
+        assert!(super::is_keep_alive(b": keep-alive\n\n:\n\n"));
+        assert!(!super::is_keep_alive(b"data: {}\n\n"));
+        assert!(!super::is_keep_alive(b":\n\ndata: {}\n\n"));
+        assert!(!super::is_keep_alive(b""));
+    }
+
     /// A question beside the turn asks the server for as little reasoning as it allows; the
     /// turn itself asks nothing of the kind.
     #[test]

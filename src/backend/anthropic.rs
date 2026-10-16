@@ -57,7 +57,9 @@ impl AnthropicProvider {
         headers.insert("anthropic-version", HeaderValue::from_static(API_VERSION));
         Ok(Self {
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(900))
+                // A silence, not a duration: a stream the server keeps alive runs as long as it
+                // produces, and an answer that is not streamed is still bounded.
+                .read_timeout(std::time::Duration::from_secs(900))
                 .user_agent(concat!("verve/", env!("CARGO_PKG_VERSION")))
                 .default_headers(headers)
                 .build()?,
