@@ -404,7 +404,8 @@ const NEVER_ASK: &str = "The project is on this disk and you have tools for it. 
                          the user to paste, provide or share a file, its contents or its \
                          path: list, search and read it yourself. Ask only about what is \
                          not in the project - what they want, or a decision only they can \
-                         make.";
+                         make. Paths are relative to the project root, the directory the \
+                         session runs in; there is no other root.";
 
 /// How much of a call's arguments a reviewer is shown.
 ///
