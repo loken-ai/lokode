@@ -38,13 +38,13 @@ mod default {
     pub const MAX_ANSWER_TOKENS: usize = 4096;
 }
 
-/// Flags carry no defaults of their own.
-///
-/// A flag with a `default_value` cannot be told apart from one the user did not pass, and
-/// a setting that is always "specified" can never be overridden by a config file. The
-/// defaults live above and are applied last, once everything else has had its say.
+// Flags carry no defaults of their own.
+//
+// A flag with a `default_value` cannot be told apart from one the user did not pass, and
+// a setting that is always "specified" can never be overridden by a config file. The
+// defaults live above and are applied last, once everything else has had its say.
 #[derive(Parser, Debug)]
-#[command(name = "verve", about = "Local-first code agent TUI")]
+#[command(name = "verve", version, about = "Local-first code agent TUI")]
 struct Cli {
     /// Model name as known to the backend (e.g. qwen3-coder:latest).
     #[arg(short, long)]

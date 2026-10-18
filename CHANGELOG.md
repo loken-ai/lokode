@@ -46,6 +46,7 @@ All notable changes to verve. The format follows [Keep a Changelog](https://keep
 - Quit: quitting mid-write could truncate a file.
 - Scroll: past the top blanked the pane; the wheel was captured but unread.
 - Tools: results used ids matching no call, which strict servers reject.
+- CLI: --help shows what verve is instead of a note on its flags; --version answers.
 - Security: rustls 0.23.46, past four advisories on its TLS client.
 
 ### Added
