@@ -4,6 +4,8 @@ All notable changes to verve. The format follows [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-18
+
 ### Added
 
 - Commands: /model switches backend, /undo reverts, /mcp prompts, /digest forget confirms.
@@ -15,6 +17,36 @@ All notable changes to verve. The format follows [Keep a Changelog](https://keep
 - Status: shows the last step's rate, and out-of-turn work with its runtime.
 - Scroll: scrollbar tracks the pane; Home/End jump, search steps, Ctrl-Y copies.
 - Mouse: Ctrl-T toggles app/terminal, freeing its native select and copy.
+- Input: Esc interrupts a running turn; subprocesses are killed, not orphaned.
+- Tools: native tool calling, JSON envelope fallback; --tool-protocol auto/native/envelope.
+- Undo: /undo and /diff commit to a side git repo; undo moves history forward.
+- MCP: servers become native tools; each call approved and schema-checked.
+- CLI: -p runs headless; --approve sets consent, --output json, exit finished/failed/refused.
+- Session: transcripts saved under XDG_DATA_HOME; --resume and --continue append.
+- Logging: tracing events now go to a file, not the UI screen.
+- Config: config.toml, .verve.toml, VERVE_* vars, flags in rising precedence; --show-config.
+- Auth: VERVE_API_KEY, api-key-env, or api-key file; --header name=value; warns on plain keys.
+- Input: arrow history, wheel scroll, light markdown, colour on diffs.
+- Config: --allow-host lets web_fetch reach a service on your own network.
+- LSP: VERVE_LSP_RUST and siblings point to a server off the path or misnamed.
+- CI: formatting, clippy as error, tests, an MSRV build, and a dependency audit.
+- Docs: SECURITY.md, CONTRIBUTING.md, and an operational README.
+
+### Changed
+
+- Backend: a Provider trait, OpenAI and Anthropic impls, auto-selected by URL.
+- Reasoning: parsed four ways, shown apart from the answer, never sent back.
+- Shell: bash writes confined via --confine-shell or [shell] confine-writes.
+- Tools: grep no longer needs ripgrep; a glob walker does the same search.
+- Tools: web_fetch strips script/style, decodes entities, breaks at tags.
+- Limits: list_dir and glob now clamp output like every other tool.
+- Tools: read-only calls run together; a mutating call bounds both sides.
+- Compaction: trims well past the budget, so several steps fit per compaction.
+- UI: redraws on events, not a timer waking twelve times a second.
+- Tools: tool names are borrowed, not static str, so they can be set at runtime.
+- Tests: 21 to 222; an LSP stub verifies re-send, the LSP tools uncovered.
+- Tests: src/tools/tests.rs was the run_tests tool, now renamed run_tests.rs.
+- Deps: dropped two unused, schemars and reqwest's blocking/multipart features.
 
 ### Fixed
 
@@ -48,39 +80,6 @@ All notable changes to verve. The format follows [Keep a Changelog](https://keep
 - Tools: results used ids matching no call, which strict servers reject.
 - CLI: --help shows what verve is instead of a note on its flags; --version answers.
 - Security: rustls 0.23.46, past four advisories on its TLS client.
-
-### Added
-
-- Input: Esc interrupts a running turn; subprocesses are killed, not orphaned.
-- Tools: native tool calling, JSON envelope fallback; --tool-protocol auto/native/envelope.
-- Undo: /undo and /diff commit to a side git repo; undo moves history forward.
-- MCP: servers become native tools; each call approved and schema-checked.
-- CLI: -p runs headless; --approve sets consent, --output json, exit finished/failed/refused.
-- Session: transcripts saved under XDG_DATA_HOME; --resume and --continue append.
-- Logging: tracing events now go to a file, not the UI screen.
-- Config: config.toml, .verve.toml, VERVE_* vars, flags in rising precedence; --show-config.
-- Auth: VERVE_API_KEY, api-key-env, or api-key file; --header name=value; warns on plain keys.
-- Input: arrow history, wheel scroll, light markdown, colour on diffs.
-- Config: --allow-host lets web_fetch reach a service on your own network.
-- LSP: VERVE_LSP_RUST and siblings point to a server off the path or misnamed.
-- CI: formatting, clippy as error, tests, an MSRV build, and a dependency audit.
-- Docs: SECURITY.md, CONTRIBUTING.md, and an operational README.
-
-### Changed
-
-- Backend: a Provider trait, OpenAI and Anthropic impls, auto-selected by URL.
-- Reasoning: parsed four ways, shown apart from the answer, never sent back.
-- Shell: bash writes confined via --confine-shell or [shell] confine-writes.
-- Tools: grep no longer needs ripgrep; a glob walker does the same search.
-- Tools: web_fetch strips script/style, decodes entities, breaks at tags.
-- Limits: list_dir and glob now clamp output like every other tool.
-- Tools: read-only calls run together; a mutating call bounds both sides.
-- Compaction: trims well past the budget, so several steps fit per compaction.
-- UI: redraws on events, not a timer waking twelve times a second.
-- Tools: tool names are borrowed, not static str, so they can be set at runtime.
-- Tests: 21 to 222; an LSP stub verifies re-send, the LSP tools uncovered.
-- Tests: src/tools/tests.rs was the run_tests tool, now renamed run_tests.rs.
-- Deps: dropped two unused, schemars and reqwest's blocking/multipart features.
 
 ## [0.1.0] - 2026-08-09
 
