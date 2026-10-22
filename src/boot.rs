@@ -510,7 +510,7 @@ fn provider_for(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Pro
                 .map(|(_, v)| v.trim_start_matches("Bearer ").to_string())
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "the Anthropic API needs a key: set VERVE_API_KEY, or name a variable \
+                        "the Anthropic API needs a key: set LOKODE_API_KEY, or name a variable \
                          with `api-key-env` in the configuration"
                     )
                 })?;

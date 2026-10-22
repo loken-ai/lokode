@@ -17,7 +17,7 @@ stub language server the test writes out in Python. That stub reports the docume
 back inside its diagnostic, which is the only way to tell a fresh answer from a stale one -
 the bug it exists to catch was the server never being told a file had changed.
 
-`verve -p "…" --output json` drives one turn against a real backend without the interface,
+`lokode -p "…" --output json` drives one turn against a real backend without the interface,
 which is the quickest way to see a change end to end. `src/boot.rs` assembles the agent for
 both that and the terminal, so neither entry point can drift from the other.
 
@@ -61,7 +61,7 @@ in a temporary directory and answers approvals however the case wants.
 
 ## Reporting things
 
-Bugs and features: https://github.com/loken-ai/verve/issues.
+Bugs and features: https://github.com/loken-ai/lokode/issues.
 Security: [SECURITY.md](SECURITY.md).
 
 ## Licence

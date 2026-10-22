@@ -2,7 +2,7 @@
 //!
 //! The path sandbox governs the tools that take paths. A shell takes a string, and once a
 //! command is approved it runs with your privileges and your whole filesystem - which is
-//! the largest gap between what verve enforces and what someone might assume it enforces.
+//! the largest gap between what lokode enforces and what someone might assume it enforces.
 //!
 //! Linux can close part of it. Landlock lets a process give up access it will never need
 //! again, and a child cannot get it back. What is given up here is *writing*: everything

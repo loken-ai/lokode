@@ -390,7 +390,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
 
     if !agent_stopped {
         eprintln!(
-            "verve: the agent did not stop within {}s; exiting anyway",
+            "lokode: the agent did not stop within {}s; exiting anyway",
             SHUTDOWN_GRACE.as_secs()
         );
     }
@@ -1968,7 +1968,7 @@ async fn run_ui(
                                 if text.trim().is_empty() { continue; }
                                 state.entries.push(Entry::User(text.clone()));
                                 input = TextArea::default();
-                                                            // A line beginning with `/` is for verve, not the model.
+                                                            // A line beginning with `/` is for lokode, not the model.
                                 // Handled before the turn is started so that `/undo` works
                                 // when the thing you want undone is what the model just did.
                                 state.remember(&text);
@@ -2297,7 +2297,7 @@ async fn write_elsewhere(
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
-    let path = std::env::temp_dir().join(format!("verve-{}.md", std::process::id()));
+    let path = std::env::temp_dir().join(format!("lokode-{}.md", std::process::id()));
     std::fs::write(&path, carried)?;
 
     crate::ui::term::restore();

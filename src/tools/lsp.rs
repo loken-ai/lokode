@@ -67,7 +67,7 @@ impl LangId {
         // An override for a server that is not on the path under its usual name, or is
         // there under it and does not work - a rustup shim for a component that was never
         // installed answers to `rust-analyzer` and fails.
-        let var = format!("VERVE_LSP_{}", self.language_id().to_uppercase());
+        let var = format!("LOKODE_LSP_{}", self.language_id().to_uppercase());
         match std::env::var(&var) {
             Ok(cmd) if !cmd.trim().is_empty() => {
                 let mut parts = cmd.split_whitespace().map(String::from);
@@ -158,7 +158,7 @@ impl LspProcess {
                 name: "root".into(),
             }]),
             client_info: Some(lsp_types::ClientInfo {
-                name: "verve".into(),
+                name: "lokode".into(),
                 version: Some("0.1".into()),
             }),
             locale: None,
@@ -711,7 +711,7 @@ while True:
         }
         let script = h.path("stub_lsp.py");
         std::fs::write(&script, STUB).unwrap();
-        std::env::set_var("VERVE_LSP_RUST", format!("python3 {}", script.display()));
+        std::env::set_var("LOKODE_LSP_RUST", format!("python3 {}", script.display()));
         true
     }
 
@@ -766,6 +766,6 @@ while True:
         assert!(escaped.is_error, "{}", escaped.content);
 
         pool.shutdown().await;
-        std::env::remove_var("VERVE_LSP_RUST");
+        std::env::remove_var("LOKODE_LSP_RUST");
     }
 }

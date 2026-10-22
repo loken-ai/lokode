@@ -327,7 +327,7 @@ mod tests {
         }
         let h = Harness::confined();
         // Somewhere real, outside the root, that this user can otherwise certainly write.
-        let outside = std::env::temp_dir().join("verve-confinement-escape");
+        let outside = std::env::temp_dir().join("lokode-confinement-escape");
         let _ = std::fs::remove_file(&outside);
 
         let out = h
@@ -359,7 +359,7 @@ mod tests {
     #[tokio::test]
     async fn an_unconfined_command_does_write_outside_the_project() {
         let h = Harness::new(Answer::Yes);
-        let outside = std::env::temp_dir().join("verve-unconfined-control");
+        let outside = std::env::temp_dir().join("lokode-unconfined-control");
         let _ = std::fs::remove_file(&outside);
 
         let out = h
@@ -415,7 +415,7 @@ mod tests {
             return;
         }
         let h = Harness::confined();
-        let outside = std::env::temp_dir().join("verve-confinement-child-escape");
+        let outside = std::env::temp_dir().join("lokode-confinement-child-escape");
         let _ = std::fs::remove_file(&outside);
 
         let out = h

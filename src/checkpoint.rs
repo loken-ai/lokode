@@ -174,7 +174,7 @@ impl Checkpoints {
             "--quiet",
             "--allow-empty",
             "-m",
-            &format!("verve-turn:0 undo of turn {turn}"),
+            &format!("lokode-turn:0 undo of turn {turn}"),
         ])
         .await?;
 
@@ -232,7 +232,7 @@ impl Checkpoints {
             "commit",
             "--quiet",
             "-m",
-            &format!("verve-turn:{turn} {label}"),
+            &format!("lokode-turn:{turn} {label}"),
         ])
         .await
         .context("git commit")?;
@@ -245,10 +245,10 @@ impl Checkpoints {
             .env("GIT_WORK_TREE", &self.root)
             // The user's identity is not this repository's business, and a machine without
             // one configured would otherwise fail to commit at all.
-            .env("GIT_AUTHOR_NAME", "verve")
-            .env("GIT_AUTHOR_EMAIL", "verve@localhost")
-            .env("GIT_COMMITTER_NAME", "verve")
-            .env("GIT_COMMITTER_EMAIL", "verve@localhost")
+            .env("GIT_AUTHOR_NAME", "lokode")
+            .env("GIT_AUTHOR_EMAIL", "lokode@localhost")
+            .env("GIT_COMMITTER_NAME", "lokode")
+            .env("GIT_COMMITTER_EMAIL", "lokode@localhost")
             .current_dir(&self.root)
             .kill_on_drop(true);
         cmd
@@ -284,7 +284,7 @@ fn turn_of(subject: &str) -> u32 {
     subject
         .split_whitespace()
         .next()
-        .and_then(|w| w.strip_prefix("verve-turn:"))
+        .and_then(|w| w.strip_prefix("lokode-turn:"))
         .and_then(|n| n.parse().ok())
         .unwrap_or(0)
 }
@@ -513,10 +513,10 @@ mod tests {
 
     #[test]
     fn a_commit_declares_which_turn_it_belongs_to() {
-        assert_eq!(turn_of("verve-turn:7 write_file"), 7);
-        assert_eq!(turn_of("verve-turn:0 session baseline"), 0);
+        assert_eq!(turn_of("lokode-turn:7 write_file"), 7);
+        assert_eq!(turn_of("lokode-turn:0 session baseline"), 0);
         assert_eq!(turn_of("a commit made by something else"), 0);
-        assert_eq!(undone_turn("verve-turn:0 undo of turn 3"), Some(3));
-        assert_eq!(undone_turn("verve-turn:2 write_file"), None);
+        assert_eq!(undone_turn("lokode-turn:0 undo of turn 3"), Some(3));
+        assert_eq!(undone_turn("lokode-turn:2 write_file"), None);
     }
 }

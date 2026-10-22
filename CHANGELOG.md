@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to verve. The format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/).
+All notable changes to lokode. The format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/).
 
 ## [Unreleased]
+
+### Changed
+
+- Project: rename verve to lokode.
 
 ## [0.2.0] - 2026-10-18
 
@@ -24,11 +28,11 @@ All notable changes to verve. The format follows [Keep a Changelog](https://keep
 - CLI: -p runs headless; --approve sets consent, --output json, exit finished/failed/refused.
 - Session: transcripts saved under XDG_DATA_HOME; --resume and --continue append.
 - Logging: tracing events now go to a file, not the UI screen.
-- Config: config.toml, .verve.toml, VERVE_* vars, flags in rising precedence; --show-config.
-- Auth: VERVE_API_KEY, api-key-env, or api-key file; --header name=value; warns on plain keys.
+- Config: config.toml, .lokode.toml, LOKODE_* vars, flags in rising precedence; --show-config.
+- Auth: LOKODE_API_KEY, api-key-env, or api-key file; --header name=value; warns on plain keys.
 - Input: arrow history, wheel scroll, light markdown, colour on diffs.
 - Config: --allow-host lets web_fetch reach a service on your own network.
-- LSP: VERVE_LSP_RUST and siblings point to a server off the path or misnamed.
+- LSP: LOKODE_LSP_RUST and siblings point to a server off the path or misnamed.
 - CI: formatting, clippy as error, tests, an MSRV build, and a dependency audit.
 - Docs: SECURITY.md, CONTRIBUTING.md, and an operational README.
 
@@ -78,7 +82,7 @@ All notable changes to verve. The format follows [Keep a Changelog](https://keep
 - Quit: quitting mid-write could truncate a file.
 - Scroll: past the top blanked the pane; the wheel was captured but unread.
 - Tools: results used ids matching no call, which strict servers reject.
-- CLI: --help shows what verve is instead of a note on its flags; --version answers.
+- CLI: --help shows what lokode is instead of a note on its flags; --version answers.
 - Security: rustls 0.23.46, past four advisories on its TLS client.
 
 ## [0.1.0] - 2026-08-09

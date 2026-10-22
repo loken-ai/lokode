@@ -225,8 +225,8 @@ mod tests {
     #[test]
     fn a_word_named_to_be_excluded_is_not_searched_for() {
         assert_eq!(
-            terms("using the sources but not the readme, what are the verve features"),
-            vec!["using", "verve"]
+            terms("using the sources but not the readme, what are the lokode features"),
+            vec!["using", "lokode"]
         );
         assert!(!terms("describe compaction without the digest").contains(&"digest".into()));
         // The aside ends at the comma: what comes after it is the question again.

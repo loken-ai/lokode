@@ -1,4 +1,4 @@
-//! Where verve keeps things on disk.
+//! Where lokode keeps things on disk.
 //!
 //! The XDG base directories, read from the environment where it says so and falling back
 //! to the conventional places. Written out rather than taken from a crate: it is three
@@ -21,12 +21,12 @@ fn xdg(var: &str, default: &str) -> Option<PathBuf> {
 
 /// Logs and other state the user would not miss if it were deleted.
 pub fn state_dir() -> Option<PathBuf> {
-    xdg("XDG_STATE_HOME", ".local/state").map(|p| p.join("verve"))
+    xdg("XDG_STATE_HOME", ".local/state").map(|p| p.join("lokode"))
 }
 
 /// Session transcripts: not disposable, since resuming depends on them.
 pub fn data_dir() -> Option<PathBuf> {
-    xdg("XDG_DATA_HOME", ".local/share").map(|p| p.join("verve"))
+    xdg("XDG_DATA_HOME", ".local/share").map(|p| p.join("lokode"))
 }
 
 /// Where the session transcripts live.
@@ -36,7 +36,7 @@ pub fn sessions_dir() -> Option<PathBuf> {
 
 /// Default log file.
 pub fn log_file() -> Option<PathBuf> {
-    state_dir().map(|p| p.join("verve.log"))
+    state_dir().map(|p| p.join("lokode.log"))
 }
 
 /// Guards the process-wide environment, so tests that set a variable do not race each
@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn an_absolute_xdg_value_is_used() {
         with_env(&[("XDG_STATE_HOME", Some("/tmp/xdg-state"))], || {
-            assert_eq!(state_dir(), Some(PathBuf::from("/tmp/xdg-state/verve")));
+            assert_eq!(state_dir(), Some(PathBuf::from("/tmp/xdg-state/lokode")));
         });
     }
 
@@ -96,7 +96,7 @@ mod tests {
             || {
                 assert_eq!(
                     state_dir(),
-                    Some(PathBuf::from("/somewhere/.local/state/verve"))
+                    Some(PathBuf::from("/somewhere/.local/state/lokode"))
                 );
             },
         );
@@ -113,11 +113,11 @@ mod tests {
             || {
                 assert_eq!(
                     log_file(),
-                    Some(PathBuf::from("/somewhere/.local/state/verve/verve.log"))
+                    Some(PathBuf::from("/somewhere/.local/state/lokode/lokode.log"))
                 );
                 assert_eq!(
                     sessions_dir(),
-                    Some(PathBuf::from("/somewhere/.local/share/verve/sessions"))
+                    Some(PathBuf::from("/somewhere/.local/share/lokode/sessions"))
                 );
             },
         );

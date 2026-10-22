@@ -124,7 +124,7 @@ impl ToolCtx {
 pub fn tool_http_client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent(concat!("verve/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("lokode/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
         .build()?)
 }

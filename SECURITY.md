@@ -1,6 +1,6 @@
 # Security
 
-verve gives a language model the ability to read your files, change them, reach the network
+lokode gives a language model the ability to read your files, change them, reach the network
 and run commands. This document says what is actually enforced and what is not, because a
 guarantee you believe in and do not have is worse than one you know you lack.
 
@@ -70,14 +70,14 @@ token in it - all readable by the model if they are under the root, and all reco
 session transcript. The transcript is written with your umask; nothing in it is encrypted.
 
 **The change history holds copies of your files.** `/undo` and `/diff` work because every
-change is committed to a git repository under `$XDG_DATA_HOME/verve/checkpoints/<session>`,
+change is committed to a git repository under `$XDG_DATA_HOME/lokode/checkpoints/<session>`,
 whose work tree is the project. It therefore contains full copies of everything under the root
 that is not ignored - including anything sensitive - and it outlives the session. It respects
 the project's `.gitignore`, so what git would not track it does not keep, but that is the only
 filter. Delete the directory when you are done with the session.
 
 **An MCP server is a third party with your privileges.** It is a program you configured, and
-`verve` starts it with the project as its working directory. Nothing here confines what it
+`lokode` starts it with the project as its working directory. Nothing here confines what it
 does — the path sandbox governs this agent's own file tools, not another process. Every call
 to one of its tools is approved and the approval names the server, but approving a call is
 approving whatever that program does with it.
@@ -101,13 +101,13 @@ them.
   `[shell] writable`.
 - Prefer a container or a VM for a repository you have not read.
 - Keep an API key in the environment rather than in a config file. If you do put one in a
-  file, verve refuses to use it unless the file is private to you.
-- Read `$XDG_STATE_HOME/verve/verve.log` and the session transcript afterwards. Every approval
+  file, lokode refuses to use it unless the file is private to you.
+- Read `$XDG_STATE_HOME/lokode/lokode.log` and the session transcript afterwards. Every approval
   decision and every tool call is in them.
 
 ## Reporting a vulnerability
 
-Open an issue at https://github.com/loken-ai/verve/issues. If it is something that
+Open an issue at https://github.com/loken-ai/lokode/issues. If it is something that
 should not be public first, say so in an issue with no detail and a maintainer will arrange a
 private channel.
 

@@ -523,7 +523,7 @@ async fn write_atomic(target: &std::path::Path, contents: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", target.display()))?;
     tokio::fs::create_dir_all(parent).await?;
 
-    let tmp = parent.join(format!(".verve-{}.tmp", uuid::Uuid::new_v4()));
+    let tmp = parent.join(format!(".lokode-{}.tmp", uuid::Uuid::new_v4()));
     let write = async {
         let mut f = tokio::fs::File::create(&tmp).await?;
         f.write_all(contents.as_bytes()).await?;
@@ -748,7 +748,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with(".verve-"))
+            .filter(|n| n.starts_with(".lokode-"))
             .collect();
         assert!(
             leftovers.is_empty(),

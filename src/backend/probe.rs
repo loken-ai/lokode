@@ -19,7 +19,7 @@ use crate::backend::provider::{Provider, TurnRequest};
 use crate::backend::wire::{Message, ToolSpec};
 
 /// What the probe asks for. Named so it cannot be mistaken for a real tool in a log.
-const PROBE_TOOL: &str = "verve_probe_ping";
+const PROBE_TOOL: &str = "lokode_probe_ping";
 
 /// Whether the backend took the tool definitions and dropped them.
 ///

@@ -19,23 +19,23 @@ pub fn user_config_path() -> Option<PathBuf> {
         Some(v) if PathBuf::from(&v).is_absolute() => PathBuf::from(v),
         _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
     };
-    Some(base.join("verve").join("config.toml"))
+    Some(base.join("lokode").join("config.toml"))
 }
 
 /// The file a project keeps for everyone who works on it.
 pub fn project_config_path(root: &Path) -> PathBuf {
-    root.join(".verve.toml")
+    root.join(".lokode.toml")
 }
 
 /// The project's standing instructions to the agent: its conventions, its build, what it
 /// must not touch. Committed, so the whole team works with the same ones.
 pub fn project_instructions_path(root: &Path) -> PathBuf {
-    root.join(".verve.md")
+    root.join(".lokode.md")
 }
 
 /// The user's own standing instructions, for every project.
 pub fn user_instructions_path() -> Option<PathBuf> {
-    user_config_path().map(|p| p.with_file_name("verve.md"))
+    user_config_path().map(|p| p.with_file_name("lokode.md"))
 }
 
 /// The standing instructions, user's first and project's second, and anything the user
@@ -95,7 +95,7 @@ fn instructions_from(
 
 /// The directory a project keeps its own commands in, one Markdown file per command.
 pub fn commands_dir(root: &Path) -> PathBuf {
-    root.join(".verve").join("commands")
+    root.join(".lokode").join("commands")
 }
 
 /// The text of a command the project defines, if it defines one by that name.
@@ -596,7 +596,7 @@ pub fn resolve_headers(
         headers.push((k.trim().to_string(), v.trim().to_string()));
     }
 
-    let key = std::env::var("VERVE_API_KEY")
+    let key = std::env::var("LOKODE_API_KEY")
         .ok()
         .filter(|k| !k.trim().is_empty())
         .or_else(|| {
@@ -910,9 +910,9 @@ mod instruction_tests {
     fn both_files_are_read_and_the_project_comes_last() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
-        std::fs::create_dir_all(home.join(".config").join("verve")).unwrap();
+        std::fs::create_dir_all(home.join(".config").join("lokode")).unwrap();
         std::fs::write(
-            home.join(".config").join("verve").join("verve.md"),
+            home.join(".config").join("lokode").join("lokode.md"),
             "always answer in French",
         )
         .unwrap();
@@ -922,7 +922,7 @@ mod instruction_tests {
 
         let (text, warnings) = instructions_from(
             [
-                home.join(".config").join("verve").join("verve.md"),
+                home.join(".config").join("lokode").join("lokode.md"),
                 project_instructions_path(&root),
             ],
             10_000,
@@ -932,7 +932,7 @@ mod instruction_tests {
         let user_at = text.find("always answer in French").unwrap();
         let project_at = text.find("run cargo test").unwrap();
         assert!(user_at < project_at);
-        assert!(text.contains("verve.md"));
+        assert!(text.contains("lokode.md"));
     }
 
     #[test]
@@ -1019,7 +1019,7 @@ mod remember_tests {
     #[test]
     fn remembering_creates_what_is_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("verve").join("config.toml");
+        let path = dir.path().join("lokode").join("config.toml");
         remember_model(&path, "small").unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),

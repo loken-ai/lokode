@@ -1,4 +1,4 @@
-# verve
+# lokode
 
 A coding agent that runs in your terminal, against a model on your own machine. No account,
 no request leaving the box, no editor to adopt.
@@ -11,7 +11,7 @@ no request leaving the box, no editor to adopt.
 > is still learning its manners.
 
 ```sh
-verve --model qwen3-coder:latest --root .
+lokode --model qwen3-coder:latest --root .
 ```
 
 It speaks the OpenAI-compatible API, so it works against [loken](https://github.com/loken-ai/loken),
@@ -77,7 +77,7 @@ everything outside the project read-only for it.
 ## Install
 
 ```sh
-cargo install --path .     # or: cargo build --release  -> target/release/verve
+cargo install --path .     # or: cargo build --release  -> target/release/lokode
 ```
 
 Needs Rust 1.92 or later, and a Unix-like system - the shell tool runs `/bin/sh`.
@@ -89,8 +89,8 @@ One thing it uses if it is there, and one it needs:
 - **A language server** for `lsp_diagnostics` and `lsp_hover`: `rust-analyzer`,
   `pyright-langserver`, or `typescript-language-server`. If one is on your `PATH` under the
   usual name but does not work - a `rustup` shim for a component that was never installed
-  answers to `rust-analyzer` and fails - point at a working one with `VERVE_LSP_RUST`,
-  `VERVE_LSP_PYTHON`, `VERVE_LSP_TYPESCRIPT` or `VERVE_LSP_JAVASCRIPT`.
+  answers to `rust-analyzer` and fails - point at a working one with `LOKODE_LSP_RUST`,
+  `LOKODE_LSP_PYTHON`, `LOKODE_LSP_TYPESCRIPT` or `LOKODE_LSP_JAVASCRIPT`.
 
 ## Using it
 
@@ -144,7 +144,7 @@ while dragging for a terminal selection, or press `Ctrl-T` to lend it the mouse 
 
 A line beginning with `!` is a command of your own, run here rather than asked of the model,
 and what it printed joins the conversation. A line beginning with `#` is a rule for the
-project, appended to `.verve.md` and told to the model at once.
+project, appended to `.lokode.md` and told to the model at once.
 
 | Command | |
 |---|---|
@@ -293,20 +293,20 @@ decision to take it back is still in that history rather than discarded. See
 
 ## Sessions
 
-Every session is written to `$XDG_DATA_HOME/verve/sessions/<id>.jsonl` as it happens, which
+Every session is written to `$XDG_DATA_HOME/lokode/sessions/<id>.jsonl` as it happens, which
 is what makes a bad run answerable afterwards.
 
 ```sh
-verve --continue              # the most recent session for this root
-verve --resume <id>           # a particular one
-verve --no-transcript         # record nothing
+lokode --continue              # the most recent session for this root
+lokode --resume <id>           # a particular one
+lokode --no-transcript         # record nothing
 ```
 
 A resumed session keeps its id and appends to the file it came from. It also remembers the
 model, so `--model` becomes optional.
 
-Logs go to `$XDG_STATE_HOME/verve/verve.log`, never to the terminal - the interface owns that
-screen. `RUST_LOG=verve=debug` turns the volume up; `--log-file` puts it somewhere else.
+Logs go to `$XDG_STATE_HOME/lokode/lokode.log`, never to the terminal - the interface owns that
+screen. `RUST_LOG=lokode=debug` turns the volume up; `--log-file` puts it somewhere else.
 
 ## Settling approvals in advance
 
@@ -438,11 +438,11 @@ What it learns goes in front of the model next session, as a short paragraph of 
 rather than the dozen searches that produced them. That is the point: the searching is what
 fills a window, and a window spent on rediscovery is a window not spent on the work.
 `/digest` shows what is known and where each statement came from, `/digest forget` clears
-it, and what is worth keeping belongs in `.verve.md` where the rest of the team gets it.
+it, and what is worth keeping belongs in `.lokode.md` where the rest of the team gets it.
 
 ## What the project tells the agent
 
-`.verve.md` at the root of a project, and `~/.config/verve/verve.md` for yourself, are read
+`.lokode.md` at the root of a project, and `~/.config/lokode/lokode.md` for yourself, are read
 at the start of every session and appended to the system message: the conventions, the
 command that checks a change, what must not be touched. The user's file comes first and the
 project's second, each named, so the model can tell whose rule it is reading.
@@ -525,7 +525,7 @@ inside a turn.
 
 ## Commands a project ships
 
-A Markdown file under `.verve/commands` is a command: `review.md` makes `/review`, and what
+A Markdown file under `.lokode/commands` is a command: `review.md` makes `/review`, and what
 it holds becomes that turn's prompt. Anything typed after the name replaces `$ARGS`, or is
 appended when the file does not name it, so one command serves a family of tasks. `/help`
 lists the project's alongside the built-ins.
@@ -568,7 +568,7 @@ checkpoints and the transcript working on them unchanged.
 in front of it.
 
 ```sh
-verve -p "fix the clippy warnings" --approve edits --output json
+lokode -p "fix the clippy warnings" --approve edits --output json
 ```
 
 Since there is nobody to answer an approval, the policy is stated up front. `--approve none`
@@ -594,14 +594,14 @@ proxy that speaks Anthropic's format on your own host.
 The credential is resolved the same way either way: the environment, then a named variable,
 then a file only you can read. Only where it goes on the wire differs: `Authorization: Bearer`
 for the OpenAI family, `x-api-key` for Anthropic. Converting a working configuration between
-them is a header change, not a value change, and verve makes it for you.
+them is a header change, not a value change, and lokode makes it for you.
 
 What differs beyond that is absorbed at the boundary. Anthropic's system prompt is a top-level
 field rather than a message, its tool results are blocks inside a user turn rather than their
 own role, and its stream speaks a different alphabet. None of that reaches the loop, the
 transcript or the screen. Reasoning is the same story from the other direction: `<think>` tags
 inline, a `reasoning` field, a `reasoning_content` field and Anthropic's thinking blocks are
-four spellings of one thing, and verve shows all four the same way, set apart and never fed
+four spellings of one thing, and lokode shows all four the same way, set apart and never fed
 back to the model.
 
 ## How tools are called
@@ -625,11 +625,11 @@ force. Pin `--tool-protocol native` or `envelope` to skip the question.
 ## Configuring it
 
 Settings come from four places. The narrower statement wins, because it is the one made
-knowing more: a flag beats the environment, the environment beats `<root>/.verve.toml`, that
-beats `~/.config/verve/config.toml`, and that beats the built-in default.
+knowing more: a flag beats the environment, the environment beats `<root>/.lokode.toml`, that
+beats `~/.config/lokode/config.toml`, and that beats the built-in default.
 
 ```toml
-# ~/.config/verve/config.toml, or .verve.toml in a project
+# ~/.config/lokode/config.toml, or .lokode.toml in a project
 model = "qwen3-coder:latest"
 tool-protocol = "auto"          # auto | native | envelope
 
@@ -637,7 +637,7 @@ tool-protocol = "auto"          # auto | native | envelope
 url = "http://127.0.0.1:11435"
 kind = "auto"                   # auto | openai | anthropic
 api-key-env = "MY_BACKEND_KEY"  # name a variable; do not write the key here
-headers = { "X-Team" = "verve" }
+headers = { "X-Team" = "lokode" }
 
 [limits]
 max-steps = 16
@@ -651,16 +651,16 @@ allow-hosts = ["docs.example.com"]
 transcripts = true
 ```
 
-`verve --show-config` prints which files were read and what everything resolved to. It names
+`lokode --show-config` prints which files were read and what everything resolved to. It names
 headers and never prints their values.
 
-**Credentials.** `VERVE_API_KEY` is checked first, then the variable named by `api-key-env`,
+**Credentials.** `LOKODE_API_KEY` is checked first, then the variable named by `api-key-env`,
 then an `api-key` written in the file. The last is accepted only if nobody else can read the
 file - a secret in a world-readable file is not a secret. A key about to cross a network
 unencrypted is warned about.
 
-Everything also has an environment variable: `VERVE_MODEL`, `VERVE_BACKEND_URL`,
-`VERVE_LOG_FILE`, `VERVE_API_KEY`.
+Everything also has an environment variable: `LOKODE_MODEL`, `LOKODE_BACKEND_URL`,
+`LOKODE_LOG_FILE`, `LOKODE_API_KEY`.
 
 ## Development
 

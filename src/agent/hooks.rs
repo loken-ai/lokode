@@ -38,9 +38,9 @@ pub async fn run(command: &str, root: &Path, tool: &str, when: &str) -> Ran {
         .arg("-c")
         .arg(command)
         .current_dir(root)
-        .env("VERVE_HOOK", when)
-        .env("VERVE_TOOL", tool)
-        .env("VERVE_ROOT", root)
+        .env("LOKODE_HOOK", when)
+        .env("LOKODE_TOOL", tool)
+        .env("LOKODE_ROOT", root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -99,7 +99,7 @@ mod tests {
     async fn a_hook_that_succeeds_hands_back_what_it_printed() {
         let dir = tempfile::tempdir().unwrap();
         let ran = run(
-            "echo checked $VERVE_TOOL",
+            "echo checked $LOKODE_TOOL",
             dir.path(),
             "write_file",
             "pre-tool",

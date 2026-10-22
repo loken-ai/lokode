@@ -1,20 +1,20 @@
 [package]
-name = "verve"
+name = "lokode"
 version = "0.2.0"
 edition = "2021"
 description = "Experimental local-first coding agent in the terminal, driven by a model on your own machine"
-repository = "https://github.com/loken-ai/verve"
+repository = "https://github.com/loken-ai/lokode"
 license = "MIT OR Apache-2.0"
 keywords = ["agent", "tui", "coding"]
 categories = ["command-line-utilities", "development-tools"]
 rust-version = "1.92"
 
 [lib]
-name = "verve"
+name = "lokode"
 path = "src/lib.rs"
 
 [[bin]]
-name = "verve"
+name = "lokode"
 path = "src/main.rs"
 
 [dependencies]

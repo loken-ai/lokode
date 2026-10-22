@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use verve::{app, config};
+use lokode::{app, config};
 
 /// Defaults, in one place, so that "not specified anywhere" has a single answer.
 mod default {
@@ -44,7 +44,7 @@ mod default {
 // a setting that is always "specified" can never be overridden by a config file. The
 // defaults live above and are applied last, once everything else has had its say.
 #[derive(Parser, Debug)]
-#[command(name = "verve", version, about = "Local-first code agent TUI")]
+#[command(name = "lokode", version, about = "Local-first code agent TUI")]
 struct Cli {
     /// Model name as known to the backend (e.g. qwen3-coder:latest).
     #[arg(short, long)]
@@ -94,7 +94,7 @@ struct Cli {
     #[arg(long = "allow-host", value_name = "HOST")]
     allow_hosts: Vec<String>,
 
-    /// Where to write the log. Defaults to $XDG_STATE_HOME/verve/verve.log.
+    /// Where to write the log. Defaults to $XDG_STATE_HOME/lokode/lokode.log.
     ///
     /// Never stderr: the TUI owns the screen, and writing to it would corrupt the display
     /// while destroying the log's own readability.
@@ -153,12 +153,12 @@ struct Cli {
     /// Read-only tools never prompt, so this governs the ones that change something, run
     /// something, or leave the machine. The default refuses all of them.
     #[arg(long, value_enum, default_value = "none", requires = "prompt")]
-    approve: verve::headless::ApprovePolicy,
+    approve: lokode::headless::ApprovePolicy,
 
     /// How a headless run reports. `text` streams prose to stdout and progress to stderr;
     /// `json` writes one object to stdout at the end.
     #[arg(long, value_enum, default_value = "text", requires = "prompt")]
-    output: verve::headless::OutputFormat,
+    output: lokode::headless::OutputFormat,
 }
 
 fn main() -> Result<()> {
@@ -175,7 +175,7 @@ fn main() -> Result<()> {
     let log_file = cli
         .log_file
         .clone()
-        .or_else(|| env_path("VERVE_LOG_FILE"))
+        .or_else(|| env_path("LOKODE_LOG_FILE"))
         .or_else(|| file.session.log_file.clone());
     let _log_guard = init_logging(log_file)?;
 
@@ -193,7 +193,7 @@ fn main() -> Result<()> {
     match cfg.prompt {
         // A headless run answers with an exit code, because the caller is a script.
         Some(prompt) => {
-            let code = runtime.block_on(verve::headless::run(
+            let code = runtime.block_on(lokode::headless::run(
                 cfg.app,
                 prompt,
                 cfg.approve,
@@ -212,8 +212,8 @@ struct Resolved {
     sources: Vec<String>,
     /// Present when this is a headless run.
     prompt: Option<String>,
-    approve: verve::headless::ApprovePolicy,
-    output: verve::headless::OutputFormat,
+    approve: lokode::headless::ApprovePolicy,
+    output: lokode::headless::OutputFormat,
 }
 
 fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved> {
@@ -230,7 +230,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
 
     let backend_url = cli
         .backend_url
-        .or_else(|| env_string("VERVE_BACKEND_URL"))
+        .or_else(|| env_string("LOKODE_BACKEND_URL"))
         .or_else(|| file.backend.url.clone())
         .unwrap_or_else(|| default::BACKEND_URL.to_string());
 
@@ -278,7 +278,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
     // is news at startup, rather than the first command of the session failing.
     let shell_writable = (cli.confine_shell || file.shell.confine_writes.unwrap_or(false))
         .then(|| config::resolve_shell_writable(&file, &root, &mut warnings));
-    if shell_writable.is_some() && verve::sandbox::confine::abi().is_none() {
+    if shell_writable.is_some() && lokode::sandbox::confine::abi().is_none() {
         warnings.push(
             "shell confinement was asked for and this system has no Landlock: bash will \
              refuse to run rather than run unconfined"
@@ -303,7 +303,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
         app: app::AppConfig {
             model: cli
                 .model
-                .or_else(|| env_string("VERVE_MODEL"))
+                .or_else(|| env_string("LOKODE_MODEL"))
                 .or(file.model.clone()),
             root,
             backend_url,
@@ -344,9 +344,9 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             discover: cli.discover || file.discover.unwrap_or(false),
             headless: cli.prompt.is_some(),
             mode: if cli.plan || file.mode.as_deref() == Some("plan") {
-                verve::agent::agent_loop::Mode::Plan
+                lokode::agent::agent_loop::Mode::Plan
             } else {
-                verve::agent::agent_loop::Mode::Act
+                lokode::agent::agent_loop::Mode::Act
             },
             shell_writable,
         },
@@ -423,9 +423,9 @@ fn init_logging(
     use tracing_subscriber::EnvFilter;
 
     let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,verve=info"));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,lokode=info"));
 
-    let Some(path) = explicit.or_else(verve::paths::log_file) else {
+    let Some(path) = explicit.or_else(lokode::paths::log_file) else {
         // No home directory to write into. Running without a log beats refusing to run.
         return Ok(None);
     };
@@ -446,6 +446,6 @@ fn init_logging(
         .with_ansi(false)
         .init();
 
-    tracing::info!(path = %path.display(), "verve starting");
+    tracing::info!(path = %path.display(), "lokode starting");
     Ok(Some(guard))
 }

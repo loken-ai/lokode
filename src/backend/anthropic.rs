@@ -5,7 +5,7 @@
 //! the agent keeps internally, and each is translated here so that nothing above has to
 //! know:
 //!
-//! - The system prompt is a **top-level field**, not a message with a role. verve's whole
+//! - The system prompt is a **top-level field**, not a message with a role. lokode's whole
 //!   compaction design rests on the system message being at index 0 and never dropped, so
 //!   the invariant is kept internally and the message is lifted out at render time.
 //! - A tool result is a **content block inside a `user` message**, not a message with role
@@ -60,7 +60,7 @@ impl AnthropicProvider {
                 // A silence, not a duration: a stream the server keeps alive runs as long as it
                 // produces, and an answer that is not streamed is still bounded.
                 .read_timeout(std::time::Duration::from_secs(900))
-                .user_agent(concat!("verve/", env!("CARGO_PKG_VERSION")))
+                .user_agent(concat!("lokode/", env!("CARGO_PKG_VERSION")))
                 .default_headers(headers)
                 .build()?,
             base,
@@ -408,7 +408,7 @@ mod tests {
         }
     }
 
-    /// The invariant verve's compaction rests on is that the system message is history[0].
+    /// The invariant lokode's compaction rests on is that the system message is history[0].
     /// Anthropic has no such role, so it is lifted into a field rather than sent as a turn.
     #[test]
     fn the_system_message_becomes_a_field() {

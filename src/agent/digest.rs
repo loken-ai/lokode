@@ -338,8 +338,8 @@ mod tests {
     #[test]
     fn suggestions_are_told_once() {
         let mut d = Digest::default();
-        d.suggest("add the test command to .verve.md");
-        d.suggest("add the test command to .verve.md");
+        d.suggest("add the test command to .lokode.md");
+        d.suggest("add the test command to .lokode.md");
         assert_eq!(d.take_suggestions().len(), 1);
         assert!(d.take_suggestions().is_empty());
     }

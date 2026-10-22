@@ -308,7 +308,7 @@ impl Discovery {
         // user's call, so it is suggested rather than written.
         if digest.questions.is_empty() {
             digest.suggest(
-                "the project has been looked into: /digest shows what was found, and what                  is worth keeping belongs in .verve.md where everyone gets it",
+                "the project has been looked into: /digest shows what was found, and what                  is worth keeping belongs in .lokode.md where everyone gets it",
             );
         }
         digest.save();
