@@ -4,6 +4,8 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-24
+
 ### Changed
 
 - Project: rename verve to lokode.
