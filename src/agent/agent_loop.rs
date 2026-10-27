@@ -2885,9 +2885,19 @@ mod tests {
                         break;
                     }
                 }
-                let response = queue.next().unwrap_or_else(|| {
-                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".into()
-                });
+                // The model list is asked once per model and is not part of a script: it
+                // states no window, and the queue is kept for the turns.
+                let response = if buf.starts_with(b"GET /v1/models") {
+                    let body = r#"{"object":"list","data":[]}"#;
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                } else {
+                    queue.next().unwrap_or_else(|| {
+                        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".into()
+                    })
+                };
                 let _ = sock.write_all(response.as_bytes()).await;
                 let _ = sock.flush().await;
                 let _ = sock.shutdown().await;

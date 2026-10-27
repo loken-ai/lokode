@@ -108,10 +108,11 @@ pane, and `space` opens a block that was counted. A change waiting to be agreed 
 about in the thread, with its diff beside it, not in a window over the conversation it has
 to be judged against.
 
-The window is asked of the backend rather than assumed: guessing small wastes what is
-there, and guessing large sends prompts the server cuts, which produces an answer that is
-fluent and wrong about what it was asked. `--context-tokens` still settles it where it is
-stated.
+The window is read from the backend rather than assumed: its model list states the widest
+window each model takes (`max_model_len`), and the session never plans past it. Guessing
+small wastes what is there, and guessing large sends prompts the server cuts, which
+produces an answer that is fluent and wrong about what it was asked. `--context-tokens`
+still caps it where it is stated.
 
 | Key | |
 |---|---|

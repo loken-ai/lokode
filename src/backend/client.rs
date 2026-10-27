@@ -1,5 +1,5 @@
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -56,34 +56,12 @@ pub struct BackendClient {
     usage_supported: AtomicBool,
     /// Whether the server takes `reasoning_effort`; learned, as `usage_supported` is.
     effort_supported: AtomicBool,
-    /// The window the server last said it served, or zero if it has never said.
-    served_window: AtomicUsize,
+    /// The widest window the server takes for the model last asked about, as its model list
+    /// states it, once learned.
+    served_window: std::sync::Mutex<Option<(String, usize)>>,
 }
 
 impl BackendClient {
-    /// The header a server that schedules by priority reads.
-    ///
-    /// Named here rather than configured: it is one server's extension, and a server that
-    /// does not know it ignores an unknown header, which is the right outcome.
-    pub const PRIORITY_HEADER: &'static str = "x-loken-priority";
-
-    /// The header a server reads to be told what context to serve the model with, and
-    /// answers in to say what it served.
-    ///
-    /// The OpenAI body has no field for a window, so a client speaking that shape is
-    /// otherwise held to whatever default the server was configured with, however large
-    /// the model is. Asking is half of it: a request can be clamped by what the
-    /// checkpoint declares or by what the cards hold, so the answer is read for what was
-    /// actually served rather than assumed to be what was asked.
-    pub const WINDOW_HEADER: &'static str = "x-loken-num-ctx";
-
-    /// The header a server reads to be told how to store the key-value cache.
-    ///
-    /// Sent with the window rather than instead of it: the cache is what a window costs,
-    /// and a server asked for one it cannot allocate at native width serves the smaller
-    /// one it can.
-    pub const KV_FORMAT_HEADER: &'static str = "x-loken-kv-quant";
-
     pub fn new(base_url: impl Into<String>) -> Self {
         Self::with_headers(base_url, &[])
     }
@@ -122,27 +100,42 @@ impl BackendClient {
             base: base_url.into(),
             usage_supported: AtomicBool::new(true),
             effort_supported: AtomicBool::new(true),
-            served_window: AtomicUsize::new(0),
+            served_window: std::sync::Mutex::new(None),
         }
     }
 
-    /// Record what the server says it served, for the caller to size its history by.
-    fn note_served_window(&self, headers: &reqwest::header::HeaderMap) {
-        if let Some(n) = headers
-            .get(Self::WINDOW_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<usize>().ok())
-        {
-            self.served_window.store(n, Ordering::Relaxed);
+    /// Learn the widest window the server takes for `model` from its model list, once per
+    /// model: a server serves each request with the window it needs up to that one, and
+    /// names it `max_model_len`. A server that does not say leaves the window unknown.
+    async fn learn_window(&self, model: &str) {
+        let known = self
+            .served_window
+            .lock()
+            .map(|w| w.as_ref().is_some_and(|(m, _)| m == model))
+            .unwrap_or(true);
+        if known {
+            return;
+        }
+        let url = format!("{}/v1/models", self.base.trim_end_matches('/'));
+        let Ok(resp) = self.http.get(&url).send().await else {
+            return;
+        };
+        let Ok(body) = resp.json::<serde_json::Value>().await else {
+            return;
+        };
+        if let Some(n) = model_window(&body, model) {
+            if let Ok(mut w) = self.served_window.lock() {
+                *w = Some((model.to_string(), n));
+            }
         }
     }
 
-    /// The window the server last said it served, if it has said.
+    /// The widest window the server takes for the model last asked about, if it has said.
     pub fn served_window(&self) -> Option<usize> {
-        match self.served_window.load(Ordering::Relaxed) {
-            0 => None,
-            n => Some(n),
-        }
+        self.served_window
+            .lock()
+            .ok()
+            .and_then(|w| w.as_ref().map(|(_, n)| *n))
     }
 
     fn url(&self) -> String {
@@ -263,7 +256,7 @@ impl BackendClient {
             }
         };
 
-        self.note_served_window(resp.headers());
+        self.learn_window(&req.model).await;
 
         // One splitter per response: the tags it tracks can straddle chunk boundaries, so
         // the state has to outlive a single chunk and must not outlive the stream.
@@ -518,6 +511,17 @@ impl crate::backend::provider::Provider for BackendClient {
     }
 }
 
+/// The widest window a models listing states for `model`, `max_model_len` in its row.
+fn model_window(body: &serde_json::Value, model: &str) -> Option<usize> {
+    body.get("data")?
+        .as_array()?
+        .iter()
+        .find(|row| row.get("id").and_then(|v| v.as_str()) == Some(model))?
+        .get("max_model_len")?
+        .as_u64()
+        .map(|n| n as usize)
+}
+
 /// The ids out of a models listing, in the order the server gave them.
 ///
 /// Both shapes seen in the wild are read: the OpenAI `data` array, and the bare array a
@@ -598,19 +602,20 @@ mod tests {
         assert_eq!(c.render(req(true)).reasoning_effort, None);
     }
 
-    /// What the server says it served is read from the answer, because a request that
-    /// asks for a window can be clamped without the body saying so.
+    /// The widest window of a model is read from its row of the model list, and only from
+    /// its own.
     #[test]
-    fn the_served_window_is_read_from_the_answer() {
-        let c = BackendClient::new("http://127.0.0.1:1");
-        assert_eq!(c.served_window(), None);
-        let mut h = reqwest::header::HeaderMap::new();
-        h.insert(BackendClient::WINDOW_HEADER, "32768".parse().unwrap());
-        c.note_served_window(&h);
-        assert_eq!(c.served_window(), Some(32768));
-        // A server that stops saying does not unsay what it said.
-        c.note_served_window(&reqwest::header::HeaderMap::new());
-        assert_eq!(c.served_window(), Some(32768));
+    fn the_window_is_read_from_the_model_list() {
+        let body = serde_json::json!({"object": "list", "data": [
+            {"id": "a", "max_model_len": 32768},
+            {"id": "b", "max_model_len": null},
+            {"id": "c"},
+        ]});
+        assert_eq!(model_window(&body, "a"), Some(32768));
+        assert_eq!(model_window(&body, "b"), None);
+        assert_eq!(model_window(&body, "c"), None);
+        assert_eq!(model_window(&body, "d"), None);
+        assert_eq!(model_window(&serde_json::json!([]), "a"), None);
     }
 
     use super::*;
