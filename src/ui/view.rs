@@ -36,23 +36,25 @@ pub(crate) fn draw(f: &mut Frame, state: &mut UiState, input: &TextArea, cfg: &A
     // step said nothing about where it is: the mark went on an entry that could be
     // a screen and a half above the pane, and the only way to see it was to guess
     // how far to scroll.
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut starts: Vec<usize> = Vec::with_capacity(state.entries.len());
-    for (i, e) in state.entries.iter().enumerate() {
-        starts.push(lines.len());
-        lines.extend(crate::ui::chat::wrap(
-            e.render(state.unfolded.contains(&i), state.at_entry == Some(i)),
-            chunks[0].width as usize,
+    let width = chunks[0].width as usize;
+    let mut pane = crate::ui::thread::Pane::default();
+    for i in 0..state.entries.len() {
+        pane.push(state.drawings.rows(
+            state.entries.rev(i),
+            &state.entries[i],
+            width,
+            state.unfolded.contains(&i),
+            state.at_entry == Some(i),
         ));
     }
-    state.entry_line = starts;
+    state.drawings.forget_gone(&state.entries);
     // Wrapped above rather than by the widget. The program counted logical lines
     // while the terminal showed rows, so scrolling was off by however much had
     // wrapped and nothing could say which line sits at a given row - which is what
     // pointing at text with the mouse needs to know.
     state.pane = chunks[0];
     let inner_h = chunks[0].height as usize;
-    let total = lines.len();
+    let total = pane.len();
     // Remembered for the scroll keys, which cannot know either of these.
     state.content_lines = total;
     state.view_height = inner_h;
@@ -65,8 +67,8 @@ pub(crate) fn draw(f: &mut Frame, state: &mut UiState, input: &TextArea, cfg: &A
     let chosen = state
         .selecting
         .map(|(a, b)| if a <= b { (a, b) } else { (b, a) });
-    let visible: Vec<Line<'static>> = lines[start..end]
-        .iter()
+    let visible: Vec<Line<'static>> = pane
+        .rows(start, end)
         .enumerate()
         .map(|(row, line)| {
             let row = start + row;
@@ -109,7 +111,7 @@ pub(crate) fn draw(f: &mut Frame, state: &mut UiState, input: &TextArea, cfg: &A
         );
     }
     // Kept for the mouse, which can only say which row was pointed at.
-    state.wrapped = lines;
+    state.wrapped = pane;
 
     // The prompt mark, in its own column, so the text the user types starts where
     // the answers do and a wrapped line does not sit under the mark.

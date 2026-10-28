@@ -4,6 +4,10 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+### Added
+
+- Interface: draw again only the entries that changed, so a long session stays fast.
+
 ### Changed
 
 - Backend: read the window from the model list, and drop the loken headers and the kv-format setting.

@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::sandbox::approval::ApprovalPrompt;
 use crate::ui::chat::Entry;
+use crate::ui::thread::{Drawings, Pane, Thread};
 
 /// A conversation as entries, for putting an earlier session back on screen.
 ///
@@ -56,7 +57,9 @@ const DRAG_EVERY: Duration = Duration::from_millis(80);
 
 #[derive(Default)]
 pub(crate) struct UiState {
-    pub(crate) entries: Vec<Entry>,
+    pub(crate) entries: Thread,
+    /// What each entry was last drawn as, so a frame draws only the entries that changed.
+    pub(crate) drawings: Drawings,
     pub(crate) scroll: u16,
     pub(crate) pending_approval: Option<ApprovalPrompt>,
     /// Where a drag with the mouse began and where it is now, in lines of the wrapped
@@ -74,8 +77,6 @@ pub(crate) struct UiState {
     /// was the wheel. The match is pointed at rather than extracted, so what is found is
     /// read in the place it happened.
     pub(crate) finding: Option<(String, usize)>,
-    /// Which wrapped line each entry begins at, as the pane was last drawn.
-    pub(crate) entry_line: Vec<usize>,
     /// When Esc was last pressed with nothing for it to do. Pressed twice it takes the
     /// last question back, which is the shortcut for the commonest correction there is.
     pub(crate) esc_at: Option<Instant>,
@@ -115,7 +116,7 @@ pub(crate) struct UiState {
     pub(crate) dragging: bool,
     /// The pane as it was last drawn, wrapped to its width. What the mouse points at is a
     /// row of this, and nothing else can say which line a row holds.
-    pub(crate) wrapped: Vec<Line<'static>>,
+    pub(crate) wrapped: Pane,
     /// Where the pane sat on screen when it was last drawn.
     pub(crate) pane: ratatui::layout::Rect,
     pub(crate) busy: bool,
@@ -197,7 +198,7 @@ impl UiState {
     /// Put at the top rather than centred: what a person wants to read starts there and
     /// runs downward, and centring hides the half of it they were looking for.
     pub(crate) fn show_entry(&mut self, at: usize) {
-        let Some(&line) = self.entry_line.get(at) else {
+        let Some(line) = self.wrapped.start_of(at) else {
             return;
         };
         let height = self.pane.height as usize;
@@ -258,10 +259,7 @@ impl UiState {
         }
         let first = self.first_visible();
         let line = first + (row - pane.y) as usize;
-        if line >= self.wrapped.len() {
-            return None;
-        }
-        let width = crate::ui::chat::line_width(&self.wrapped[line]);
+        let width = crate::ui::chat::line_width(self.wrapped.get(line)?);
         Some(crate::ui::chat::Spot {
             line,
             column: ((column - pane.x) as usize).min(width),
@@ -336,7 +334,14 @@ impl UiState {
     /// What the selection holds, or nothing when it is empty.
     pub(crate) fn selection_text(&self) -> Option<String> {
         let (a, b) = self.selecting?;
-        let text = crate::ui::chat::selected_text(&self.wrapped, a, b);
+        // Only the rows the selection spans, counted from the first of them.
+        let (from, to) = if a <= b { (a, b) } else { (b, a) };
+        let rows: Vec<Line<'static>> = self.wrapped.rows(from.line, to.line + 1).cloned().collect();
+        let shift = |s: crate::ui::chat::Spot| crate::ui::chat::Spot {
+            line: s.line - from.line,
+            column: s.column,
+        };
+        let text = crate::ui::chat::selected_text(&rows, shift(from), shift(to));
         (!text.trim().is_empty()).then_some(text)
     }
 
@@ -672,7 +677,8 @@ mod tests {
         let mut state = UiState {
             wrapped: (0..100)
                 .map(|i| Line::from(format!("line {i} with some text")))
-                .collect(),
+                .collect::<Vec<_>>()
+                .into(),
             pane: ratatui::layout::Rect::new(0, 0, 40, 10),
             ..Default::default()
         };
@@ -690,7 +696,7 @@ mod tests {
         assert_eq!(state.spot_at(6, 0).unwrap().column, 6);
         assert_eq!(
             state.spot_at(39, 0).unwrap().column,
-            crate::ui::chat::line_width(&state.wrapped[85])
+            crate::ui::chat::line_width(state.wrapped.get(85).unwrap())
         );
         // Below the pane is not the conversation.
         assert!(state.spot_at(0, 10).is_none());
@@ -704,7 +710,7 @@ mod tests {
     #[test]
     fn a_press_that_selected_nothing_takes_nothing() {
         let mut state = UiState {
-            wrapped: vec![Line::from("some text")],
+            wrapped: vec![Line::from("some text")].into(),
             pane: ratatui::layout::Rect::new(0, 0, 40, 1),
             ..Default::default()
         };

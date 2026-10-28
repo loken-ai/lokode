@@ -1123,8 +1123,9 @@ async fn run_ui(
                                         .is_some_and(|i| matches!(state.entries.get(i), Some(Entry::User(_)))) =>
                             {
                                 let at = state.at_entry.expect("checked just above");
-                                let later = state.entries[at..]
+                                let later = state.entries
                                     .iter()
+                                    .skip(at)
                                     .filter(|e| matches!(e, Entry::User(_)))
                                     .count();
                                 let mut taken = None;
