@@ -1,10 +1,8 @@
- ▏     2 use tokio::sync::oneshot;                                             ▕
-                                                                               ▕
  ● bash  cargo test mcp                                         14 passed  9.8s▕
  ▏   test mcp::client::a_silent_server_times_out ... ok                        ▕
-                                                                               ▐
-The client waits on rx.await forever. I add timeout-secs:                      ▐
-                                                                               ▐
+                                                                               ▕
+The client waits on rx.await forever. I add timeout-secs:                      ▕
+                                                                               ▕
 ```rust                                                                        ▐
 let reply = timeout(self.timeout, rx).await??;                                 ▐
 ```                                                                            ▐
@@ -16,6 +14,8 @@ let reply = timeout(self.timeout, rx).await??;                                 �
     -    let reply = rx.await?;                                                ▐
     +    let reply = timeout(self.timeout, rx).await??;                        ▐
   y once   a always (src/mcp/)   n or esc no   e no, and say why               ▐
+                                                                               ▐
+ ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files               ▐
                                                                                ▐
 ! backend error: gave up after 3 attempts                                      ▐
 

@@ -23,9 +23,9 @@ let reply = timeout(self.timeout, rx).await??;
     +    let reply = timeout(self.timeout, rx).await??;
   y once   a always (src/mcp/)   n or esc no   e no, and say why
 
+ ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files                                                                   /undo put back  /diff see it
+
 ! backend error: gave up after 3 attempts
-
-
 
 
 

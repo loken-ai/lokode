@@ -187,6 +187,8 @@ pub enum AgentEvent {
         origin: Origin,
     },
     Notice(String),
+    /// What the turn came to, sent as it closes.
+    Receipt(Receipt),
     /// A line the user typed while the turn was running, now in the conversation.
     Steered(String),
     /// How tool calls travel, once something has found out what the backend does.
@@ -676,14 +678,42 @@ impl TurnTally {
         }
     }
 
-    /// The closing line, or nothing when there is nothing worth saying.
-    pub fn describe(&self) -> Option<String> {
-        let seconds = self.started?.elapsed().as_secs_f64();
+    /// What the turn came to, or nothing when there is nothing worth saying.
+    pub fn receipt(&self) -> Option<Receipt> {
+        let took = self.started?.elapsed();
         // A turn that answered in a moment and changed nothing does not need a receipt.
-        if self.steps <= 1 && self.files.is_empty() && seconds < 10.0 {
+        if self.steps <= 1 && self.files.is_empty() && took.as_secs_f64() < 10.0 {
             return None;
         }
-        let mut parts = vec![format!("{:.0}s", seconds)];
+        Some(Receipt {
+            took,
+            steps: self.steps,
+            tokens_in: self.tokens_in,
+            tokens_out: self.tokens_out,
+            files: self.files.clone(),
+        })
+    }
+
+    /// The closing line, or nothing when there is nothing worth saying.
+    pub fn describe(&self) -> Option<String> {
+        self.receipt().map(|r| r.describe())
+    }
+}
+
+/// What a turn came to: how long, how many steps, what it read and wrote, what it changed.
+#[derive(Debug, Clone)]
+pub struct Receipt {
+    pub took: std::time::Duration,
+    pub steps: u32,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub files: Vec<String>,
+}
+
+impl Receipt {
+    /// The receipt as one line of text.
+    pub fn describe(&self) -> String {
+        let mut parts = vec![format!("{:.0}s", self.took.as_secs_f64())];
         if self.steps > 0 {
             parts.push(format!("{} step(s)", self.steps));
         }
@@ -699,7 +729,7 @@ impl TurnTally {
                 self.files[..2].join(", ")
             )),
         }
-        Some(parts.join("  ·  "))
+        parts.join("  ·  ")
     }
 }
 
@@ -2363,8 +2393,8 @@ impl Agent {
     async fn end_turn(&self, events: &mpsc::Sender<AgentEvent>) {
         // What the turn came to, in one line: how long, how many steps, what it cost and
         // what it changed. All four were known and thrown away.
-        if let Some(tally) = self.this_turn.describe() {
-            let _ = events.send(AgentEvent::Notice(tally)).await;
+        if let Some(receipt) = self.this_turn.receipt() {
+            let _ = events.send(AgentEvent::Receipt(receipt)).await;
         }
         // Written at the end of a turn rather than after every step: losing it costs a
         // memory, not a session, and a turn is the unit a person would call a piece of

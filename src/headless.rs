@@ -272,6 +272,13 @@ pub async fn run(
                 }
                 report.notices.push(s);
             }
+            AgentEvent::Receipt(receipt) => {
+                let line = receipt.describe();
+                if text_output {
+                    eprintln!("· {line}");
+                }
+                report.notices.push(line);
+            }
             AgentEvent::TurnDone => break,
         }
     }

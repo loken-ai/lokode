@@ -280,6 +280,13 @@ mod tests {
                 ),
                 scope: "src/mcp/".into(),
             },
+            Entry::Receipt(crate::agent::agent_loop::Receipt {
+                took: std::time::Duration::from_secs(38),
+                steps: 7,
+                tokens_in: 8400,
+                tokens_out: 1100,
+                files: vec!["src/mcp/client.rs".into(), "src/config.rs".into()],
+            }),
             Entry::Notice("backend error: gave up after 3 attempts".into()),
         ]);
         state

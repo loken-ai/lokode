@@ -3,7 +3,7 @@ use std::time::Duration;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::agent::agent_loop::Origin;
+use crate::agent::agent_loop::{Origin, Receipt};
 use crate::ui::theme::theme;
 
 /// One call of a tool: what it acts on, what it is printing, and what it came to.
@@ -68,6 +68,8 @@ pub enum Entry {
     /// One call of a tool, from the moment it is asked for to what it came to.
     Step(Step),
     Notice(String),
+    /// What a turn came to, closing it.
+    Receipt(Receipt),
     /// A change waiting to be agreed to, in the thread where the rest of the turn is.
     ///
     /// In the thread rather than over it: a modal hides the conversation the change has to
@@ -120,6 +122,7 @@ impl Entry {
             }
             Entry::Reasoning(s) => s.clone(),
             Entry::Notice(s) => format!("· {s}"),
+            Entry::Receipt(r) => format!("✓ {}", r.describe()),
             Entry::Approval { summary, diff, .. } => match diff {
                 Some(d) => format!("? {summary}\n{d}"),
                 None => format!("? {summary}"),
@@ -144,6 +147,7 @@ impl Entry {
     pub fn render_within(&self, open: bool, here: bool, width: usize) -> Vec<Line<'static>> {
         let mut lines = match self {
             Entry::Step(step) => step_lines(step, open, width),
+            Entry::Receipt(r) => receipt_lines(r, width),
             _ => self.lines_inner(open),
         };
         if here {
@@ -194,6 +198,7 @@ impl Entry {
                 out
             }
             Entry::Step(step) => step_lines(step, open, 0),
+            Entry::Receipt(r) => receipt_lines(r, 0),
             // `/diff` answers through a notice, and a wall of uncoloured diff is the thing
             // it is least useful as.
             Entry::Reasoning(s) => s
@@ -530,6 +535,60 @@ fn step_lines(step: &Step, open: bool, width: usize) -> Vec<Line<'static>> {
     }
     out.push(Line::from(""));
     out
+}
+
+/// The line that closes a turn: how long, how many steps, what was read and written, and
+/// what changed, with the commands that look at a change at the right edge when there is one.
+fn receipt_lines(r: &Receipt, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let mut said = vec![how_long(r.took)];
+    if r.steps > 0 {
+        said.push(format!("{} step(s)", r.steps));
+    }
+    if r.tokens_in + r.tokens_out > 0 {
+        said.push(format!(
+            "{} read, {} written",
+            tokens(r.tokens_in),
+            tokens(r.tokens_out)
+        ));
+    }
+    said.push(match r.files.len() {
+        0 => "nothing changed".to_string(),
+        1 => format!("changed {}", r.files[0]),
+        n => format!("changed {n} files"),
+    });
+    let left = vec![
+        Span::raw(" "),
+        Span::styled("✓", Style::default().fg(t.good)),
+        Span::styled(format!(" {}", said.join(" · ")), t.dim),
+    ];
+    let right = match r.files.is_empty() {
+        true => Vec::new(),
+        false => vec![
+            Span::styled("/undo", t.key),
+            Span::styled(" put back  ", t.dim),
+            Span::styled("/diff", t.key),
+            Span::styled(" see it", t.dim),
+        ],
+    };
+    // The commands are a convenience: they go when the row has no room for them.
+    let wide = |spans: &[Span<'static>]| -> usize {
+        spans.iter().map(|s| s.content.chars().count()).sum()
+    };
+    let right = match width > 0 && wide(&left) + 2 + wide(&right) > width {
+        true => Vec::new(),
+        false => right,
+    };
+    vec![beside(left, right, width), Line::from("")]
+}
+
+/// A count of tokens in a few characters: 940, 8.4k, 1.2M.
+fn tokens(n: u64) -> String {
+    match n {
+        0..=999 => n.to_string(),
+        1_000..=999_999 => format!("{:.1}k", n as f64 / 1e3),
+        _ => format!("{:.1}M", n as f64 / 1e6),
+    }
 }
 
 /// `left` and `right` on one row, `right` against the edge of `width` when both fit,
@@ -1035,6 +1094,29 @@ mod tests {
         assert!(line_text(&rows[0]).ends_with("failed"));
         assert_eq!(line_text(&rows[1]), " ▏   no such file");
         assert_eq!(line_text(&rows[2]), " ▏   tried src/mcp");
+    }
+
+    /// A receipt says how long, how much and what changed on one row, and offers the
+    /// commands that look at a change only when there is one.
+    #[test]
+    fn a_receipt_closes_a_turn_on_one_row() {
+        let mut r = Receipt {
+            took: Duration::from_secs(38),
+            steps: 7,
+            tokens_in: 8400,
+            tokens_out: 940,
+            files: vec!["src/a.rs".into()],
+        };
+        let head = line_text(&receipt_lines(&r, 110)[0]);
+        assert!(
+            head.starts_with(" ✓ 38.0s · 7 step(s) · 8.4k read, 940 written · changed src/a.rs"),
+            "{head}"
+        );
+        assert!(head.ends_with("/diff see it"), "{head}");
+        r.files.clear();
+        let head = line_text(&receipt_lines(&r, 110)[0]);
+        assert!(head.ends_with("nothing changed"), "{head}");
+        assert_eq!(tokens(1_250_000), "1.2M");
     }
 }
 

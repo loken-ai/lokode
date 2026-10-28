@@ -530,6 +530,7 @@ async fn run_ui(
                     }
                     AgentEvent::Models(models) => state.models = models,
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
+                    AgentEvent::Receipt(r) => state.entries.push(Entry::Receipt(r)),
                     AgentEvent::TurnDone => {
                         // Asked once a turn is over, which is when the conversation has
                         // changed and the agent is free to answer.
