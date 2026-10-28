@@ -102,6 +102,9 @@ struct Drawn {
 #[derive(Debug, Default)]
 pub struct Drawings {
     by_rev: HashMap<u64, Drawn>,
+    /// How many entries have been drawn, for tests that a frame drew only what changed.
+    #[cfg(test)]
+    pub drawn: usize,
 }
 
 impl Drawings {
@@ -119,6 +122,10 @@ impl Drawings {
             if d.width == width && d.open == open && d.here == here {
                 return d.rows.clone();
             }
+        }
+        #[cfg(test)]
+        {
+            self.drawn += 1;
         }
         let rows = Arc::new(crate::ui::chat::wrap(entry.render(open, here), width));
         self.by_rev.insert(

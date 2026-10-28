@@ -397,7 +397,8 @@ async fn run_ui(
 
     loop {
         term::begin_frame();
-        let drawn = term.draw(|f| crate::ui::view::draw(f, &mut state, &input, cfg));
+        let drawn =
+            term.draw(|f| crate::ui::view::draw(f, &mut state, &input, &cfg.root, cfg.max_steps));
         term::end_frame();
         drawn?;
 
