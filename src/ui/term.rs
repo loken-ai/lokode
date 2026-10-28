@@ -11,6 +11,7 @@ use anyhow::Result;
 use crossterm::cursor::Show;
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -24,6 +25,7 @@ use crossterm::terminal::{
 /// raw mode. Calling it twice is harmless, which is what lets the guard and the hook both
 /// own the job without coordinating.
 pub fn restore() {
+    let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     let _ = disable_raw_mode();
     let _ = execute!(
         io::stdout(),
@@ -54,6 +56,14 @@ impl TerminalGuard {
             EnableMouseCapture,
             EnableBracketedPaste
         )?;
+        // Keys the legacy encoding confuses arrive told apart: Esc from the start of an
+        // Alt chord, Shift-Enter from Enter. A terminal that does not know the protocol
+        // ignores the request, and one that cannot be sent it refuses it, which changes
+        // nothing either.
+        let _ = execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
         Ok(Self { _private: () })
     }
 }
