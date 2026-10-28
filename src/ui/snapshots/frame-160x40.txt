@@ -11,9 +11,11 @@
 
 The client waits on rx.await forever. I add timeout-secs:
 
-```rust
-let reply = timeout(self.timeout, rx).await??;
-```
+• one setting per server, thirty seconds unless it says otherwise
+• a test against a server that never answers
+
+  rust
+  let reply = timeout(self.timeout, rx).await??;
 
 ? edit src/mcp/client.rs
     --- a/src/mcp/client.rs
@@ -26,8 +28,6 @@ let reply = timeout(self.timeout, rx).await??;
  ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files                                                                   /undo put back  /diff see it
 
 ! backend error: gave up after 3 attempts
-
-
 
 
 

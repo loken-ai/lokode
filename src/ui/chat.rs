@@ -148,6 +148,11 @@ impl Entry {
         let mut lines = match self {
             Entry::Step(step) => step_lines(step, open, width),
             Entry::Receipt(r) => receipt_lines(r, width),
+            Entry::Assistant(s) | Entry::AssistantStreaming(s) => {
+                let mut out = crate::ui::markdown::render(s, width);
+                out.push(Line::from(""));
+                out
+            }
             _ => self.lines_inner(open),
         };
         if here {
@@ -193,7 +198,7 @@ impl Entry {
                 out
             }
             Entry::Assistant(s) | Entry::AssistantStreaming(s) => {
-                let mut out = prose(s);
+                let mut out = crate::ui::markdown::render(s, 0);
                 out.push(Line::from(""));
                 out
             }
@@ -679,82 +684,6 @@ fn diff_line(l: &str) -> Line<'static> {
     Line::from(Span::styled(l.to_string(), style))
 }
 
-/// Render the markdown a model actually writes.
-///
-/// Fenced code, headings, and inline `code` and **bold** - no more than that. A full parser
-/// would be a dependency and a syntax highlighter would be a large one, for a pane that
-/// shows a few lines of prose between tool calls. What this does is make a code block
-/// distinguishable from the sentence introducing it, which is the whole of the problem.
-fn prose(body: &str) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let mut in_code = false;
-    for raw in body.lines() {
-        let trimmed = raw.trim_start();
-        if trimmed.starts_with("```") {
-            in_code = !in_code;
-            out.push(Line::from(Span::styled(raw.to_string(), theme().dim)));
-            continue;
-        }
-        // Inside a fence the text is code, so `**` is a glob and not emphasis.
-        if in_code {
-            out.push(Line::from(Span::styled(raw.to_string(), theme().code)));
-            continue;
-        }
-        if trimmed.starts_with("# ")
-            || trimmed.starts_with("## ")
-            || trimmed.starts_with("### ")
-            || trimmed.starts_with("#### ")
-        {
-            out.push(Line::from(Span::styled(raw.to_string(), theme().heading)));
-            continue;
-        }
-        out.push(Line::from(inline(raw)));
-    }
-    out
-}
-
-/// Style the spans inside one line: `code` and **bold**, left as written otherwise.
-fn inline(line: &str) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut rest = line;
-
-    while !rest.is_empty() {
-        let backtick = rest.find('`');
-        let bold = rest.find("**");
-        // Whichever marker comes first, if either does.
-        let (at, marker, style) = match (backtick, bold) {
-            (Some(b), Some(s)) if b <= s => (b, "`", theme().inline_code),
-            (Some(b), None) => (b, "`", theme().inline_code),
-            (_, Some(s)) => (s, "**", Style::default().add_modifier(Modifier::BOLD)),
-            (None, None) => break,
-        };
-
-        let (before, after) = rest.split_at(at);
-        if !before.is_empty() {
-            spans.push(Span::raw(before.to_string()));
-        }
-        let after = &after[marker.len()..];
-        match after.find(marker) {
-            Some(end) => {
-                spans.push(Span::styled(after[..end].to_string(), style));
-                rest = &after[end + marker.len()..];
-            }
-            // An opening marker with no close is not emphasis, it is a backtick.
-            None => {
-                spans.push(Span::raw(format!("{marker}{after}")));
-                rest = "";
-            }
-        }
-    }
-    if !rest.is_empty() {
-        spans.push(Span::raw(rest.to_string()));
-    }
-    if spans.is_empty() {
-        spans.push(Span::raw(line.to_string()));
-    }
-    spans
-}
-
 #[cfg(test)]
 mod tests {
     use ratatui::style::Color;
@@ -839,73 +768,6 @@ mod tests {
     }
 
     use super::*;
-
-    fn text(lines: &[Line<'static>]) -> Vec<String> {
-        lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect()
-    }
-
-    /// Markers are consumed - that is what rendering them means - but nothing else may be.
-    /// Every other character has to come out in the order it went in.
-    #[test]
-    fn styling_consumes_the_markers_and_nothing_else() {
-        for (body, expected) in [
-            ("plain sentence", "plain sentence"),
-            ("with `code` in it", "with code in it"),
-            ("with **bold** in it", "with bold in it"),
-            ("`code` and **bold** together", "code and bold together"),
-            ("back-to-back ``", "back-to-back "),
-        ] {
-            assert_eq!(text(&prose(body)), vec![expected.to_string()], "{body:?}");
-        }
-    }
-
-    /// A marker with nothing closing it is a literal character, not the start of styling
-    /// that swallows the rest of the line.
-    #[test]
-    fn an_unclosed_marker_is_left_as_written() {
-        for body in ["a `mismatched backtick", "**unclosed bold", "50% of 100**"] {
-            assert_eq!(text(&prose(body)), vec![body.to_string()], "{body:?}");
-        }
-    }
-
-    #[test]
-    fn inline_code_is_marked_up() {
-        let spans = inline("run `cargo test` now");
-        let styled: Vec<_> = spans
-            .iter()
-            .filter(|s| s.style.fg == Some(Color::Yellow))
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert_eq!(styled, vec!["cargo test"]);
-    }
-
-    #[test]
-    fn bold_is_marked_up() {
-        let spans = inline("this is **important** yes");
-        let styled: Vec<_> = spans
-            .iter()
-            .filter(|s| s.style.add_modifier.contains(Modifier::BOLD))
-            .map(|s| s.content.as_ref())
-            .collect();
-        assert_eq!(styled, vec!["important"]);
-    }
-
-    /// A fenced block is where the model puts code, and it must not be read as prose - a
-    /// `**` in a shell glob is not emphasis.
-    #[test]
-    fn a_fenced_block_is_left_alone() {
-        let body = "before\n```sh\nls **/*.rs\n```\nafter";
-        let rendered = text(&prose(body));
-        assert_eq!(rendered[2], "ls **/*.rs");
-    }
 
     /// One line in, one row per screen width out, and the text unchanged apart from the
     /// spaces a break falls on.

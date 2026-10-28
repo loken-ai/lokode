@@ -6,6 +6,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Added
 
+- Interface: render answers as markdown, with code coloured by language and numbered diffs.
 - Interface: close a turn with a receipt that offers /undo and /diff.
 - Interface: follow the terminal's colours, tell Esc and Alt chords apart, show frames whole.
 - Interface: show each step on one line with what it came to and how long it took.

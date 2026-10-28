@@ -4,6 +4,7 @@ pub mod chooser;
 pub mod clipboard;
 mod commands;
 mod input;
+mod markdown;
 pub mod picker;
 pub mod sheet;
 mod state;

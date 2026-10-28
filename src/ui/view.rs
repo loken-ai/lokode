@@ -266,6 +266,8 @@ mod tests {
             }),
             Entry::Assistant(
                 "The client waits on `rx.await` forever. I add **timeout-secs**:\n\n\
+                 - one setting per server, thirty seconds unless it says otherwise\n\
+                 - a test against a server that never answers\n\n\
                  ```rust\nlet reply = timeout(self.timeout, rx).await??;\n```"
                     .into(),
             ),
