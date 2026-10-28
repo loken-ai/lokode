@@ -15,7 +15,8 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
+    EnterAlternateScreen, LeaveAlternateScreen,
 };
 
 /// Undo everything [`TerminalGuard::new`] turned on.
@@ -66,6 +67,17 @@ impl TerminalGuard {
         );
         Ok(Self { _private: () })
     }
+}
+
+/// Hold what is drawn until the frame is complete, so a terminal that knows the request
+/// shows each frame whole. One that does not ignores it.
+pub fn begin_frame() {
+    let _ = execute!(io::stdout(), BeginSynchronizedUpdate);
+}
+
+/// Show the frame held since [`begin_frame`].
+pub fn end_frame() {
+    let _ = execute!(io::stdout(), EndSynchronizedUpdate);
 }
 
 /// Take the mouse, for a wheel that scrolls the pane instead of the terminal.

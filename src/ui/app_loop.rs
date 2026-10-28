@@ -396,7 +396,10 @@ async fn run_ui(
     let mut events = EventStream::new();
 
     loop {
-        term.draw(|f| crate::ui::view::draw(f, &mut state, &input, cfg))?;
+        term::begin_frame();
+        let drawn = term.draw(|f| crate::ui::view::draw(f, &mut state, &input, cfg));
+        term::end_frame();
+        drawn?;
 
         // Nothing is happening, there is something to find out, and nobody is waiting:
         // the three conditions together are what makes this free. One question at a time,
