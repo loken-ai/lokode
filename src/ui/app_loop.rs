@@ -12,9 +12,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
+use ratatui_textarea::TextArea;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tui_textarea::TextArea;
 
 use crate::agent::agent_loop::AgentEvent;
 use crate::agent::protocol::ToolProtocol;
@@ -860,9 +860,9 @@ fn at_start(input: &TextArea) -> bool {
 /// backspace do nothing at all.
 fn fresh_input(text: &str) -> TextArea<'static> {
     let mut input = TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
-    input.move_cursor(tui_textarea::CursorMove::End);
-    input.move_cursor(tui_textarea::CursorMove::Bottom);
-    input.move_cursor(tui_textarea::CursorMove::End);
+    input.move_cursor(ratatui_textarea::CursorMove::End);
+    input.move_cursor(ratatui_textarea::CursorMove::Bottom);
+    input.move_cursor(ratatui_textarea::CursorMove::End);
     input
 }
 
