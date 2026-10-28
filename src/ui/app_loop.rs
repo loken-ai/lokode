@@ -414,22 +414,24 @@ async fn run_ui(
             }
         }
 
-        // The only timer, and it runs only while a turn does: time passing IS the change
-        // to draw then, since the status line counts how long the phase has been going and
-        // the spinner has to move. At idle every reason to redraw still arrives as an
-        // event - a keystroke, a resize, a piece of the answer, an approval - and this arm
-        // is a branch that never completes, so nothing wakes the loop.
-        let tick = async {
-            if state.busy {
-                tokio::time::sleep(Duration::from_millis(120)).await;
-            } else {
-                std::future::pending::<()>().await;
+        // The only timer, armed only while time passing is itself a change to draw. At
+        // idle every reason to redraw arrives as an event - a keystroke, a resize, a piece
+        // of the answer, an approval - and this arm never completes, so nothing wakes the
+        // loop.
+        let wake = state.next_wake();
+        let timer = async {
+            match wake {
+                Some(after) => tokio::time::sleep(after).await,
+                None => std::future::pending::<()>().await,
             }
         };
         tokio::select! {
             biased;
 
-            _ = tick => state.tick = state.tick.wrapping_add(1),
+            _ = timer => {
+                state.tick = state.tick.wrapping_add(1);
+                state.follow_the_drag();
+            }
 
             Some(prompt) = approval_rx.recv() => {
                 // In the thread, where the conversation the change has to be judged
@@ -1489,12 +1491,6 @@ async fn run_ui(
                     );
                 }
             }
-
-            // Nothing else had anything to say for 80 ms. That is where a drag held
-            // against an edge carries on from: the shortest sleep in the loop is the one
-            // that fires while a pointer sits still, which is exactly when the terminal
-            // stops reporting it and the selection would otherwise stop growing.
-            _ = tokio::time::sleep(Duration::from_millis(80)) => state.follow_the_drag(),
         }
     }
 }

@@ -48,6 +48,12 @@ pub(crate) const SAID_FOR: Duration = Duration::from_secs(4);
 /// dropped as they arrived, so the only way to see them was to wait for the run to end.
 pub(crate) const KEPT_OUTPUT_LINES: usize = 400;
 
+/// How often the spinner moves and the phase clock counts, while there is work to show.
+const TICK_EVERY: Duration = Duration::from_millis(120);
+
+/// How often a drag held past an edge scrolls the pane one more line.
+const DRAG_EVERY: Duration = Duration::from_millis(80);
+
 #[derive(Default)]
 pub(crate) struct UiState {
     pub(crate) entries: Vec<Entry>,
@@ -162,6 +168,30 @@ pub(crate) struct UiState {
 }
 
 impl UiState {
+    /// When the screen next changes with nothing happening, or `None` when it does not.
+    ///
+    /// A turn or background work moves the spinner and the clocks beside it; a drag held
+    /// past an edge keeps scrolling, since the terminal reports a pointer that moves and
+    /// not one held still; a remark on the status line goes when its time is up.
+    pub(crate) fn next_wake(&self) -> Option<Duration> {
+        let mut wake = None::<Duration>;
+        let mut sooner = |after: Duration| {
+            wake = Some(wake.map_or(after, |w| w.min(after)));
+        };
+        if self.busy || self.background.is_some() {
+            sooner(TICK_EVERY);
+        }
+        if self.drag_edge.is_some() {
+            sooner(DRAG_EVERY);
+        }
+        if let Some((_, at)) = &self.said {
+            if let Some(left) = SAID_FOR.checked_sub(at.elapsed()) {
+                sooner(left);
+            }
+        }
+        wake
+    }
+
     /// Scroll so that an entry is on screen, when it is not already.
     ///
     /// Put at the top rather than centred: what a person wants to read starts there and
@@ -589,6 +619,24 @@ mod tests {
         ));
         assert_eq!(state.output_being_printed("shell"), Some(0));
         assert_eq!(state.output_being_printed("read_file"), None);
+    }
+
+    /// An idle screen sets no timer; work, a held drag and a fresh remark each set one.
+    #[test]
+    fn nothing_wakes_an_idle_screen() {
+        let mut s = UiState::default();
+        assert_eq!(s.next_wake(), None);
+        s.busy = true;
+        assert_eq!(s.next_wake(), Some(TICK_EVERY));
+        s.drag_edge = Some(1);
+        assert_eq!(s.next_wake(), Some(DRAG_EVERY));
+        let mut s = UiState {
+            said: Some(("taken".into(), Instant::now())),
+            ..Default::default()
+        };
+        assert!(s.next_wake().is_some_and(|w| w <= SAID_FOR));
+        s.said = Some(("taken".into(), Instant::now() - SAID_FOR * 2));
+        assert_eq!(s.next_wake(), None);
     }
 
     /// A long run keeps its tail, and no more than that.

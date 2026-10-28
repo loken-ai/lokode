@@ -8,6 +8,10 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 - Backend: read the window from the model list, and drop the loken headers and the kv-format setting.
 
+### Fixed
+
+- Interface: stop redrawing while idle.
+
 ### Removed
 
 ## [0.3.0] - 2026-10-24
