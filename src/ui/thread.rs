@@ -127,7 +127,10 @@ impl Drawings {
         {
             self.drawn += 1;
         }
-        let rows = Arc::new(crate::ui::chat::wrap(entry.render(open, here), width));
+        let rows = Arc::new(crate::ui::chat::wrap(
+            entry.render_within(open, here, width),
+            width,
+        ));
         self.by_rev.insert(
             rev,
             Drawn {

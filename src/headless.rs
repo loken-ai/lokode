@@ -225,12 +225,14 @@ pub async fn run(
                 }
                 report.result = s;
             }
-            AgentEvent::ToolCall { name, args_pretty } => {
+            AgentEvent::ToolCall {
+                name, args_pretty, ..
+            } => {
                 if text_output {
                     eprintln!("→ {name} {}", one_line(&args_pretty));
                 }
             }
-            AgentEvent::ToolResult { name, output } => {
+            AgentEvent::ToolResult { name, output, .. } => {
                 if text_output {
                     eprintln!("← {name}{}", if output.is_error { " [error]" } else { "" });
                 }

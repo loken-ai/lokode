@@ -7,7 +7,7 @@ use ratatui::text::Line;
 use tokio_util::sync::CancellationToken;
 
 use crate::sandbox::approval::ApprovalPrompt;
-use crate::ui::chat::Entry;
+use crate::ui::chat::{Entry, Outcome, Step};
 use crate::ui::thread::{Drawings, Pane, Thread};
 
 /// A conversation as entries, for putting an earlier session back on screen.
@@ -391,11 +391,37 @@ impl UiState {
             .rposition(|e| matches!(e, Entry::AssistantStreaming(_)))
     }
 
-    /// Where the running output of `tool` sits, if it is on screen.
-    pub(crate) fn output_being_printed(&self, tool: &str) -> Option<usize> {
+    /// Where the newest step of `tool` still running sits, if one is.
+    pub(crate) fn step_running(&self, tool: &str) -> Option<usize> {
         self.entries
             .iter()
-            .rposition(|e| matches!(e, Entry::ToolOutput { name, .. } if name == tool))
+            .rposition(|e| matches!(e, Entry::Step(s) if s.name == tool && s.outcome.is_none()))
+    }
+
+    /// Settle the step a result answers, found by the id the call and the result share.
+    ///
+    /// What it printed while it ran goes: the result holds the whole of it. A result whose
+    /// call is not on screen gets a step of its own.
+    pub(crate) fn settle_step(&mut self, id: &str, name: String, outcome: Outcome) {
+        let at = self
+            .entries
+            .iter()
+            .rposition(|e| matches!(e, Entry::Step(s) if s.id == id && s.outcome.is_none()));
+        match at {
+            Some(at) => {
+                if let Entry::Step(step) = &mut self.entries[at] {
+                    step.live.clear();
+                    step.outcome = Some(outcome);
+                }
+            }
+            None => self.entries.push(Entry::Step(Step {
+                id: id.to_string(),
+                name,
+                subject: String::new(),
+                live: String::new(),
+                outcome: Some(outcome),
+            })),
+        }
     }
 
     /// Add a piece of the answer to the one entry it is being written into.
@@ -425,22 +451,19 @@ impl UiState {
         }
     }
 
-    /// Add a line a tool just printed to the block it is printing into.
+    /// Add a line a tool just printed to the step that is running it.
     ///
-    /// One entry that grows rather than a line each: a build's output is one thing
-    /// happening, and a hundred entries would push the answer it belongs to off screen.
-    pub(crate) fn print_line(&mut self, tool: String, line: &str) {
-        let Some(at) = self.output_being_printed(&tool) else {
-            self.entries.push(Entry::ToolOutput {
-                name: tool,
-                body: line.to_string(),
-            });
+    /// A line from a tool with no step running is dropped: the result carries it anyway.
+    pub(crate) fn print_line(&mut self, tool: &str, line: &str) {
+        let Some(at) = self.step_running(tool) else {
             return;
         };
-        let Entry::ToolOutput { body, .. } = &mut self.entries[at] else {
-            unreachable!("output_being_printed names an output")
+        let Entry::Step(Step { live: body, .. }) = &mut self.entries[at] else {
+            unreachable!("step_running names a step")
         };
-        body.push('\n');
+        if !body.is_empty() {
+            body.push('\n');
+        }
         body.push_str(line);
         // Only the tail is kept, and only the end of that is shown: the whole of it
         // reaches the model in the result, and what a person wants while it runs is where
@@ -537,14 +560,7 @@ impl UiState {
 pub(crate) fn worth_pointing_at(e: &Entry) -> bool {
     matches!(
         e,
-        Entry::User(_)
-            | Entry::Assistant(_)
-            | Entry::AssistantStreaming(_)
-            | Entry::ToolCall { .. }
-            | Entry::ToolResult { .. }
-            // What a tool is printing now, so the lines it has already printed can be
-            // unfolded while it is still going.
-            | Entry::ToolOutput { .. }
+        Entry::User(_) | Entry::Assistant(_) | Entry::AssistantStreaming(_) | Entry::Step(_)
     )
 }
 
@@ -607,23 +623,41 @@ mod tests {
         assert!(matches!(&state.entries[0], Entry::Notice(_)));
     }
 
-    /// What a tool printed while it ran is replaced by what it printed, not kept beside
-    /// it, even when a notice arrived in between.
+    /// A tool's lines go to its step even when a notice arrived in between, and its
+    /// result takes their place.
     #[test]
     fn the_running_output_of_a_tool_is_found_under_what_interrupted_it() {
         let mut state = UiState::default();
-        state.print_line("shell".into(), "compiling");
+        state
+            .entries
+            .push(Entry::Step(Step::called("7".into(), "shell".into(), "{}")));
+        state.print_line("shell", "compiling");
         state
             .entries
             .push(Entry::Notice("context budget now".into()));
-        state.print_line("shell".into(), "linking");
+        state.print_line("shell", "linking");
         assert_eq!(state.entries.len(), 2);
         assert!(matches!(
             &state.entries[0],
-            Entry::ToolOutput { body, .. } if body == "compiling\nlinking"
+            Entry::Step(Step { live, .. }) if live == "compiling\nlinking"
         ));
-        assert_eq!(state.output_being_printed("shell"), Some(0));
-        assert_eq!(state.output_being_printed("read_file"), None);
+        assert_eq!(state.step_running("shell"), Some(0));
+        assert_eq!(state.step_running("read_file"), None);
+        state.settle_step(
+            "7",
+            "shell".into(),
+            Outcome {
+                is_error: false,
+                body: "built".into(),
+                took: Duration::ZERO,
+                origin: crate::agent::agent_loop::Origin::Ran,
+            },
+        );
+        assert!(matches!(
+            &state.entries[0],
+            Entry::Step(Step { live, outcome: Some(_), .. }) if live.is_empty()
+        ));
+        assert_eq!(state.step_running("shell"), None);
     }
 
     /// An idle screen sets no timer; work, a held drag and a fresh remark each set one.
@@ -652,10 +686,13 @@ mod tests {
     #[test]
     fn a_tool_that_prints_for_minutes_keeps_its_tail() {
         let mut state = UiState::default();
+        state
+            .entries
+            .push(Entry::Step(Step::called("1".into(), "shell".into(), "{}")));
         for i in 0..KEPT_OUTPUT_LINES + 50 {
-            state.print_line("shell".into(), &format!("line {i}"));
+            state.print_line("shell", &format!("line {i}"));
         }
-        let Entry::ToolOutput { body, .. } = &state.entries[0] else {
+        let Entry::Step(Step { live: body, .. }) = &state.entries[0] else {
             panic!("one block of output")
         };
         assert_eq!(body.lines().count(), KEPT_OUTPUT_LINES);

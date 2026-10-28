@@ -1,7 +1,63 @@
+use std::time::Duration;
+
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::agent::agent_loop::Origin;
 use crate::ui::theme::theme;
+
+/// One call of a tool: what it acts on, what it is printing, and what it came to.
+#[derive(Debug, Clone)]
+pub struct Step {
+    /// The id the call and its result share. Empty for a command the person ran.
+    pub id: String,
+    pub name: String,
+    /// What the call acts on, in a few words.
+    pub subject: String,
+    /// What it has printed so far, while it runs.
+    pub live: String,
+    /// What it came to, once it has.
+    pub outcome: Option<Outcome>,
+}
+
+/// What a step came to.
+#[derive(Debug, Clone)]
+pub struct Outcome {
+    pub is_error: bool,
+    pub body: String,
+    pub took: Duration,
+    pub origin: Origin,
+}
+
+impl Step {
+    /// A call just asked for, with the arguments the model gave it.
+    pub fn called(id: String, name: String, args: &str) -> Self {
+        let subject = call_subject(&name, args);
+        Self {
+            id,
+            name,
+            subject,
+            live: String::new(),
+            outcome: None,
+        }
+    }
+
+    /// A command the person ran themselves, already over.
+    pub fn ran_by_hand(command: String, is_error: bool, body: String, took: Duration) -> Self {
+        Self {
+            id: String::new(),
+            name: "$".into(),
+            subject: command,
+            live: String::new(),
+            outcome: Some(Outcome {
+                is_error,
+                body,
+                took,
+                origin: Origin::Ran,
+            }),
+        }
+    }
+}
 
 /// A single rendered entry in the chat scrollback.
 #[derive(Debug, Clone)]
@@ -9,20 +65,8 @@ pub enum Entry {
     User(String),
     Assistant(String),
     AssistantStreaming(String),
-    ToolCall {
-        name: String,
-        args: String,
-    },
-    ToolResult {
-        name: String,
-        is_error: bool,
-        body: String,
-    },
-    /// What a tool is printing while it runs, kept as one growing entry.
-    ToolOutput {
-        name: String,
-        body: String,
-    },
+    /// One call of a tool, from the moment it is asked for to what it came to.
+    Step(Step),
     Notice(String),
     /// A change waiting to be agreed to, in the thread where the rest of the turn is.
     ///
@@ -49,9 +93,10 @@ impl Entry {
     /// question and an answer are shown whole because they are what the pane is for.
     pub fn can_unfold(&self) -> bool {
         match self {
-            Entry::ToolResult { body, .. } | Entry::ToolOutput { body, .. } => {
-                body.lines().count() > BODY_LINES + 1
-            }
+            Entry::Step(step) => match &step.outcome {
+                Some(o) => o.body.lines().count() > BODY_LINES + 1,
+                None => step.live.lines().count() > RUNNING_LINES,
+            },
             Entry::Reasoning(s) => s.lines().count() > BODY_LINES,
             _ => false,
         }
@@ -65,12 +110,14 @@ impl Entry {
         match self {
             Entry::User(s) => format!("> {s}"),
             Entry::Assistant(s) | Entry::AssistantStreaming(s) => s.clone(),
-            Entry::ToolCall { name, args } => format!("{name}{}", call_subject(name, args)),
-            Entry::ToolResult { is_error, body, .. } => match is_error {
-                true => format!("error: {body}"),
-                false => body.clone(),
-            },
-            Entry::ToolOutput { name, body } => format!("{name} …\n{body}"),
+            Entry::Step(step) => {
+                let said = match &step.outcome {
+                    Some(o) if o.is_error => format!("error: {}", o.body),
+                    Some(o) => o.body.clone(),
+                    None => step.live.clone(),
+                };
+                format!("{} {}\n{said}", step.name, step.subject)
+            }
             Entry::Reasoning(s) => s.clone(),
             Entry::Notice(s) => format!("· {s}"),
             Entry::Approval { summary, diff, .. } => match diff {
@@ -89,7 +136,16 @@ impl Entry {
     /// `open` shows the evidence whole rather than counted; `here` marks the entry the
     /// keys are pointing at, so moving between them is visible.
     pub fn render(&self, open: bool, here: bool) -> Vec<Line<'static>> {
-        let mut lines = self.lines_inner(open);
+        self.render_within(open, here, 0)
+    }
+
+    /// The entry's lines for a pane `width` columns wide, which a step uses to put its
+    /// outcome at the right edge. Zero leaves the outcome beside the call.
+    pub fn render_within(&self, open: bool, here: bool, width: usize) -> Vec<Line<'static>> {
+        let mut lines = match self {
+            Entry::Step(step) => step_lines(step, open, width),
+            _ => self.lines_inner(open),
+        };
         if here {
             // The mark goes in the left margin every line already leaves empty, so
             // pointing at an entry does not move its text.
@@ -137,27 +193,7 @@ impl Entry {
                 out.push(Line::from(""));
                 out
             }
-            // One line, the way a person would say it: the verb and the thing it acts
-            // on. The arguments in full are what turned this pane into a wall of JSON,
-            // and the one that matters is always the same one for a given tool.
-            Entry::ToolCall { name, args } => vec![Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(
-                    name.clone(),
-                    Style::default()
-                        .fg(theme().tool)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(call_subject(name, args), Style::default().fg(theme().tool)),
-            ])],
-            Entry::ToolResult {
-                name,
-                is_error,
-                body,
-            } => {
-                let _ = name;
-                result_lines(*is_error, body, open)
-            }
+            Entry::Step(step) => step_lines(step, open, 0),
             // `/diff` answers through a notice, and a wall of uncoloured diff is the thing
             // it is least useful as.
             Entry::Reasoning(s) => s
@@ -169,31 +205,6 @@ impl Entry {
                     ))
                 })
                 .collect(),
-            // Dimmed and set apart: it is what is happening, not what was said, and it
-            // is replaced by the tool's own result the moment there is one.
-            Entry::ToolOutput { name, body } => {
-                let mut out = vec![Line::from(Span::styled(format!("  {name} …"), theme().dim))];
-                // The end of it, which is where a run that is going wrong says so. The
-                // rest is held and unfolds, rather than being dropped as it arrives and
-                // reachable only once the run has finished.
-                let held = body.lines().count();
-                let shown = match open {
-                    true => held,
-                    false => held.min(RUNNING_LINES),
-                };
-                if shown < held {
-                    out.push(Line::from(Span::styled(
-                        format!("    … {} earlier line(s), space to see them", held - shown),
-                        theme().dim,
-                    )));
-                }
-                out.extend(
-                    body.lines()
-                        .skip(held - shown)
-                        .map(|l| Line::from(Span::styled(format!("    {l}"), theme().dim))),
-                );
-                out
-            }
             // The one thing on screen that is waiting for the reader, so it is the one
             // thing that is neither dim nor the colour of an answer.
             Entry::Approval {
@@ -395,61 +406,168 @@ fn call_subject(name: &str, args: &str) -> String {
     });
     match subject {
         None => String::new(),
-        Some(s) => {
-            let one_line = s.replace('\n', " ");
-            format!("({})", truncate(one_line.trim(), SUBJECT_CHARS))
-        }
+        Some(s) => clip(s.replace('\n', " ").trim(), SUBJECT_CHARS),
     }
 }
 
-/// A result in the shape of an answer rather than of a transcript.
+/// A step as rows: the call on one line with what it came to at the right edge, and the
+/// evidence under it on the rail.
 ///
-/// The first line of a tool's own result is its answer; what follows is evidence. The
-/// answer is always shown, the evidence up to a few lines, and the rest counted. An error
-/// is shown whole because an error nobody can read is an error nobody can act on.
-fn result_lines(is_error: bool, body: &str, open: bool) -> Vec<Line<'static>> {
-    let style = match is_error {
-        true => Style::default().fg(theme().bad),
-        false => theme().dim,
+/// The first line of a tool's own result is its answer and goes on the call's line. What
+/// follows is evidence: up to a few lines, the rest counted. An error is shown whole. While
+/// the call runs, the end of what it is printing stands in for the evidence.
+fn step_lines(step: &Step, open: bool, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let (glyph, glyph_style) = match &step.outcome {
+        None => ("◌", Style::default().fg(t.accent)),
+        Some(o) if o.is_error && o.body.starts_with("user denied") => {
+            ("✕", Style::default().fg(t.warn))
+        }
+        Some(o) if o.is_error => ("✕", Style::default().fg(t.bad)),
+        Some(_) => ("●", Style::default().fg(t.good)),
     };
-    let lines: Vec<&str> = body.lines().collect();
-    // Kept as it was written, leading spaces and all: a tool that numbers its lines lines
-    // them up, and trimming the first one alone breaks the column.
-    let head = lines.first().copied().unwrap_or("");
-    let head = if head.trim().is_empty() && lines.len() > 1 {
-        format!("{} line(s)", lines.len())
-    } else if head.trim().is_empty() {
-        "nothing".to_string()
-    } else {
-        truncate(head, SUBJECT_CHARS)
-    };
-    let mut out = vec![Line::from(vec![
-        Span::styled("  ⤷ ", style),
-        Span::styled(head, style),
-    ])];
-    let rest = &lines[lines.len().min(1)..];
-    let shown = if is_error || open {
-        rest.len()
-    } else {
-        rest.len().min(BODY_LINES)
-    };
-    let diff = looks_like_diff(body);
-    for l in &rest[..shown] {
-        out.push(match diff {
-            true => indent(diff_line(l)),
-            false => Line::from(Span::styled(format!("    {l}"), theme().dim)),
-        });
+    let mut left = vec![
+        Span::raw(" "),
+        Span::styled(glyph, glyph_style),
+        Span::raw(" "),
+        Span::styled(
+            step.name.clone(),
+            Style::default().fg(t.tool).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if !step.subject.is_empty() {
+        left.push(Span::styled(
+            format!("  {}", step.subject),
+            Style::default().fg(t.tool),
+        ));
     }
-    if rest.len() > shown {
-        out.push(Line::from(Span::styled(
-            format!("    … {} more line(s)", rest.len() - shown),
-            theme().dim,
-        )));
+    let mut right: Vec<Span<'static>> = Vec::new();
+    if let Some(o) = &step.outcome {
+        let head = o.body.lines().next().unwrap_or("");
+        let said = match (o.is_error, head.trim().is_empty(), o.body.lines().count()) {
+            (true, _, _) => "failed".to_string(),
+            (false, true, n) if n > 1 => format!("{n} line(s)"),
+            (false, true, _) => "nothing".to_string(),
+            (false, false, _) => clip(head.trim(), SUBJECT_CHARS),
+        };
+        match o.origin {
+            Origin::Guessed => right.push(Span::styled("guessed  ", Style::default().fg(t.accent))),
+            Origin::Repeated => right.push(Span::styled("repeat  ", t.dim)),
+            Origin::Ran | Origin::Withheld => {}
+        }
+        right.push(Span::styled(
+            said,
+            match o.is_error {
+                true => Style::default().fg(t.bad),
+                false => t.dim,
+            },
+        ));
+        if o.took >= SHOWN_FROM {
+            right.push(Span::styled(format!("  {}", how_long(o.took)), t.dim));
+        }
     }
-    // One blank line after the answer: what follows is the model talking again, and the
-    // two run together without it.
+    let mut out = vec![beside(left, right, width)];
+
+    let rail = |text: String, style: Style| {
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("▏", t.dim),
+            Span::styled(format!("   {text}"), style),
+        ])
+    };
+    let rail_line = |line: Line<'static>| {
+        let mut spans = vec![Span::raw(" "), Span::styled("▏", t.dim), Span::raw("   ")];
+        spans.extend(line.spans);
+        Line::from(spans)
+    };
+    match &step.outcome {
+        None => {
+            let held = step.live.lines().count();
+            let shown = match open {
+                true => held,
+                false => held.min(RUNNING_LINES),
+            };
+            if shown < held {
+                out.push(rail(
+                    format!("… {} earlier line(s), space to see them", held - shown),
+                    t.dim,
+                ));
+            }
+            out.extend(
+                step.live
+                    .lines()
+                    .skip(held - shown)
+                    .map(|l| rail(l.to_string(), t.dim)),
+            );
+        }
+        Some(o) if o.is_error => {
+            out.extend(
+                o.body
+                    .lines()
+                    .map(|l| rail(l.to_string(), Style::default().fg(t.bad))),
+            );
+        }
+        Some(o) => {
+            let rest: Vec<&str> = o.body.lines().skip(1).collect();
+            let shown = match open {
+                true => rest.len(),
+                false => rest.len().min(BODY_LINES),
+            };
+            let diff = looks_like_diff(&o.body);
+            for l in &rest[..shown] {
+                out.push(match diff {
+                    true => rail_line(diff_line(l)),
+                    false => rail(l.to_string(), t.dim),
+                });
+            }
+            if rest.len() > shown {
+                out.push(rail(
+                    format!("… {} more line(s), space to see them", rest.len() - shown),
+                    t.dim,
+                ));
+            }
+        }
+    }
     out.push(Line::from(""));
     out
+}
+
+/// `left` and `right` on one row, `right` against the edge of `width` when both fit,
+/// two spaces after `left` when they do not or when there is no width to align to.
+fn beside(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let wide = |spans: &[Span<'static>]| -> usize {
+        spans.iter().map(|s| s.content.chars().count()).sum()
+    };
+    let (l, r) = (wide(&left), wide(&right));
+    let mut spans = left;
+    if r == 0 {
+        return Line::from(spans);
+    }
+    let gap = match width {
+        0 => 2,
+        w if l + 2 + r <= w => w - l - r,
+        _ => 2,
+    };
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.extend(right);
+    Line::from(spans)
+}
+
+/// Seconds to a tenth up to a minute, then minutes and seconds.
+pub fn how_long(d: Duration) -> String {
+    let s = d.as_secs_f64();
+    match s < 60.0 {
+        true => format!("{s:.1}s"),
+        false => format!("{}m{:02}s", (s / 60.0) as u64, (s % 60.0) as u64),
+    }
+}
+
+/// `s` cut to `n` characters on one line, ending in an ellipsis when it was cut.
+fn clip(s: &str, n: usize) -> String {
+    match s.chars().count() > n {
+        true => s.chars().take(n.saturating_sub(1)).chain(['…']).collect(),
+        false => s.to_string(),
+    }
 }
 
 /// A rendered line, moved in under the result it belongs to.
@@ -461,6 +579,9 @@ fn indent(line: Line<'static>) -> Line<'static> {
 
 /// How much of a subject or an answer fits on one line before it stops being one.
 const SUBJECT_CHARS: usize = 96;
+
+/// How long a step has to take before its duration is worth showing.
+const SHOWN_FROM: Duration = Duration::from_millis(100);
 
 /// How much evidence is shown under an answer before it is counted instead.
 const BODY_LINES: usize = 8;
@@ -573,15 +694,6 @@ fn inline(line: &str) -> Vec<Span<'static>> {
         spans.push(Span::raw(line.to_string()));
     }
     spans
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n {
-        return s.to_string();
-    }
-    let mut t = s.chars().take(n).collect::<String>();
-    t.push_str("\n… (truncated)");
-    t
 }
 
 #[cfg(test)]
@@ -829,15 +941,100 @@ mod tests {
     /// A tool result that happens to be a diff gets read as one.
     #[test]
     fn a_diff_shaped_tool_result_is_coloured() {
-        let entry = Entry::ToolResult {
+        let entry = Entry::Step(Step {
+            id: "1".into(),
             name: "edit_file".into(),
-            is_error: false,
-            body: "@@ -1 +1 @@\n-old\n+new".into(),
-        };
+            subject: "src/a.rs".into(),
+            live: String::new(),
+            outcome: Some(Outcome {
+                is_error: false,
+                body: "edited src/a.rs\n@@ -1 +1 @@\n-old\n+new".into(),
+                took: Duration::ZERO,
+                origin: Origin::Ran,
+            }),
+        });
         let lines = entry.to_lines();
         assert!(lines
             .iter()
             .any(|l| l.spans.iter().any(|s| s.style.fg == Some(Color::Green))));
+    }
+
+    fn step(outcome: Option<Outcome>) -> Step {
+        Step {
+            id: "1".into(),
+            name: "read_file".into(),
+            subject: "src/mcp/client.rs".into(),
+            live: String::new(),
+            outcome,
+        }
+    }
+
+    fn done(body: &str, took: Duration, origin: Origin) -> Option<Outcome> {
+        Some(Outcome {
+            is_error: false,
+            body: body.into(),
+            took,
+            origin,
+        })
+    }
+
+    /// A step's call and what it came to share a row, the outcome against the right edge.
+    #[test]
+    fn a_step_is_one_row_with_its_outcome_at_the_edge() {
+        let rows = step_lines(
+            &step(done(
+                "212 lines\n1 use std;",
+                Duration::from_millis(1500),
+                Origin::Ran,
+            )),
+            false,
+            60,
+        );
+        let head = line_text(&rows[0]);
+        assert!(
+            head.starts_with(" ● read_file  src/mcp/client.rs"),
+            "{head}"
+        );
+        assert!(head.ends_with("212 lines  1.5s"), "{head}");
+        assert_eq!(head.chars().count(), 60);
+        assert_eq!(line_text(&rows[1]), " ▏   1 use std;");
+    }
+
+    /// A quick step does not say how long it took, and a guessed one says it was guessed.
+    #[test]
+    fn a_guessed_step_says_so_and_a_quick_one_keeps_quiet() {
+        let rows = step_lines(
+            &step(done("12 lines", Duration::ZERO, Origin::Guessed)),
+            false,
+            0,
+        );
+        let head = line_text(&rows[0]);
+        assert!(head.ends_with("guessed  12 lines"), "{head}");
+    }
+
+    /// A step still running shows the end of what it prints, and a failed one its error.
+    #[test]
+    fn a_running_step_shows_its_tail_and_a_failed_one_its_error() {
+        let mut running = step(None);
+        running.live = (0..30)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rows = step_lines(&running, false, 0);
+        assert!(line_text(&rows[0]).starts_with(" ◌ read_file"));
+        assert!(line_text(&rows[1]).contains("earlier line(s)"));
+        assert_eq!(line_text(&rows[rows.len() - 2]), " ▏   line 29");
+        let failed = step(Some(Outcome {
+            is_error: true,
+            body: "no such file\ntried src/mcp".into(),
+            took: Duration::ZERO,
+            origin: Origin::Ran,
+        }));
+        let rows = step_lines(&failed, false, 0);
+        assert!(line_text(&rows[0]).starts_with(" ✕ read_file"));
+        assert!(line_text(&rows[0]).ends_with("failed"));
+        assert_eq!(line_text(&rows[1]), " ▏   no such file");
+        assert_eq!(line_text(&rows[2]), " ▏   tried src/mcp");
     }
 }
 

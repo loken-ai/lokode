@@ -2,10 +2,12 @@
 > add a configurable timeout to the MCP calls
 
   the client awaits its reply without a bound
-  read_file(src/mcp/client.rs)
-  ⤷ 212 lines
-      1 use std::time::Duration;
-      2 use tokio::sync::oneshot;
+ ● read_file  src/mcp/client.rs                                                                      guessed  212 lines
+ ▏     1 use std::time::Duration;
+ ▏     2 use tokio::sync::oneshot;
+
+ ● bash  cargo test mcp                                                                                 14 passed  9.8s
+ ▏   test mcp::client::a_silent_server_times_out ... ok
 
 The client waits on rx.await forever. I add timeout-secs:
 
@@ -22,8 +24,6 @@ let reply = timeout(self.timeout, rx).await??;
   y once   a always (src/mcp/)   n or esc no   e no, and say why
 
 ! backend error: gave up after 3 attempts
-
-
 
 
 

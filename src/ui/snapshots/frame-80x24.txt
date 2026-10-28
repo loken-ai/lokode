@@ -1,7 +1,7 @@
-  read_file(src/mcp/client.rs)                                                 ▕
-  ⤷ 212 lines                                                                  ▕
-      1 use std::time::Duration;                                               ▕
-      2 use tokio::sync::oneshot;                                              ▐
+ ▏     2 use tokio::sync::oneshot;                                             ▕
+                                                                               ▕
+ ● bash  cargo test mcp                                         14 passed  9.8s▕
+ ▏   test mcp::client::a_silent_server_times_out ... ok                        ▕
                                                                                ▐
 The client waits on rx.await forever. I add timeout-secs:                      ▐
                                                                                ▐

@@ -3,6 +3,7 @@ use std::time::Duration;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::ui::chat::how_long;
 use crate::ui::theme::theme;
 
 #[derive(Debug, Clone)]
@@ -58,17 +59,6 @@ pub struct Status {
 
 /// The frames of the spinner, one per tick.
 const SPINNER: [&str; 8] = ["|", "/", "-", "\\", "|", "/", "-", "\\"];
-
-/// Seconds shown to a tenth up to a minute, then as minutes and seconds: a turn that has
-/// been waiting four minutes should not read as 247.3.
-fn how_long(d: Duration) -> String {
-    let s = d.as_secs_f64();
-    if s < 60.0 {
-        format!("{s:.1}s")
-    } else {
-        format!("{}m{:02}s", (s / 60.0) as u64, (s % 60.0) as u64)
-    }
-}
 
 impl Status {
     /// The line under the input: what is in force on the left, what is happening on the

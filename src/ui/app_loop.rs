@@ -18,7 +18,7 @@ use crate::app::AppConfig;
 use crate::boot;
 use crate::checkpoint::Checkpoints;
 use crate::sandbox::approval::ApprovalPrompt;
-use crate::ui::chat::Entry;
+use crate::ui::chat::{Entry, Outcome, Step};
 use crate::ui::commands::{
     booted_summary, copy_out, refresh_status, remember_rule, run_command, run_shell, take_back,
     CommandCtx, Ran,
@@ -463,7 +463,7 @@ async fn run_ui(
                 // Kept as one entry that grows rather than a line each: a build's output
                 // is one thing happening, and a hundred entries would push the answer it
                 // belongs to off the screen.
-                state.print_line(printed.tool, &printed.line);
+                state.print_line(&printed.tool, &printed.line);
             }
 
             Some(learned) = learn_rx.recv() => {
@@ -487,26 +487,28 @@ async fn run_ui(
                     AgentEvent::Reasoning(p) => state.push_reasoning(&p),
                     AgentEvent::AssistantDelta(chunk) => state.write_answer(chunk),
                     AgentEvent::AssistantText(s) => state.finish_answer(s),
-                    AgentEvent::ToolCall { name, args_pretty } => {
+                    AgentEvent::ToolCall { id, name, args_pretty } => {
                         state.step += 1;
-                        state.entries.push(Entry::ToolCall { name, args: args_pretty });
+                        state
+                            .entries
+                            .push(Entry::Step(Step::called(id, name, &args_pretty)));
                     }
-                    AgentEvent::ToolResult { name, output } => {
-                        // The tail was what it was printing; the result is what it
-                        // printed. Keeping both would show the same lines twice.
-                        if let Some(at) = state.output_being_printed(&name) {
-                            state.entries.remove(at);
-                        }
+                    AgentEvent::ToolResult { id, name, output, took, origin } => {
                         // The list is the model's, so it is read back after the call that
                         // may have changed it rather than kept in step by hand.
                         if name == "update_plan" {
                             state.tasks = tasks.get().await;
                         }
-                        state.entries.push(Entry::ToolResult {
+                        state.settle_step(
+                            &id,
                             name,
-                            is_error: output.is_error,
-                            body: output.content,
-                        });
+                            Outcome {
+                                is_error: output.is_error,
+                                body: output.content,
+                                took,
+                                origin,
+                            },
+                        );
                     }
                     AgentEvent::Steered(s) => state.entries.push(Entry::Notice(format!(
                         "handed to the model at step {}: {}",
@@ -1260,6 +1262,7 @@ async fn run_ui(
                                     if command.is_empty() {
                                         continue;
                                     }
+                                    let started = Instant::now();
                                     let (is_error, body) =
                                         run_shell(
                                             &command,
@@ -1278,11 +1281,12 @@ async fn run_ui(
                                             "I ran `{command}` myself. It said:\n{body}"
                                         )))
                                         .await;
-                                    state.entries.push(Entry::ToolResult {
-                                        name: command,
+                                    state.entries.push(Entry::Step(Step::ran_by_hand(
+                                        command,
                                         is_error,
                                         body,
-                                    });
+                                        started.elapsed(),
+                                    )));
                                     continue;
                                 }
                                 let mut text = text;

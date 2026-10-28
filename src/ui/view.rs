@@ -223,7 +223,8 @@ const INPUT_MAX_LINES: usize = 6;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::chat::Entry;
+    use crate::agent::agent_loop::Origin;
+    use crate::ui::chat::{Entry, Outcome, Step};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -240,16 +241,29 @@ mod tests {
             Entry::Notice("backend http://127.0.0.1:11435".into()),
             Entry::User("add a configurable timeout to the MCP calls".into()),
             Entry::Reasoning("the client awaits its reply without a bound".into()),
-            Entry::ToolCall {
-                name: "read_file".into(),
-                args: r#"{"path":"src/mcp/client.rs"}"#.into(),
-            },
-            Entry::ToolResult {
-                name: "read_file".into(),
-                is_error: false,
-                body: "212 lines\n  1 use std::time::Duration;\n  2 use tokio::sync::oneshot;"
-                    .into(),
-            },
+            Entry::Step(Step {
+                outcome: Some(Outcome {
+                    is_error: false,
+                    body: "212 lines\n  1 use std::time::Duration;\n  2 use tokio::sync::oneshot;"
+                        .into(),
+                    took: std::time::Duration::from_millis(40),
+                    origin: Origin::Guessed,
+                }),
+                ..Step::called(
+                    "1".into(),
+                    "read_file".into(),
+                    r#"{"path":"src/mcp/client.rs"}"#,
+                )
+            }),
+            Entry::Step(Step {
+                outcome: Some(Outcome {
+                    is_error: false,
+                    body: "14 passed\ntest mcp::client::a_silent_server_times_out ... ok".into(),
+                    took: std::time::Duration::from_millis(9800),
+                    origin: Origin::Ran,
+                }),
+                ..Step::called("2".into(), "bash".into(), r#"{"cmd":"cargo test mcp"}"#)
+            }),
             Entry::Assistant(
                 "The client waits on `rx.await` forever. I add **timeout-secs**:\n\n\
                  ```rust\nlet reply = timeout(self.timeout, rx).await??;\n```"
@@ -326,15 +340,19 @@ mod tests {
         let mut state = a_session();
         for i in 0..500 {
             state.entries.extend([
-                Entry::ToolCall {
-                    name: "grep".into(),
-                    args: format!(r#"{{"pattern":"step {i}"}}"#),
-                },
-                Entry::ToolResult {
-                    name: "grep".into(),
-                    is_error: false,
-                    body: format!("{i} match(es)\nsrc/lib.rs:{i}: step {i}"),
-                },
+                Entry::Step(Step {
+                    outcome: Some(Outcome {
+                        is_error: false,
+                        body: format!("{i} match(es)\nsrc/lib.rs:{i}: step {i}"),
+                        took: std::time::Duration::ZERO,
+                        origin: Origin::Ran,
+                    }),
+                    ..Step::called(
+                        i.to_string(),
+                        "grep".into(),
+                        &format!(r#"{{"pattern":"step {i}"}}"#),
+                    )
+                }),
                 Entry::Assistant(format!("step {i} done")),
             ]);
         }

@@ -150,6 +150,19 @@ pub enum Control {
     Note(String),
 }
 
+/// Where a tool's answer came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The tool ran for this call.
+    Ran,
+    /// A read made while the model was still writing, guessed right.
+    Guessed,
+    /// The same call was already answered this turn, with nothing written since.
+    Repeated,
+    /// It did not run: a second reading of the change objected first.
+    Withheld,
+}
+
 /// Events the agent loop emits so the UI can render progress.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -160,12 +173,18 @@ pub enum AgentEvent {
     /// The model's scratchpad. Shown, never recorded, never sent back.
     Reasoning(String),
     ToolCall {
+        /// The id the result will carry, so the two can be put together.
+        id: String,
         name: String,
         args_pretty: String,
     },
     ToolResult {
+        id: String,
         name: String,
         output: ToolOutput,
+        /// How long the call ran. Zero for an answer that was already known.
+        took: std::time::Duration,
+        origin: Origin,
     },
     Notice(String),
     /// A line the user typed while the turn was running, now in the conversation.
@@ -1848,6 +1867,7 @@ impl Agent {
                         serde_json::to_string_pretty(&call.arguments).unwrap_or_default();
                     let _ = events
                         .send(AgentEvent::ToolCall {
+                            id: call.id.clone(),
                             name: call.name.clone(),
                             args_pretty,
                         })
@@ -1907,14 +1927,18 @@ impl Agent {
                 // trip to be told the same thing, and a model that is going in circles
                 // does exactly that.
                 let mut fresh: Vec<&ResolvedCall> = Vec::new();
-                let mut plan: Vec<Result<usize, ToolOutput>> = Vec::with_capacity(run.len());
+                let mut plan: Vec<Result<usize, (ToolOutput, Origin)>> =
+                    Vec::with_capacity(run.len());
                 for call in &run {
                     if objections.contains_key(&call.id) {
-                        plan.push(Err(ToolOutput::err(format!(
-                            "not run: a second reading of this change says {}. Fix that or \
-                             say why it is right.",
-                            objections[&call.id]
-                        ))));
+                        plan.push(Err((
+                            ToolOutput::err(format!(
+                                "not run: a second reading of this change says {}. Fix that \
+                                 or say why it is right.",
+                                objections[&call.id]
+                            )),
+                            Origin::Withheld,
+                        )));
                         continue;
                     }
                     let key = repeat_key(call);
@@ -1922,8 +1946,8 @@ impl Agent {
                         // Handed what it was about to ask for, or told it is going in
                         // circles: the same answer, and only one of them is true.
                         plan.push(Err(match self.from_guess.remove(&key) {
-                            true => known.clone(),
-                            false => said_before(known),
+                            true => (known.clone(), Origin::Guessed),
+                            false => (said_before(known), Origin::Repeated),
                         }));
                     } else if let Some(i) = fresh.iter().position(|c| repeat_key(c) == key) {
                         plan.push(Ok(i));
@@ -1933,25 +1957,25 @@ impl Agent {
                     }
                 }
                 let ran_at = std::time::Instant::now();
-                let ran = futures::future::join_all(
-                    fresh
-                        .iter()
-                        .map(|call| self.dispatch_tool(&call.name, call.arguments.clone())),
-                )
+                let ran = futures::future::join_all(fresh.iter().map(|call| async {
+                    let started = std::time::Instant::now();
+                    let out = self.dispatch_tool(&call.name, call.arguments.clone()).await;
+                    (out, started.elapsed())
+                }))
                 .await;
                 let mut served = std::collections::HashSet::new();
-                let results: Vec<ToolOutput> = plan
+                let results: Vec<(ToolOutput, std::time::Duration, Origin)> = plan
                     .into_iter()
                     .map(|slot| match slot {
-                        Ok(i) if served.insert(i) => ran[i].clone(),
-                        Ok(i) => said_before(&ran[i]),
-                        Err(known) => known,
+                        Ok(i) if served.insert(i) => (ran[i].0.clone(), ran[i].1, Origin::Ran),
+                        Ok(i) => (said_before(&ran[i].0), Default::default(), Origin::Repeated),
+                        Err((known, origin)) => (known, Default::default(), origin),
                     })
                     .collect();
 
                 record.after.tool_ms += ran_at.elapsed().as_millis() as u64;
                 self.spend.tool_ms += ran_at.elapsed().as_millis() as u64;
-                for (call, result) in run.into_iter().zip(results) {
+                for (call, (result, took, origin)) in run.into_iter().zip(results) {
                     called += 1;
                     let repeated = result.content.starts_with(SAID_BEFORE);
                     fruitless += usize::from(result.is_error || repeated);
@@ -1959,8 +1983,11 @@ impl Agent {
                     let key = repeat_key(&call);
                     let _ = events
                         .send(AgentEvent::ToolResult {
+                            id: call.id.clone(),
                             name: call.name.clone(),
                             output: result.clone(),
+                            took,
+                            origin,
                         })
                         .await;
                     let prefix = if result.is_error { "[error] " } else { "" };
@@ -3151,7 +3178,7 @@ mod tests {
         let result = events
             .iter()
             .find_map(|e| match e {
-                AgentEvent::ToolResult { name, output } if name == "delegate" => Some(output),
+                AgentEvent::ToolResult { name, output, .. } if name == "delegate" => Some(output),
                 _ => None,
             })
             .expect("the delegation was never answered");
@@ -3201,7 +3228,7 @@ mod tests {
         let results: Vec<&ToolOutput> = events
             .iter()
             .filter_map(|e| match e {
-                AgentEvent::ToolResult { name, output } if name == "read_file" => Some(output),
+                AgentEvent::ToolResult { name, output, .. } if name == "read_file" => Some(output),
                 _ => None,
             })
             .collect();
@@ -3245,7 +3272,7 @@ mod tests {
         let last = events
             .iter()
             .filter_map(|e| match e {
-                AgentEvent::ToolResult { name, output } if name == "read_file" => Some(output),
+                AgentEvent::ToolResult { name, output, .. } if name == "read_file" => Some(output),
                 _ => None,
             })
             .next_back()
@@ -3340,7 +3367,7 @@ mod tests {
         let result = events
             .iter()
             .find_map(|e| match e {
-                AgentEvent::ToolResult { name, output } if name == "write_file" => Some(output),
+                AgentEvent::ToolResult { name, output, .. } if name == "write_file" => Some(output),
                 _ => None,
             })
             .expect("the call was never answered");
@@ -3374,7 +3401,7 @@ mod tests {
         let result = events
             .iter()
             .find_map(|e| match e {
-                AgentEvent::ToolResult { name, output } if name == "write_file" => Some(output),
+                AgentEvent::ToolResult { name, output, .. } if name == "write_file" => Some(output),
                 _ => None,
             })
             .expect("the call was never answered");
@@ -3512,7 +3539,7 @@ mod tests {
         let results: Vec<&ToolOutput> = events
             .iter()
             .filter_map(|e| match e {
-                AgentEvent::ToolResult { name, output } if name == "read_file" => Some(output),
+                AgentEvent::ToolResult { name, output, .. } if name == "read_file" => Some(output),
                 _ => None,
             })
             .collect();
@@ -3761,7 +3788,7 @@ mod tests {
         let result = events
             .iter()
             .find_map(|e| match e {
-                AgentEvent::ToolResult { name, output } if name == "delegate" => Some(output),
+                AgentEvent::ToolResult { name, output, .. } if name == "delegate" => Some(output),
                 _ => None,
             })
             .expect("the delegation was never answered");
@@ -3794,7 +3821,7 @@ mod tests {
         let refusal = events
             .iter()
             .find_map(|e| match e {
-                AgentEvent::ToolResult { name, output } if name == "write_file" => Some(output),
+                AgentEvent::ToolResult { name, output, .. } if name == "write_file" => Some(output),
                 _ => None,
             })
             .expect("the write was never answered");
@@ -3859,7 +3886,7 @@ mod tests {
         let refusal = events
             .iter()
             .find_map(|e| match e {
-                AgentEvent::ToolResult { name, output } if name == "write_file" => Some(output),
+                AgentEvent::ToolResult { name, output, .. } if name == "write_file" => Some(output),
                 _ => None,
             })
             .expect("the write was never answered");
@@ -3871,7 +3898,7 @@ mod tests {
         assert!(
             events.iter().any(|e| matches!(
                 e,
-                AgentEvent::ToolResult { name, output } if name == "read_file" && !output.is_error
+                AgentEvent::ToolResult { name, output, .. } if name == "read_file" && !output.is_error
             )),
             "reading was refused too: {events:?}"
         );
