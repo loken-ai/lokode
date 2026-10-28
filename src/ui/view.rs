@@ -1,7 +1,7 @@
 //! One frame of the interface, drawn from the state.
 
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -10,6 +10,7 @@ use ratatui_textarea::TextArea;
 use crate::app::AppConfig;
 use crate::ui::state::{UiState, SAID_FOR};
 use crate::ui::status::Status;
+use crate::ui::theme::theme;
 
 /// Draw one frame: the conversation, the input, the status line and the keys.
 pub(crate) fn draw(f: &mut Frame, state: &mut UiState, input: &TextArea, cfg: &AppConfig) {
@@ -36,7 +37,8 @@ pub(crate) fn draw(f: &mut Frame, state: &mut UiState, input: &TextArea, cfg: &A
     // step said nothing about where it is: the mark went on an entry that could be
     // a screen and a half above the pane, and the only way to see it was to guess
     // how far to scroll.
-    let width = chunks[0].width as usize;
+    // The last column is kept for the scrollbar, so it never sits over text.
+    let width = chunks[0].width.saturating_sub(1) as usize;
     let mut pane = crate::ui::thread::Pane::default();
     for i in 0..state.entries.len() {
         pane.push(state.drawings.rows(
@@ -104,8 +106,10 @@ pub(crate) fn draw(f: &mut Frame, state: &mut UiState, input: &TextArea, cfg: &A
             ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
                 .end_symbol(None)
-                .track_symbol(Some("│"))
-                .thumb_symbol("┃"),
+                .track_symbol(Some("▕"))
+                .track_style(theme().dim)
+                .thumb_symbol("▐")
+                .thumb_style(Style::default().fg(theme().text)),
             chunks[0],
             &mut bar,
         );
@@ -124,9 +128,9 @@ pub(crate) fn draw(f: &mut Frame, state: &mut UiState, input: &TextArea, cfg: &A
             "❯ ",
             Style::default()
                 .fg(if state.busy {
-                    Color::DarkGray
+                    theme().faint()
                 } else {
-                    Color::Cyan
+                    theme().accent
                 })
                 .add_modifier(Modifier::BOLD),
         ))),
@@ -189,7 +193,7 @@ pub(crate) fn draw(f: &mut Frame, state: &mut UiState, input: &TextArea, cfg: &A
         tick: state.tick,
     };
     f.render_widget(
-        Paragraph::new(status.to_line()).style(Style::default().fg(Color::Gray)),
+        Paragraph::new(status.to_line()).style(Style::default().fg(theme().text)),
         chunks[3],
     );
     f.render_widget(

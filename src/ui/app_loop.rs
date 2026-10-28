@@ -235,6 +235,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     // The hook goes in before the terminal is taken, so the window in which a panic could
     // escape uncovered never opens.
     term::install_panic_hook();
+    // Asked before the screen is taken: the answer arrives on the input the event loop
+    // reads from then on.
+    crate::ui::theme::set(crate::ui::theme::Theme::detect());
     let guard = term::TerminalGuard::new()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
 

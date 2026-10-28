@@ -1,5 +1,7 @@
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+
+use crate::ui::theme::theme;
 
 /// A single rendered entry in the chat scrollback.
 #[derive(Debug, Clone)]
@@ -92,7 +94,7 @@ impl Entry {
             // The mark goes in the left margin every line already leaves empty, so
             // pointing at an entry does not move its text.
             for line in lines.iter_mut() {
-                let mark = Span::styled("▌", Style::default().fg(Color::Cyan));
+                let mark = Span::styled("▌", Style::default().fg(theme().accent));
                 match line.spans.first_mut() {
                     Some(first) if first.content.starts_with(' ') => {
                         let rest: String = first.content.chars().skip(1).collect();
@@ -120,10 +122,10 @@ impl Entry {
                             Span::styled(
                                 if i == 0 { "> " } else { "  " },
                                 Style::default()
-                                    .fg(Color::Cyan)
+                                    .fg(theme().accent)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(l.to_string(), Style::default().fg(Color::Cyan)),
+                            Span::styled(l.to_string(), Style::default().fg(theme().accent)),
                         ])
                     })
                     .collect();
@@ -143,10 +145,10 @@ impl Entry {
                 Span::styled(
                     name.clone(),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme().tool)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(call_subject(name, args), Style::default().fg(Color::Yellow)),
+                Span::styled(call_subject(name, args), Style::default().fg(theme().tool)),
             ])],
             Entry::ToolResult {
                 name,
@@ -163,19 +165,14 @@ impl Entry {
                 .map(|l| {
                     Line::from(Span::styled(
                         format!("  {l}"),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
+                        theme().dim.add_modifier(Modifier::ITALIC),
                     ))
                 })
                 .collect(),
             // Dimmed and set apart: it is what is happening, not what was said, and it
             // is replaced by the tool's own result the moment there is one.
             Entry::ToolOutput { name, body } => {
-                let mut out = vec![Line::from(Span::styled(
-                    format!("  {name} …"),
-                    Style::default().fg(Color::DarkGray),
-                ))];
+                let mut out = vec![Line::from(Span::styled(format!("  {name} …"), theme().dim))];
                 // The end of it, which is where a run that is going wrong says so. The
                 // rest is held and unfolds, rather than being dropped as it arrives and
                 // reachable only once the run has finished.
@@ -187,15 +184,14 @@ impl Entry {
                 if shown < held {
                     out.push(Line::from(Span::styled(
                         format!("    … {} earlier line(s), space to see them", held - shown),
-                        Style::default().fg(Color::DarkGray),
+                        theme().dim,
                     )));
                 }
-                out.extend(body.lines().skip(held - shown).map(|l| {
-                    Line::from(Span::styled(
-                        format!("    {l}"),
-                        Style::default().fg(Color::DarkGray),
-                    ))
-                }));
+                out.extend(
+                    body.lines()
+                        .skip(held - shown)
+                        .map(|l| Line::from(Span::styled(format!("    {l}"), theme().dim))),
+                );
                 out
             }
             // The one thing on screen that is waiting for the reader, so it is the one
@@ -207,7 +203,7 @@ impl Entry {
                 ..
             } => {
                 let ask = Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme().warn)
                     .add_modifier(Modifier::BOLD);
                 let mut out = vec![Line::from(vec![
                     Span::styled("? ", ask),
@@ -226,7 +222,7 @@ impl Entry {
                     if more > 0 && !open {
                         out.push(Line::from(Span::styled(
                             format!("    … {more} more line(s), space to see them"),
-                            Style::default().fg(Color::DarkGray),
+                            theme().dim,
                         )));
                     }
                 }
@@ -238,7 +234,7 @@ impl Entry {
                 };
                 out.push(Line::from(Span::styled(
                     format!("  y once   a always ({scope})   n or esc no   e no, and say why{fix}"),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme().warn),
                 )));
                 out.push(Line::from(""));
                 out
@@ -252,8 +248,10 @@ impl Entry {
                 }
                 let bad = says_something_went_wrong(s);
                 let style = match bad {
-                    true => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                    false => Style::default().fg(Color::DarkGray),
+                    true => Style::default()
+                        .fg(theme().bad)
+                        .add_modifier(Modifier::BOLD),
+                    false => theme().dim,
                 };
                 let mark = if bad { "! " } else { "· " };
                 s.lines()
@@ -410,10 +408,9 @@ fn call_subject(name: &str, args: &str) -> String {
 /// answer is always shown, the evidence up to a few lines, and the rest counted. An error
 /// is shown whole because an error nobody can read is an error nobody can act on.
 fn result_lines(is_error: bool, body: &str, open: bool) -> Vec<Line<'static>> {
-    let colour = if is_error {
-        Color::Red
-    } else {
-        Color::DarkGray
+    let style = match is_error {
+        true => Style::default().fg(theme().bad),
+        false => theme().dim,
     };
     let lines: Vec<&str> = body.lines().collect();
     // Kept as it was written, leading spaces and all: a tool that numbers its lines lines
@@ -427,8 +424,8 @@ fn result_lines(is_error: bool, body: &str, open: bool) -> Vec<Line<'static>> {
         truncate(head, SUBJECT_CHARS)
     };
     let mut out = vec![Line::from(vec![
-        Span::styled("  ⤷ ", Style::default().fg(colour)),
-        Span::styled(head, Style::default().fg(colour)),
+        Span::styled("  ⤷ ", style),
+        Span::styled(head, style),
     ])];
     let rest = &lines[lines.len().min(1)..];
     let shown = if is_error || open {
@@ -440,16 +437,13 @@ fn result_lines(is_error: bool, body: &str, open: bool) -> Vec<Line<'static>> {
     for l in &rest[..shown] {
         out.push(match diff {
             true => indent(diff_line(l)),
-            false => Line::from(Span::styled(
-                format!("    {l}"),
-                Style::default().fg(Color::DarkGray),
-            )),
+            false => Line::from(Span::styled(format!("    {l}"), theme().dim)),
         });
     }
     if rest.len() > shown {
         out.push(Line::from(Span::styled(
             format!("    … {} more line(s)", rest.len() - shown),
-            Style::default().fg(Color::DarkGray),
+            theme().dim,
         )));
     }
     // One blank line after the answer: what follows is the model talking again, and the
@@ -492,13 +486,13 @@ fn looks_like_diff(s: &str) -> bool {
 
 fn diff_line(l: &str) -> Line<'static> {
     let style = if l.starts_with("+++") || l.starts_with("---") {
-        Style::default().fg(Color::DarkGray)
+        theme().dim
     } else if l.starts_with('+') {
-        Style::default().fg(Color::Green)
+        Style::default().fg(theme().good)
     } else if l.starts_with('-') {
-        Style::default().fg(Color::Red)
+        Style::default().fg(theme().bad)
     } else if l.starts_with("@@") {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(theme().hunk)
     } else {
         Style::default()
     };
@@ -518,18 +512,12 @@ fn prose(body: &str) -> Vec<Line<'static>> {
         let trimmed = raw.trim_start();
         if trimmed.starts_with("```") {
             in_code = !in_code;
-            out.push(Line::from(Span::styled(
-                raw.to_string(),
-                Style::default().fg(Color::DarkGray),
-            )));
+            out.push(Line::from(Span::styled(raw.to_string(), theme().dim)));
             continue;
         }
         // Inside a fence the text is code, so `**` is a glob and not emphasis.
         if in_code {
-            out.push(Line::from(Span::styled(
-                raw.to_string(),
-                Style::default().fg(Color::Rgb(180, 200, 220)),
-            )));
+            out.push(Line::from(Span::styled(raw.to_string(), theme().code)));
             continue;
         }
         if trimmed.starts_with("# ")
@@ -537,12 +525,7 @@ fn prose(body: &str) -> Vec<Line<'static>> {
             || trimmed.starts_with("### ")
             || trimmed.starts_with("#### ")
         {
-            out.push(Line::from(Span::styled(
-                raw.to_string(),
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )));
+            out.push(Line::from(Span::styled(raw.to_string(), theme().heading)));
             continue;
         }
         out.push(Line::from(inline(raw)));
@@ -560,8 +543,8 @@ fn inline(line: &str) -> Vec<Span<'static>> {
         let bold = rest.find("**");
         // Whichever marker comes first, if either does.
         let (at, marker, style) = match (backtick, bold) {
-            (Some(b), Some(s)) if b <= s => (b, "`", Style::default().fg(Color::Yellow)),
-            (Some(b), None) => (b, "`", Style::default().fg(Color::Yellow)),
+            (Some(b), Some(s)) if b <= s => (b, "`", theme().inline_code),
+            (Some(b), None) => (b, "`", theme().inline_code),
             (_, Some(s)) => (s, "**", Style::default().add_modifier(Modifier::BOLD)),
             (None, None) => break,
         };
@@ -603,6 +586,7 @@ fn truncate(s: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Color;
 
     /// Pointing at the entry a word is in leaves the word itself to be found by eye,
     /// which on a screenful of output is the part that takes the time.
@@ -900,14 +884,7 @@ pub fn selected_text(lines: &[Line<'static>], a: Spot, b: Spot) -> String {
 
 /// `line` with the columns between `from` and `to` shown as chosen.
 pub fn mark_selected(line: &Line<'static>, from: usize, to: usize) -> Line<'static> {
-    mark_range(
-        line,
-        from,
-        to,
-        Style::default()
-            .bg(Color::Blue)
-            .add_modifier(Modifier::BOLD),
-    )
+    mark_range(line, from, to, theme().selected)
 }
 
 /// `line` with every occurrence of `needle` picked out.
@@ -923,10 +900,7 @@ pub fn mark_found(line: &Line<'static>, needle: &str) -> Line<'static> {
     if want.is_empty() || hay.len() < want.len() {
         return line.clone();
     }
-    let style = Style::default()
-        .bg(Color::Yellow)
-        .fg(Color::Black)
-        .add_modifier(Modifier::BOLD);
+    let style = theme().found;
     let mut out = line.clone();
     let mut at = 0usize;
     while at + want.len() <= hay.len() {

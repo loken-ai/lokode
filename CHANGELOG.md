@@ -6,6 +6,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Added
 
+- Interface: follow the terminal's colours, tell Esc and Alt chords apart, show frames whole.
 - Interface: draw again only the entries that changed, so a long session stays fast.
 
 ### Changed

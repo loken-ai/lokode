@@ -9,6 +9,7 @@ pub mod sheet;
 mod state;
 pub mod status;
 pub mod term;
+pub mod theme;
 mod thread;
 mod view;
 pub use app_loop::run;

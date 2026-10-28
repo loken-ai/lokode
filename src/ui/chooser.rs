@@ -10,10 +10,12 @@
 //! arrows move, enter picks, escape leaves everything as it was.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
+
+use crate::ui::theme::theme;
 
 pub use crate::ui::picker::Choice;
 
@@ -140,25 +142,19 @@ impl Chooser {
             };
             let style = match here {
                 true => Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(theme().ink)
+                    .bg(theme().accent)
                     .add_modifier(Modifier::BOLD),
                 false => Style::default(),
             };
             let mut spans = vec![Span::styled(format!("{mark}{}", choice.value), style)];
             if !choice.about.is_empty() {
-                spans.push(Span::styled(
-                    format!("  {}", choice.about),
-                    Style::default().fg(Color::DarkGray),
-                ));
+                spans.push(Span::styled(format!("  {}", choice.about), theme().dim));
             }
             lines.push(Line::from(spans));
         }
         if shown.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  nothing matches",
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(Line::from(Span::styled("  nothing matches", theme().dim)));
         }
         // What was typed, and the keys: both belong where the eye already is rather than
         // on the status line under the input, which this covers.
@@ -169,7 +165,7 @@ impl Chooser {
                     true => "type to narrow".to_string(),
                     false => self.typed.clone(),
                 },
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme().warn),
             ),
             Span::styled(
                 format!(
@@ -180,26 +176,37 @@ impl Chooser {
                     },
                     shown.len()
                 ),
-                Style::default().fg(Color::DarkGray),
+                theme().dim,
             ),
         ]));
-        let height = (lines.len() as u16 + 2).min(area.height);
+        // A title row over the list, on a tinted surface where the terminal can show
+        // one: what sets the list apart from the conversation it covers, without a frame.
+        let title = match theme().tint {
+            Some(_) => Style::default()
+                .fg(theme().accent)
+                .add_modifier(Modifier::BOLD),
+            None => Style::default()
+                .fg(theme().ink)
+                .bg(theme().accent)
+                .add_modifier(Modifier::BOLD),
+        };
+        lines.insert(
+            0,
+            Line::from(Span::styled(format!(" {} ", self.title), title)),
+        );
+        let height = (lines.len() as u16).min(area.height);
         let area = Rect {
             x: area.x,
             y: area.y + area.height.saturating_sub(height),
             width: area.width,
             height,
         };
+        let surface = match theme().tint {
+            Some(tint) => Style::default().bg(tint),
+            None => Style::default(),
+        };
         f.render_widget(Clear, area);
-        f.render_widget(
-            Paragraph::new(lines).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(format!(" {} ", self.title)),
-            ),
-            area,
-        );
+        f.render_widget(Paragraph::new(lines).style(surface), area);
     }
 }
 

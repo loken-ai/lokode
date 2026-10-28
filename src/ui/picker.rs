@@ -8,10 +8,12 @@
 //! and closes leaving nothing behind - a chooser is not part of the conversation.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
+
+use crate::ui::theme::theme;
 
 /// How many rows the list may take. Enough to choose from, short enough to leave the
 /// conversation visible behind it.
@@ -128,7 +130,7 @@ impl Picker {
             .map(|(i, c)| {
                 let here = i == self.at;
                 let mark = if here { "❯ " } else { "  " };
-                let value = Style::default().fg(if here { Color::Cyan } else { Color::Gray });
+                let value = Style::default().fg(if here { theme().accent } else { theme().text });
                 let value = match here {
                     true => value.add_modifier(Modifier::BOLD),
                     false => value,
@@ -141,7 +143,7 @@ impl Picker {
                             true => String::new(),
                             false => format!("  {}", c.about),
                         },
-                        Style::default().fg(Color::DarkGray),
+                        theme().dim,
                     ),
                 ])
             })

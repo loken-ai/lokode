@@ -1,7 +1,9 @@
 use std::time::Duration;
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+
+use crate::ui::theme::theme;
 
 #[derive(Debug, Clone)]
 pub struct Status {
@@ -85,22 +87,22 @@ impl Status {
                 false => "   ".to_string(),
             },
             Style::default().fg(if self.busy {
-                Color::Yellow
+                theme().warn
             } else {
-                Color::DarkGray
+                theme().faint()
             }),
         ));
         let (badge, colour) = match (self.planning, self.accepting_writes) {
-            (true, _) => (" PLAN ", Color::Cyan),
+            (true, _) => (" PLAN ", theme().accent),
             // Loudest of the three, because it is the one where things happen without
             // being shown first.
-            (false, true) => (" WRITE", Color::Yellow),
-            (false, false) => (" ACT  ", Color::Green),
+            (false, true) => (" WRITE", theme().warn),
+            (false, false) => (" ACT  ", theme().good),
         };
         spans.push(Span::styled(
             badge,
             Style::default()
-                .fg(Color::Black)
+                .fg(theme().ink)
                 .bg(colour)
                 .add_modifier(Modifier::BOLD),
         ));
@@ -109,41 +111,35 @@ impl Status {
             self.model.clone(),
             Style::default().add_modifier(Modifier::BOLD),
         ));
-        spans.push(Span::styled(
-            format!("  {}", self.root),
-            Style::default().fg(Color::DarkGray),
-        ));
+        spans.push(Span::styled(format!("  {}", self.root), theme().dim));
         // Named, because a bare percentage on a status bar is a number nobody can act
         // on: this one says how close the conversation is to the point where its oldest
         // steps start being dropped to make room.
         spans.push(Span::styled(
             format!("  ctx {}%", self.context_percent),
             Style::default().fg(match self.context_percent {
-                0..=74 => Color::DarkGray,
-                75..=99 => Color::Yellow,
-                _ => Color::Red,
+                0..=74 => theme().faint(),
+                75..=99 => theme().warn,
+                _ => theme().bad,
             }),
         ));
         if self.busy {
             spans.push(Span::styled(
                 format!("  {}/{}", self.step, self.max_steps),
-                Style::default().fg(Color::DarkGray),
+                theme().dim,
             ));
         }
         if let Some((what, since)) = self.background.as_ref() {
             spans.push(Span::styled(
                 format!("  {what} {}", how_long(*since)),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme().accent),
             ));
         }
         // A turn that takes a minute with nothing on screen looks the same as a turn that
         // has stalled. This is the number that tells them apart, and it is only shown
         // while there is a turn for it to be about.
         if let Some(rate) = self.rate.filter(|_| self.busy) {
-            spans.push(Span::styled(
-                format!("  {rate:.0} tok/s"),
-                Style::default().fg(Color::DarkGray),
-            ));
+            spans.push(Span::styled(format!("  {rate:.0} tok/s"), theme().dim));
         }
         // The phase is what a user is looking for when the screen has stopped changing, so
         // it goes last, where the eye lands, with the time it has been there beside it.
@@ -154,27 +150,27 @@ impl Status {
             spans.push(Span::styled(
                 format!("  {finding}"),
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
+                    .fg(theme().ink)
+                    .bg(theme().warn)
                     .add_modifier(Modifier::BOLD),
             ));
         }
         if self.queued > 0 {
             spans.push(Span::styled(
                 format!("  {} queued", self.queued),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme().accent),
             ));
         }
         if let Some(said) = self.said.as_deref() {
             spans.push(Span::styled(
                 format!("  {said}"),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme().accent),
             ));
         }
         if let Some(phase) = self.phase.as_deref().filter(|_| self.busy) {
             spans.push(Span::styled(
                 format!("  {phase} {}", how_long(self.in_phase)),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme().warn),
             ));
         }
         Line::from(spans)
@@ -210,20 +206,15 @@ impl Status {
             used += cost;
             spans.extend(pair.iter().cloned());
         }
-        spans.push(Span::styled(" …", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(" …", theme().dim));
         Line::from(spans)
     }
 
     pub fn keys(&self) -> Line<'static> {
         let key = |k: &str, what: &str| {
             vec![
-                Span::styled(
-                    format!("  {k}"),
-                    Style::default()
-                        .fg(Color::Gray)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!(" {what}"), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("  {k}"), theme().key),
+                Span::styled(format!(" {what}"), theme().dim),
             ]
         };
         let mut spans = Vec::new();

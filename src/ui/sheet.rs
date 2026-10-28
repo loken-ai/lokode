@@ -7,10 +7,12 @@
 //! So it goes on a page over the conversation, scrolls, and closes leaving nothing.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::Frame;
+
+use crate::ui::theme::theme;
 
 /// A page of text over the conversation.
 pub struct Sheet {
@@ -48,7 +50,7 @@ impl Sheet {
         let mut out = vec![Line::from(Span::styled(
             self.title.clone(),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme().accent)
                 .add_modifier(Modifier::BOLD),
         ))];
         out.extend(
@@ -64,7 +66,7 @@ impl Sheet {
                 0 => "esc closes".to_string(),
                 n => format!("esc closes   ↑↓ scroll   {n} more line(s)"),
             },
-            Style::default().fg(Color::DarkGray),
+            theme().dim,
         )));
         f.render_widget(Clear, area);
         f.render_widget(Paragraph::new(out).wrap(Wrap { trim: false }), area);
