@@ -162,6 +162,8 @@ pub(crate) struct UiState {
     pub(crate) backend: String,
     /// The project's root, for asking git where it stands.
     pub(crate) root: std::path::PathBuf,
+    /// A command of the person's own while it runs: the id of its step and what stops it.
+    pub(crate) hand: Option<(String, tokio_util::sync::CancellationToken)>,
     /// Where the open list was drawn and the first item on screen, for the mouse.
     pub(crate) list_hit: Option<(ratatui::layout::Rect, usize)>,
     /// Whether the terminal window has the focus, as it last said.

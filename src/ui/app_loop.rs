@@ -415,6 +415,9 @@ async fn run_ui(
 
     let mut events = EventStream::new();
     let mut injected: std::collections::VecDeque<Event> = Default::default();
+    // What a command of the person's own came to, when it ends.
+    let (hand_tx, mut hand_rx) = mpsc::channel::<(String, String, bool, String, Duration)>(4);
+    let mut hand_runs = 0usize;
 
     loop {
         busy_tx.send_if_modified(|was| {
@@ -512,6 +515,28 @@ async fn run_ui(
             }
 
             Some(power) = power_rx.recv() => state.note_power(power),
+
+            Some((id, command, is_error, body, took)) = hand_rx.recv() => {
+                state.hand = None;
+                state.background = None;
+                // Handed to the conversation as well: running a test and then asking about
+                // the failure only works if the failure is something the model has seen.
+                let _ = control_tx
+                    .send(crate::agent::agent_loop::Control::Note(format!(
+                        "I ran `{command}` myself. It said:\n{body}"
+                    )))
+                    .await;
+                state.settle_step(
+                    &id,
+                    "$".into(),
+                    Outcome {
+                        is_error,
+                        body,
+                        took,
+                        origin: crate::agent::agent_loop::Origin::Ran,
+                    },
+                );
+            }
 
             Some(printed) = live.recv() => {
                 // Kept as one entry that grows rather than a line each: a build's output
@@ -787,6 +812,19 @@ async fn run_ui(
                     // leave - and then only when asked twice. It used to end the session
                     // outright, in the middle of a turn, with a change history nobody had
                     // looked at yet.
+                    // A command of the person's own, running, is what ctrl-c and esc stop
+                    // first.
+                    let stops = matches!(quit_intent(&key), Some(crate::ui::input::Quit::Ask))
+                        || (key.code == KeyCode::Esc
+                            && state.picker.is_none()
+                            && state.choosing.is_none()
+                            && state.sheet.is_none());
+                    if stops && !state.busy {
+                        if let Some((_, stop)) = state.hand.as_ref() {
+                            stop.cancel();
+                            continue;
+                        }
+                    }
                     match quit_intent(&key) {
                         Some(quit) => {
                             let stake = crate::ui::input::AtStake {
@@ -968,7 +1006,7 @@ async fn run_ui(
                                     chooser.push(c);
                                 }
                             }
-                            KeyCode::Enter => {
+                            KeyCode::Enter | KeyCode::Tab => {
                                 let taken = state.choosing.as_ref().and_then(|c| {
                                     c.chosen().map(|value| (c.verb().to_string(), value))
                                 });
@@ -976,6 +1014,17 @@ async fn run_ui(
                                 // The answer that declines a question asked before something
                                 // is done does nothing.
                                 let taken = taken.filter(|(_, value)| value != "no");
+                                // Taking an earlier question back, agreed to.
+                                if let Some(("take back", at)) =
+                                    taken.as_ref().map(|(v, a)| (v.as_str(), a.as_str()))
+                                {
+                                    if let Ok(at) = at.parse::<usize>() {
+                                        if let Some(text) = take_back_from(&mut state, &control_tx, at).await {
+                                            input = fresh_input(&text);
+                                        }
+                                    }
+                                    continue;
+                                }
                                 if let Some((verb, value)) = taken {
                                     let ran = run_command(
                                         &format!("{verb} {value}"),
@@ -1131,6 +1180,15 @@ async fn run_ui(
                                 ));
                                 continue;
                             }
+                            KeyCode::BackTab | KeyCode::Tab
+                                if key.modifiers.contains(KeyModifiers::SHIFT) && state.busy =>
+                            {
+                                state.said = Some((
+                                    "the mode changes once this turn is over".into(),
+                                    Instant::now(),
+                                ));
+                                continue;
+                            }
                             KeyCode::BackTab
                             | KeyCode::Tab
                                 if key.modifiers.contains(KeyModifiers::SHIFT)
@@ -1282,24 +1340,30 @@ async fn run_ui(
                                         .is_some_and(|i| matches!(state.entries.get(i), Some(Entry::User(_)))) =>
                             {
                                 let at = state.at_entry.expect("checked just above");
-                                let later = state.entries
+                                let later = state
+                                    .entries
                                     .iter()
-                                    .skip(at)
+                                    .skip(at + 1)
                                     .filter(|e| matches!(e, Entry::User(_)))
                                     .count();
-                                let mut taken = None;
-                                for _ in 0..later {
-                                    taken = take_back(&control_tx).await;
-                                }
-                                match taken {
-                                    Some(text) => {
-                                        state.entries.truncate(at);
-                                        state.at_entry = None;
+                                // The last question comes back at once. An earlier one takes
+                                // the turns after it out of the conversation, so it is asked.
+                                if later == 0 {
+                                    if let Some(text) = take_back_from(&mut state, &control_tx, at).await {
                                         input = fresh_input(&text);
                                     }
-                                    None => state.entries.push(Entry::Notice(
-                                        "that question is no longer in the conversation".into(),
-                                    )),
+                                } else {
+                                    state.choosing = Some(crate::ui::chooser::Chooser::new(
+                                        "take back",
+                                        format!(
+                                            "take this question back? the {later} turn(s) after it leave the conversation"
+                                        ),
+                                        vec![
+                                            crate::ui::chooser::Choice::new("no", "keep the conversation"),
+                                            crate::ui::chooser::Choice::new(at.to_string(), "take it back"),
+                                        ],
+                                        Some("no".into()),
+                                    ));
                                 }
                                 continue;
                             }
@@ -1456,31 +1520,41 @@ async fn run_ui(
                                     if command.is_empty() {
                                         continue;
                                     }
-                                    let started = Instant::now();
-                                    let (is_error, body) =
-                                        run_shell(
-                                            &command,
-                                            &cfg.root,
-                                            crate::agent::session::tool_output_chars(
-                                                cfg.context_tokens,
-                                                cfg.max_answer_tokens,
-                                            ),
-                                        )
-                                        .await;
-                                    // Handed to the conversation as well: running a test
-                                    // and then asking about the failure only works if the
-                                    // failure is something the model has seen.
-                                    let _ = control_tx
-                                        .send(crate::agent::agent_loop::Control::Note(format!(
-                                            "I ran `{command}` myself. It said:\n{body}"
-                                        )))
-                                        .await;
-                                    state.entries.push(Entry::Step(Step::ran_by_hand(
-                                        command,
-                                        is_error,
-                                        body,
-                                        started.elapsed(),
-                                    )));
+                                    // Run beside the interface, under a step of its own, so a
+                                    // long build neither freezes the screen nor can only be
+                                    // waited out: ctrl-c or esc stops it.
+                                    if state.hand.is_some() {
+                                        state.said = Some((
+                                            "a command of yours is still running".into(),
+                                            Instant::now(),
+                                        ));
+                                        continue;
+                                    }
+                                    hand_runs += 1;
+                                    let id = format!("hand-{hand_runs}");
+                                    state.entries.push(Entry::Step(Step {
+                                        id: id.clone(),
+                                        name: "$".into(),
+                                        subject: command.clone(),
+                                        live: String::new(),
+                                        outcome: None,
+                                    }));
+                                    let stop = shutdown.child_token();
+                                    state.hand = Some((id.clone(), stop.clone()));
+                                    state.background = Some((format!("running {command}"), Instant::now()));
+                                    let root = cfg.root.clone();
+                                    let cap = crate::agent::session::tool_output_chars(
+                                        cfg.context_tokens,
+                                        cfg.max_answer_tokens,
+                                    );
+                                    let done = hand_tx.clone();
+                                    tokio::spawn(async move {
+                                        let started = Instant::now();
+                                        let (is_error, body) = run_shell(&command, &root, cap, stop).await;
+                                        let _ = done
+                                            .send((id, command, is_error, body, started.elapsed()))
+                                            .await;
+                                    });
                                     continue;
                                 }
                                 let mut text = text;
@@ -1707,4 +1781,35 @@ async fn run_ui(
             }
         }
     }
+}
+
+/// Take the question at entry `at` back, with every turn after it, and give its text back.
+///
+/// The conversation is rewound once per question from `at` on, so what the agent did after
+/// it leaves with it. The screen loses the same entries.
+async fn take_back_from(
+    state: &mut UiState,
+    control: &mpsc::Sender<crate::agent::agent_loop::Control>,
+    at: usize,
+) -> Option<String> {
+    let questions = state
+        .entries
+        .iter()
+        .skip(at)
+        .filter(|e| matches!(e, Entry::User(_)))
+        .count();
+    let mut taken = None;
+    for _ in 0..questions {
+        taken = take_back(control).await;
+    }
+    match &taken {
+        Some(_) => {
+            state.entries.truncate(at);
+            state.at_entry = None;
+        }
+        None => state.entries.push(Entry::Notice(
+            "that question is no longer in the conversation".into(),
+        )),
+    }
+    taken
 }

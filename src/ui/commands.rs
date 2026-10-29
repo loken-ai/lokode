@@ -122,13 +122,23 @@ pub(crate) async fn take_back(
 /// Bounded like any other result that lands in the pane, and the two streams are kept in
 /// the order the command wrote them as far as reading them separately allows: what a
 /// failing command prints is usually the only thing worth having.
-pub(crate) async fn run_shell(command: &str, root: &std::path::Path, cap: usize) -> (bool, String) {
-    let done = tokio::process::Command::new("/bin/sh")
+pub(crate) async fn run_shell(
+    command: &str,
+    root: &std::path::Path,
+    cap: usize,
+    stop: tokio_util::sync::CancellationToken,
+) -> (bool, String) {
+    // Killed with the future when it is stopped, rather than left running unseen.
+    let run = tokio::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(command)
         .current_dir(root)
-        .output()
-        .await;
+        .kill_on_drop(true)
+        .output();
+    let done = tokio::select! {
+        _ = stop.cancelled() => return (true, "stopped before it finished".into()),
+        done = run => done,
+    };
     let out = match done {
         Ok(out) => out,
         Err(e) => return (true, format!("could not run it: {e}")),

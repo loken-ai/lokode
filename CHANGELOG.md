@@ -14,6 +14,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Interface: draw command answers as pages, with tables, the map and numbered diffs.
 - Interface: scroll and pick with the wheel and the click, and unfold a step by its badge.
 - Interface: ask before any action that loses something, and keep what was typed.
+- Interface: run a command of your own beside the screen, several at once.
 - Interface: follow the terminal's colours, tell Esc and Alt chords apart, show frames whole.
 - Interface: show each step on one line with what it came to and how long it took.
 - Interface: draw again only the entries that changed, so a long session stays fast.
