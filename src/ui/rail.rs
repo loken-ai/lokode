@@ -76,6 +76,8 @@ pub struct Rail<'a> {
     pub watts: &'a VecDeque<f64>,
     /// What is running now.
     pub jobs: &'a [crate::ui::state::Job],
+    /// The errors the language servers report, by file relative to the project.
+    pub errors: &'a [(String, usize)],
 }
 
 /// The colours of the window's parts, in the order the session measures them.
@@ -164,7 +166,14 @@ impl Rail<'_> {
             let removed: usize = self.changes.iter().map(|c| c.removed).sum();
             heading(&mut out, "CHANGES", format!("+{added} -{removed}"));
             for c in self.changes.iter().take(FILES_SHOWN) {
-                let counts = format!("+{} -{}", c.added, c.removed);
+                // A file the language servers report errors in says how many, first.
+                let errors = self
+                    .errors
+                    .iter()
+                    .find(|(path, _)| *path == c.path)
+                    .map(|(_, n)| format!("✕{n} "))
+                    .unwrap_or_default();
+                let counts = format!("{errors}+{} -{}", c.added, c.removed);
                 let room = inner.saturating_sub(counts.chars().count() + 1);
                 let path = clip_left(&c.path, room);
                 let gap = inner.saturating_sub(path.chars().count() + counts.chars().count());
@@ -172,6 +181,10 @@ impl Rail<'_> {
                     Span::raw(" "),
                     Span::raw(path),
                     Span::raw(" ".repeat(gap.max(1))),
+                    Span::styled(
+                        errors,
+                        Style::default().fg(t.bad).add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(format!("+{}", c.added), Style::default().fg(t.good)),
                     Span::styled(format!(" -{}", c.removed), Style::default().fg(t.bad)),
                 ]));
@@ -470,6 +483,7 @@ mod tests {
                 doing: Some("read_file  src/config.rs".into()),
                 aside: None,
                 stoppable: true,
+                lsp: false,
             },
             crate::ui::state::Job {
                 what: "$  cargo build".into(),
@@ -478,6 +492,7 @@ mod tests {
                 doing: None,
                 aside: None,
                 stoppable: true,
+                lsp: false,
             },
         ];
         let rail = Rail {
@@ -491,6 +506,7 @@ mod tests {
             power: None,
             watts: &VecDeque::new(),
             jobs: &jobs,
+            errors: &[],
         };
         let text = rail_text(&rail);
         assert!(
@@ -519,6 +535,7 @@ mod tests {
             power: None,
             watts: &VecDeque::new(),
             jobs: &[],
+            errors: &[],
         };
         let text = rail_text(&rail);
         assert!(text.iter().any(|l| l.starts_with(" ENGINE")));
@@ -567,6 +584,7 @@ mod tests {
             power: None,
             watts: &VecDeque::new(),
             jobs: &[],
+            errors: &[],
         };
         let text = rail_text(&rail);
         assert!(
@@ -607,6 +625,7 @@ mod tests {
             power: None,
             watts: &VecDeque::new(),
             jobs: &[],
+            errors: &[],
         };
         let bar = line_text(&rail.window_bar(20));
         assert_eq!(bar.chars().filter(|&c| c == '█').count(), 5);

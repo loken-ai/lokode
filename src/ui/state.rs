@@ -60,6 +60,8 @@ pub(crate) struct Job {
     pub aside: Option<usize>,
     /// Whether it can be stopped alone.
     pub stoppable: bool,
+    /// Whether it is a language server at work.
+    pub lsp: bool,
 }
 
 /// What an item of the list of running things leads to.
@@ -69,6 +71,8 @@ pub(crate) enum JobTarget {
     Step(usize),
     /// Work aside, to stop.
     Aside(AsideKind),
+    /// A language server at work, whose page opens.
+    Lsp,
 }
 
 /// Work done for the session outside any turn.
@@ -155,6 +159,8 @@ pub(crate) struct UiState {
     pub(crate) discovery_stopped: bool,
     /// What stops each call of the turn alone, by the id of its call.
     pub(crate) stops: std::collections::HashMap<String, tokio_util::sync::CancellationToken>,
+    /// Where each language server stands.
+    pub(crate) lsp: Vec<crate::lsp::Status>,
     /// What the list of running things offered, in its order, while it is open.
     pub(crate) jobs_offered: Vec<JobTarget>,
     /// Where the rail was drawn and, for each of its first rows, the running thing on it.
@@ -524,10 +530,24 @@ impl UiState {
                         .map(|c| format!("{}  {}", c.name, c.subject)),
                     aside: None,
                     stoppable: self.stop_for(&step.id).is_some(),
+                    lsp: false,
                 }),
                 _ => None,
             })
             .collect();
+        for status in &self.lsp {
+            if let crate::lsp::State::Working { what, since } = &status.state {
+                out.push(Job {
+                    what: format!("{}  {what}", status.command),
+                    took: since.elapsed(),
+                    entry: None,
+                    doing: None,
+                    aside: None,
+                    stoppable: false,
+                    lsp: true,
+                });
+            }
+        }
         for (i, aside) in self.aside.iter().enumerate() {
             out.push(Job {
                 what: aside.what.clone(),
@@ -536,6 +556,7 @@ impl UiState {
                 doing: None,
                 aside: Some(i),
                 stoppable: true,
+                lsp: false,
             });
         }
         out
@@ -553,7 +574,7 @@ impl UiState {
             .map(|job| match (job.entry, job.aside) {
                 (Some(entry), _) => JobTarget::Step(entry),
                 (None, Some(i)) => JobTarget::Aside(self.aside[i].kind),
-                (None, None) => unreachable!("a job is a step or work aside"),
+                (None, None) => JobTarget::Lsp,
             })
             .collect();
         let choices = jobs
@@ -564,9 +585,10 @@ impl UiState {
                     true => format!("  {}", crate::ui::chat::how_long(job.took)),
                     false => String::new(),
                 };
-                let does = match job.aside {
-                    Some(_) => "  enter stops it",
-                    None => "",
+                let does = match (job.aside, job.lsp) {
+                    (Some(_), _) => "  enter stops it",
+                    (None, true) => "  enter shows the servers",
+                    (None, false) => "",
                 };
                 crate::ui::chooser::Choice::new(
                     (i + 1).to_string(),
@@ -582,6 +604,65 @@ impl UiState {
         true
     }
 
+    /// The page of the language servers: where each stands, the files it reports problems
+    /// in, and what a server that is down said.
+    pub(crate) fn lsp_page(&self) -> crate::ui::sheet::Sheet {
+        use crate::lsp::State;
+        let mut md = String::new();
+        if self.lsp.is_empty() {
+            md.push_str("No language server answers for this project.\n");
+        } else {
+            md.push_str(
+                "| Language | Server | State | Errors | Warnings |\n|---|---|---|---|---|\n",
+            );
+            for s in &self.lsp {
+                let state = match &s.state {
+                    State::Idle => "not started".to_string(),
+                    State::Ready => "ready".to_string(),
+                    State::Working { what, .. } => what.clone(),
+                    State::Down(_) => "down".to_string(),
+                    State::Missing => "not installed".to_string(),
+                };
+                let errors: usize = s.files.iter().map(|f| f.1).sum();
+                let warnings: usize = s.files.iter().map(|f| f.2).sum();
+                md.push_str(&format!(
+                    "| {} | `{}` | {state} | {errors} | {warnings} |\n",
+                    s.language, s.command
+                ));
+            }
+        }
+        for s in &self.lsp {
+            if !s.files.is_empty() {
+                md.push_str(&format!("\n### What {} reports\n\n", s.command));
+                md.push_str("| File | Errors | Warnings |\n|---|---|---|\n");
+                for (file, errors, warnings) in &s.files {
+                    md.push_str(&format!("| {file} | {errors} | {warnings} |\n"));
+                }
+            }
+            if let State::Down(why) = &s.state {
+                md.push_str(&format!(
+                    "\n### Why {} is down\n\n```\n{why}\n```\n",
+                    s.command
+                ));
+            }
+        }
+        crate::ui::sheet::Sheet::titled(
+            "/lsp",
+            "the language servers",
+            crate::ui::sheet::Body::Markdown(md),
+        )
+    }
+
+    /// The errors each language server reports, by file relative to the project.
+    pub(crate) fn lsp_errors(&self) -> Vec<(String, usize)> {
+        self.lsp
+            .iter()
+            .flat_map(|s| s.files.iter())
+            .filter(|f| f.1 > 0)
+            .map(|f| (f.0.clone(), f.1))
+            .collect()
+    }
+
     /// Act on the `n`th item the list of running things offered: point at its step, or
     /// stop the work aside.
     pub(crate) fn take_job(&mut self, n: usize) {
@@ -592,6 +673,7 @@ impl UiState {
                 self.show_entry(*at);
             }
             Some(JobTarget::Aside(kind)) => self.stop_aside(*kind),
+            Some(JobTarget::Lsp) => self.sheet = Some(self.lsp_page()),
             _ => {}
         }
     }

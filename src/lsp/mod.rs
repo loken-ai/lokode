@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::json;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 pub use language::{Languages, ServerSpec};
 pub use server::Server;
@@ -36,6 +36,37 @@ pub struct LspPool {
     available: Vec<String>,
     /// The languages the project uses whose server is not installed, with its command.
     missing: Vec<(String, String)>,
+    /// Told when a server starts, stops, publishes or reports progress.
+    changed: Arc<Notify>,
+}
+
+/// Where a language server stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum State {
+    /// The project uses the language and the server has not been started.
+    Idle,
+    /// Running, with no work in hand.
+    Ready,
+    /// Running, reading the project or building it.
+    Working {
+        what: String,
+        since: std::time::Instant,
+    },
+    /// Not running, and why.
+    Down(String),
+    /// The project uses the language and the server is not installed.
+    Missing,
+}
+
+/// A language server as the screen shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Status {
+    pub language: String,
+    pub command: String,
+    pub state: State,
+    /// The files it reports errors or warnings about, relative to the project, each with
+    /// its errors and warnings.
+    pub files: Vec<(String, usize, usize)>,
 }
 
 impl LspPool {
@@ -59,7 +90,78 @@ impl LspPool {
                 .into_iter()
                 .map(|s| (s.language, s.command))
                 .collect(),
+            changed: Arc::new(Notify::new()),
         })
+    }
+
+    /// Told when a server starts, stops, publishes or reports progress. One waiter.
+    pub fn changed(&self) -> Arc<Notify> {
+        self.changed.clone()
+    }
+
+    /// Where each server of the project stands: those it uses, then any other started.
+    /// `None` while a server is being started, which holds the servers: the caller keeps
+    /// what it had and is told again once the start is over.
+    pub async fn status(&self) -> Option<Vec<Status>> {
+        let slots = self.slots.try_lock().ok()?;
+        let mut languages: Vec<String> = self.available.clone();
+        languages.extend(
+            slots
+                .keys()
+                .filter(|l| !self.available.contains(l))
+                .cloned(),
+        );
+        let mut out = Vec::new();
+        for language in languages {
+            let Some(spec) = self.languages.named(&language) else {
+                continue;
+            };
+            let (state, files) = match slots.get(&language) {
+                None => (State::Idle, Vec::new()),
+                Some(Slot::Down { why }) => (State::Down(why.clone()), Vec::new()),
+                Some(Slot::Up { server, .. }) if !server.alive() => (
+                    State::Down(format!(
+                        "{} stopped{}",
+                        spec.command,
+                        server.stderr_tail().await
+                    )),
+                    Vec::new(),
+                ),
+                Some(Slot::Up { server, .. }) => {
+                    let progress = server.progress().await;
+                    let state = match (progress.first(), server.busy().await) {
+                        (Some(p), _) => State::Working {
+                            what: match p.percentage {
+                                Some(pct) => format!("{} {pct}%", p.title.to_lowercase()),
+                                None => p.title.to_lowercase(),
+                            },
+                            since: p.since,
+                        },
+                        (None, true) => State::Working {
+                            what: "reading the project".into(),
+                            since: std::time::Instant::now(),
+                        },
+                        (None, false) => State::Ready,
+                    };
+                    (state, files_with_problems(server, &self.root).await)
+                }
+            };
+            out.push(Status {
+                language,
+                command: spec.command.clone(),
+                state,
+                files,
+            });
+        }
+        for (language, command) in &self.missing {
+            out.push(Status {
+                language: language.clone(),
+                command: command.clone(),
+                state: State::Missing,
+                files: Vec::new(),
+            });
+        }
+        Some(out)
     }
 
     /// The languages the project uses that have a server installed, most used first.
@@ -118,7 +220,9 @@ impl LspPool {
             }
             None => 0,
         };
-        match Server::spawn(spec, &self.root).await {
+        let started = Server::spawn(spec, &self.root, self.changed.clone()).await;
+        self.changed.notify_one();
+        match started {
             Ok(server) => {
                 slots.insert(
                     spec.language.clone(),
@@ -201,4 +305,38 @@ impl LspPool {
             server.shutdown().await;
         }
     }
+}
+
+/// The files `server` reports errors or warnings about, relative to `root`, by path.
+async fn files_with_problems(server: &Server, root: &Path) -> Vec<(String, usize, usize)> {
+    use lsp_types::DiagnosticSeverity;
+    let mut out: Vec<_> = server
+        .all_published()
+        .await
+        .into_iter()
+        .filter_map(|(uri, p)| {
+            let count = |s| {
+                p.diagnostics
+                    .iter()
+                    .filter(|d| d.severity == Some(s))
+                    .count()
+            };
+            let (errors, warnings) = (
+                count(DiagnosticSeverity::ERROR),
+                count(DiagnosticSeverity::WARNING),
+            );
+            if errors + warnings == 0 {
+                return None;
+            }
+            let path = uri.to_file_path().ok()?;
+            let shown = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            Some((shown, errors, warnings))
+        })
+        .collect();
+    out.sort();
+    out
 }

@@ -80,6 +80,9 @@ struct ToolRecord {
     name: String,
     error: bool,
     output: String,
+    /// What the check after a write came to, for a write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    check: Option<crate::lsp::check::Outcome>,
 }
 
 /// Exit codes, so a script can branch without parsing anything.
@@ -243,6 +246,7 @@ pub async fn run(
                 report.tool_calls.push(ToolRecord {
                     name,
                     error: output.is_error,
+                    check: crate::lsp::check::read(&output.content).map(|(o, _)| o),
                     output: output.content,
                 });
             }

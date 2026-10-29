@@ -209,6 +209,7 @@ pub(crate) fn draw(
             power: state.power.as_ref(),
             watts: &state.watts,
             jobs: &jobs,
+            errors: &state.lsp_errors(),
         }
         .render(f, area);
     }
@@ -752,6 +753,57 @@ mod tests {
         );
     }
 
+    /// A write step says what its check came to, a changed file the servers report errors
+    /// in says how many in the rail, a server at work is listed with what runs, and the
+    /// page of the servers says where each stands and why one is down.
+    #[test]
+    fn the_language_servers_show_on_the_screen() {
+        use crate::lsp::{State, Status};
+        let mut state = a_session();
+        let mut write = Step::called(
+            "w1".into(),
+            "edit_file".into(),
+            r#"{"path":"src/mcp/client.rs"}"#,
+        );
+        write.outcome = Some(Outcome {
+            is_error: false,
+            body: "edited src/mcp/client.rs\n\nthe language server reports:\nrust-analyzer: 1 new error(s)".into(),
+            took: std::time::Duration::ZERO,
+            origin: Origin::Ran,
+        });
+        state.entries.push(Entry::Step(write));
+        state.lsp = vec![
+            Status {
+                language: "rust".into(),
+                command: "rust-analyzer".into(),
+                state: State::Working {
+                    what: "indexing 45%".into(),
+                    since: std::time::Instant::now(),
+                },
+                files: vec![("src/mcp/client.rs".into(), 2, 1)],
+            },
+            Status {
+                language: "python".into(),
+                command: "pyright-langserver".into(),
+                state: State::Down("pyright-langserver could not be started".into()),
+                files: Vec::new(),
+            },
+        ];
+        let text = frame(&mut state, 160, 60);
+        assert!(text.contains("check failed"), "{text}");
+        assert!(text.contains("rust-analyzer  indexing 45%"), "{text}");
+        assert!(text.contains("✕2 +3 -1"), "{text}");
+        let page = state.lsp_page().text();
+        assert!(
+            page.contains("| rust | `rust-analyzer` | indexing 45% | 2 | 1 |"),
+            "{page}"
+        );
+        assert!(
+            page.contains("### Why pyright-langserver is down"),
+            "{page}"
+        );
+    }
+
     /// A click without a drag on a badge of the question waiting is that badge's key, and
     /// a click on a step with more to show unfolds it.
     #[test]
@@ -909,6 +961,40 @@ mod tests {
             width: 120,
             height: 34,
             state: delegated,
+            typed: "",
+        });
+        let mut servers = a_session();
+        servers.lsp = vec![
+            crate::lsp::Status {
+                language: "rust".into(),
+                command: "rust-analyzer".into(),
+                state: crate::lsp::State::Ready,
+                files: vec![
+                    ("src/mcp/client.rs".into(), 2, 1),
+                    ("src/config.rs".into(), 0, 3),
+                ],
+            },
+            crate::lsp::Status {
+                language: "python".into(),
+                command: "pyright-langserver".into(),
+                state: crate::lsp::State::Down(
+                    "pyright-langserver could not be started: No such file or directory".into(),
+                ),
+                files: Vec::new(),
+            },
+            crate::lsp::Status {
+                language: "bash".into(),
+                command: "bash-language-server".into(),
+                state: crate::lsp::State::Missing,
+                files: Vec::new(),
+            },
+        ];
+        servers.sheet = Some(servers.lsp_page());
+        out.push(Scene {
+            name: "lsp-page-120",
+            width: 120,
+            height: 34,
+            state: servers,
             typed: "",
         });
         let mut page = a_session();

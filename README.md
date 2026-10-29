@@ -228,6 +228,7 @@ list with `no` selected.
 | `/undo`, `/diff` | put the project back to before a turn, or see everything changed |
 | `/context`, `/compact`, `/cost` | where the window stands, elide now, what it spent |
 | `/jobs` | what is running now, to point at its step or stop work done outside a turn |
+| `/lsp` | the language servers: where each stands, the files it reports, why one is down |
 | `/approve`, `/approve forget` | what is in force here and in the configuration, or take it back |
 | `/why`, `/digest`, `/tools`, `/mcp` | what is in force, what is known, what can be called |
 
@@ -291,7 +292,8 @@ At an approval, a click on a badge answers like its key. `Enter` does nothing th
 ## What runs
 
 The rail opens with what is running: each step that has not ended with how long it has run,
-the call a delegated session is on, and the work done outside a turn.
+the call a delegated session is on, the work done outside a turn, and a language server
+reading or building the project.
 
 | To | Do |
 |---|---|
@@ -300,6 +302,7 @@ the call a delegated session is on, and the work done outside a turn.
 | stop the whole turn | `Esc` |
 | stop a command of yours | `Ctrl-C` on its step, or `Ctrl-C` or `Esc` on an empty line for the latest |
 | stop work done outside a turn | choose it in `/jobs` |
+| see where the language servers stand | `/lsp`, or choose a server in `/jobs` |
 
 A stopped call ends in an error that tells the model the person stopped it, and the turn goes
 on. Work outside a turn is the model held ready on the backend and the project being looked
@@ -325,9 +328,20 @@ on a smaller one, with [roles](#one-model-per-kind-of-work).
 | `edit_lines` | apply several such edits to one file in order, all or none |
 | `apply_patch` | apply a unified diff across several files |
 
-After a write, the language server reports on that file in the same tool result. Without a
-language server for the file, the compiler is asked to compile, once per step and with a
-bounded wait.
+After a write, the language servers are told the files changed and were saved. Once they have
+read the new text and have no work left in hand, what they report is compared with what they
+reported before. The tool result lists the errors the write introduced, in any file, with
+their code and their source line. Without a language server for the file, the compiler is
+asked to compile, once per step and with a bounded wait.
+
+| A write's step says | When |
+|---|---|
+| `checked` | the servers or the compiler report no new error |
+| `check failed` | they report errors the write introduced |
+| `not checked` | none could tell, and the result says why |
+
+The rail's CHANGES marks a file the servers report errors in with `✕` and their count. Only
+a write that was checked counts when the session decides to escalate.
 
 When a change fails its check and a later change clears the same complaint, the fix is filed
 against the complaint. The next occurrence arrives with the note. Line and column numbers and
@@ -615,7 +629,7 @@ Each call is judged on its own. A policy never grants a standing agreement.
 
 `--output text` streams the answer to stdout and the progress to stderr. `--output json` writes
 one object at the end: the result, every tool call with its output, what was refused and the
-energy.
+energy. The call of a write carries `check`: `passed`, `failed` or `not-checked`.
 
 | Exit code | |
 |---|---|

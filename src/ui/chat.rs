@@ -573,6 +573,7 @@ fn step_header(step: &Step, width: usize) -> Line<'static> {
             .sum::<usize>()
             + 2
             + "guessed  ".len()
+            + "check failed  ".len()
             + match o.took >= SHOWN_FROM {
                 true => 2 + how_long(o.took).chars().count(),
                 false => 0,
@@ -586,6 +587,20 @@ fn step_header(step: &Step, width: usize) -> Line<'static> {
             (false, true, _) => "nothing".to_string(),
             (false, false, _) => clip(head.trim(), room),
         };
+        // What the check after a write came to.
+        match crate::lsp::check::read(&o.body).map(|(outcome, _)| outcome) {
+            Some(crate::lsp::check::Outcome::Passed) => {
+                right.push(Span::styled("checked  ", Style::default().fg(t.good)))
+            }
+            Some(crate::lsp::check::Outcome::Failed) => right.push(Span::styled(
+                "check failed  ",
+                Style::default().fg(t.bad).add_modifier(Modifier::BOLD),
+            )),
+            Some(crate::lsp::check::Outcome::NotChecked) => {
+                right.push(Span::styled("not checked  ", t.dim))
+            }
+            None => {}
+        }
         match o.origin {
             Origin::Guessed => right.push(Span::styled("guessed  ", Style::default().fg(t.accent))),
             Origin::Repeated => right.push(Span::styled("repeat  ", t.dim)),

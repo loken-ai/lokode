@@ -17,6 +17,39 @@ use crate::lsp::position;
 use crate::lsp::server::{Published, Server};
 use crate::lsp::LspPool;
 
+/// Opens what a check that found errors adds to a write's result. The model reads it, the
+/// step record reads it to know the check failed, and the screen marks the step.
+pub const CHECK_FAILED: &str = "the language server reports:";
+
+/// Opens what a check that found no new error adds to a write's result.
+pub const CHECK_PASSED: &str = "checked by";
+
+/// Opens what a check that could not tell adds to a write's result.
+pub const NOT_CHECKED: &str = "not checked:";
+
+/// What came of the check of a write, as its result says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Outcome {
+    Passed,
+    Failed,
+    NotChecked,
+}
+
+/// The check a write's result reports, with what it said from its opening on.
+pub fn read(output: &str) -> Option<(Outcome, &str)> {
+    [
+        (CHECK_FAILED, Outcome::Failed),
+        (NOT_CHECKED, Outcome::NotChecked),
+        (CHECK_PASSED, Outcome::Passed),
+    ]
+    .into_iter()
+    .find_map(|(marker, outcome)| {
+        let at = output.find(&format!("\n\n{marker}"))?;
+        Some((outcome, output[at + 2..].trim_end()))
+    })
+}
+
 /// How long the servers must stay silent before what they published is taken as settled.
 const QUIET: Duration = Duration::from_millis(400);
 
@@ -388,6 +421,18 @@ mod tests {
             message: message.into(),
             ..Default::default()
         }
+    }
+
+    /// A write's result says what its check came to after a blank line, and nowhere else.
+    #[test]
+    fn a_result_says_what_its_check_came_to() {
+        let passed = format!("edited src/a.rs\n\n{CHECK_PASSED} rust-analyzer: no new errors");
+        assert_eq!(read(&passed).map(|r| r.0), Some(Outcome::Passed));
+        let failed = format!("edited src/a.rs\n\n{CHECK_FAILED}\nrust-analyzer: 1 new error(s)");
+        assert_eq!(read(&failed).map(|r| r.0), Some(Outcome::Failed));
+        let unchecked = format!("edited src/a.rs\n\n{NOT_CHECKED} rust-analyzer is still indexing");
+        assert_eq!(read(&unchecked).map(|r| r.0), Some(Outcome::NotChecked));
+        assert_eq!(read("the file says checked by hand"), None);
     }
 
     /// A diagnostic that moved to another line is the same one, and a second copy of a

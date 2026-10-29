@@ -54,6 +54,7 @@ pub struct Progress {
     pub title: String,
     pub message: Option<String>,
     pub percentage: Option<u32>,
+    pub since: Instant,
 }
 
 /// What the server said it can do, read from its answer to `initialize`.
@@ -148,11 +149,13 @@ pub struct Server {
     alive: AtomicBool,
     /// Woken when something a waiter looks at changes: a publication, progress, the end.
     pub(crate) changed: Notify,
+    /// Told of the same changes, for whoever shows the servers.
+    shown: Arc<Notify>,
 }
 
 impl Server {
     /// Start the server for `spec` under `root` and agree on what each side can do.
-    pub async fn spawn(spec: &ServerSpec, root: &Path) -> Result<Arc<Self>> {
+    pub async fn spawn(spec: &ServerSpec, root: &Path, shown: Arc<Notify>) -> Result<Arc<Self>> {
         let mut child = tokio::process::Command::new(&spec.command)
             .args(&spec.args)
             .envs(spec.env.iter().map(|(k, v)| (k, v)))
@@ -185,6 +188,7 @@ impl Server {
             caps: OnceLock::new(),
             alive: AtomicBool::new(true),
             changed: Notify::new(),
+            shown,
         });
         {
             let server = server.clone();
@@ -421,6 +425,7 @@ impl Server {
         self.pending.lock().await.clear();
         self.progress.lock().await.clear();
         self.changed.notify_waiters();
+        self.shown.notify_one();
     }
 
     /// The answer to a request the server sent.
@@ -509,6 +514,7 @@ impl Server {
                                 title: text("title").unwrap_or_default(),
                                 message: text("message"),
                                 percentage,
+                                since: Instant::now(),
                             },
                         );
                     }
@@ -547,6 +553,7 @@ impl Server {
             _ => return,
         }
         self.changed.notify_waiters();
+        self.shown.notify_one();
     }
 }
 

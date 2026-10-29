@@ -261,18 +261,7 @@ fn changed_paths(content: &str) -> Vec<String> {
     out
 }
 
-/// What a write result says when the language server found something.
-///
-/// One string, because two places depend on it: the model reads it as part of the result,
-/// and the step record reads it to know the check failed. A cascade would escalate on
-/// exactly this.
-const CHECK_FAILED: &str = "the language server reports:";
-
-/// Opens what a check that found no new error adds to a result.
-const CHECK_PASSED: &str = "checked by";
-
-/// Opens what a check that could not tell adds to a result.
-const NOT_CHECKED: &str = "not checked:";
+use crate::lsp::check::{CHECK_FAILED, CHECK_PASSED, NOT_CHECKED};
 
 /// Left in the transcript when a turn ends without the model having answered.
 ///
@@ -2164,12 +2153,10 @@ impl Agent {
                         // The objective signal a cascade would escalate on. Recorded now,
                         // used by nothing yet.
                         // Passed or failed only when a check could tell.
-                        record.after.check_passed = if result.content.contains(CHECK_FAILED) {
-                            Some(false)
-                        } else if result.content.contains(CHECK_PASSED) {
-                            Some(true)
-                        } else {
-                            None
+                        record.after.check_passed = match crate::lsp::check::read(&result.content) {
+                            Some((crate::lsp::check::Outcome::Failed, _)) => Some(false),
+                            Some((crate::lsp::check::Outcome::Passed, _)) => Some(true),
+                            _ => None,
                         };
                         // What fixed this before, and what this is fixing now. A complaint
                         // is held until a change makes it go away, and the pair is what

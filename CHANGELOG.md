@@ -25,6 +25,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Language server: find definitions, uses, implementations, callers and outlines.
 - Checks: say whether each write was checked, and report only what it introduced.
 - Language server: configure servers in [lsp] and start them with the session.
+- Language server: show where each server stands in /lsp and the rail.
 
 ### Changed
 

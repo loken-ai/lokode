@@ -264,6 +264,7 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         tasks,
         digest,
         discovery,
+        lsp.clone(),
         &mut live,
         mcp.clients.clone(),
         mcp_summary,
@@ -336,6 +337,8 @@ async fn run_ui(
     digest: std::sync::Arc<tokio::sync::Mutex<crate::agent::digest::Digest>>,
     // Answers one question about the project while nobody is waiting.
     discovery: Option<std::sync::Arc<crate::agent::background::Discovery>>,
+    // The language servers, for where each stands.
+    lsp: Arc<crate::lsp::LspPool>,
     // Lines the tools are printing as they print them.
     live: &mut mpsc::Receiver<crate::tools::registry::LiveOutput>,
     // The servers, for the prompts /mcp can take. Cloned handles: the process still owns
@@ -418,6 +421,11 @@ async fn run_ui(
 
     let mut events = EventStream::new();
     let mut injected: std::collections::VecDeque<Event> = Default::default();
+    // Where the language servers stand, read again each time one of them changes.
+    let lsp_changed = lsp.changed();
+    if let Some(status) = lsp.status().await {
+        state.lsp = status;
+    }
     // What a command of the person's own came to, when it ends.
     let (hand_tx, mut hand_rx) = mpsc::channel::<Hand>(HAND_NEWS_HELD);
     let mut hand_runs = 0usize;
@@ -524,6 +532,12 @@ async fn run_ui(
             }
 
             Some(power) = power_rx.recv() => state.note_power(power),
+
+            _ = lsp_changed.notified() => {
+                if let Some(status) = lsp.status().await {
+                    state.lsp = status;
+                }
+            }
 
             Some(news) = hand_rx.recv() => match news {
                 Hand::Printed(id, tail) => state.show_tail(Some(&id), "$", tail.read()),
@@ -1713,6 +1727,10 @@ async fn run_ui(
                                 let mut text = text;
                                 if let Some(command) = text.clone().strip_prefix('/') {
                                     let verb = command.trim_start_matches('/').trim();
+                                    if verb == "lsp" {
+                                        state.sheet = Some(state.lsp_page());
+                                        continue;
+                                    }
                                     // What runs is the screen's to know, so its list is made here.
                                     if verb == "jobs" {
                                         if !state.open_jobs(None) {

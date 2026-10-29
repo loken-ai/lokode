@@ -792,7 +792,7 @@ const GROUPS: [(&str, &[&str]); 4] = [
     (
         "Where things stand",
         &[
-            "why", "cost", "context", "jobs", "digest", "tools", "mcp", "help",
+            "why", "cost", "context", "jobs", "lsp", "digest", "tools", "mcp", "help",
         ],
     ),
 ];
@@ -854,6 +854,7 @@ pub(crate) const HELP: &str = "\
 /cost   what this session has spent, in tokens and time
 /context how full the window is, and what is holding it
 /jobs   what is running now, to go to its step
+/lsp    the language servers, where each stands and what it reports
 /compact elide the oldest steps now rather than when it fills
 /approve what is in force, here and in the configuration, or /approve forget
 /plan   read and search, change nothing
