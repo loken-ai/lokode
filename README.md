@@ -99,11 +99,7 @@ It needs Rust 1.92 or later and a Unix-like system. The shell tool runs `/bin/sh
 | Optional | What it adds |
 |---|---|
 | ripgrep (`rg`) | a faster `grep`. Without it the built-in walker runs the same search with the same ignore files |
-| a language server | `lsp_diagnostics` and `lsp_hover`, from `rust-analyzer`, `pyright-langserver` or `typescript-language-server` |
-
-When the language server on your `PATH` does not work, point at one that does with
-`LOKODE_LSP_RUST`, `LOKODE_LSP_PYTHON`, `LOKODE_LSP_TYPESCRIPT` or `LOKODE_LSP_JAVASCRIPT`. A
-`rustup` shim for a component that is not installed is the usual case.
+| a language server | the checks after a write and the navigation tools, for the languages listed in [Asking the language server](#asking-the-language-server) |
 
 ## The screen
 
@@ -348,6 +344,45 @@ paths are left out of the comparison. `/why` lists what has been learned.
 | `lsp_hover` | the type and the documentation of a symbol |
 | `lsp_symbols` | the outline of a file, or the symbols matching a name across the project |
 | `lsp_diagnostics` | what the server reports about a file |
+
+| Language | Server | Extensions |
+|---|---|---|
+| rust | `rust-analyzer` | rs |
+| python | `pyright-langserver --stdio` | py, pyi |
+| typescript | `typescript-language-server --stdio` | ts, tsx, mts, cts, js, jsx, mjs, cjs |
+| go | `gopls` | go |
+| c | `clangd` | c, h, cpp, cc, cxx, hpp, hh, hxx |
+| zig | `zls` | zig |
+| bash | `bash-language-server start` | sh, bash |
+| lua | `lua-language-server` | lua |
+| ruby | `ruby-lsp` | rb |
+
+At startup the session reads which of these languages the project's files are written in,
+and starts their installed servers in the background. The tools are offered only when one of
+them can answer for the project. A server that stops is started again once. A second stop, or
+a server that cannot start, leaves it down for the session with what it said.
+
+The `[lsp]` section changes a built-in server, turns one off or adds one:
+
+```toml
+[lsp]
+enabled = true                       # false turns every language server off
+
+[lsp.servers.rust]
+settings = { rust-analyzer = { check = { command = "clippy" } } }
+
+[lsp.servers.ruby]
+enabled = false
+
+[lsp.servers.elixir]                 # a new language needs a command and its extensions
+command = "elixir-ls"
+extensions = ["ex", "exs"]
+```
+
+A server also takes `args`, `init` for its initialization options and `env`. `settings` is
+what the server is answered when it asks for its configuration. `LOKODE_LSP_<LANGUAGE>`, as
+in `LOKODE_LSP_RUST`, replaces a server's command and arguments, which helps when the program
+on your `PATH` is a `rustup` shim for a component that is not installed.
 
 A symbol is named by its file, its line and its name as written there. The column is
 optional. A name not found on the line is looked for on the lines around it, and the answer

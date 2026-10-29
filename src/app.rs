@@ -38,6 +38,8 @@ pub struct AppConfig {
     pub warnings: Vec<String>,
     /// Tool servers to start, by name.
     pub mcp_servers: BTreeMap<String, crate::config::McpServer>,
+    /// The language servers this session may start.
+    pub lsp: crate::lsp::Languages,
     /// What each named model needs, when it differs from the defaults.
     pub models: BTreeMap<String, crate::config::ModelSection>,
     /// Whether the session starts able to change things.

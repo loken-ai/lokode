@@ -261,6 +261,8 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
     // is news at startup, rather than the first command of the session failing.
     let shell_writable = (cli.confine_shell || file.shell.confine_writes.unwrap_or(false))
         .then(|| config::resolve_shell_writable(&file, &root, &mut warnings));
+    let (lsp, lsp_warnings) = lokode::lsp::Languages::from_config(&file.lsp);
+    warnings.extend(lsp_warnings);
     if shell_writable.is_some() && lokode::sandbox::confine::abi().is_none() {
         warnings.push(
             "shell confinement was asked for and this system has no Landlock: bash will \
@@ -312,6 +314,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             backend_kind,
             warnings,
             mcp_servers: file.mcp.servers.clone(),
+            lsp,
             models: file.models.clone(),
             policy: file.approve.clone(),
             hooks: file.hooks.clone(),
@@ -385,6 +388,13 @@ fn print_config(cfg: &Resolved) {
     // shown to whoever is looking over your shoulder either.
     let names: Vec<_> = a.headers.iter().map(|(k, _)| k.as_str()).collect();
     println!("  headers            {} (values hidden)", names.join(", "));
+    let servers: Vec<_> = a
+        .lsp
+        .specs
+        .iter()
+        .map(|s| format!("{} ({})", s.language, s.command))
+        .collect();
+    println!("  language-servers   {}", servers.join(", "));
     for w in &a.warnings {
         println!("\nwarning: {w}");
     }

@@ -32,6 +32,10 @@ pub struct LspPool {
     root: PathBuf,
     languages: Languages,
     slots: Mutex<HashMap<String, Slot>>,
+    /// The languages the project uses that have a server installed, most used first.
+    available: Vec<String>,
+    /// The languages the project uses whose server is not installed, with its command.
+    missing: Vec<(String, String)>,
 }
 
 impl LspPool {
@@ -39,12 +43,46 @@ impl LspPool {
         Self::with(root, Languages::builtin())
     }
 
+    /// The servers of `languages` for the project at `root`, with the languages it uses
+    /// read from its files.
     pub fn with(root: PathBuf, languages: Languages) -> Arc<Self> {
+        let (available, missing) = language::present(&root, &languages)
+            .into_iter()
+            .filter_map(|l| languages.named(&l).cloned())
+            .partition::<Vec<_>, _>(|spec| language::installed(&spec.command));
         Arc::new(Self {
             root,
             languages,
             slots: Mutex::new(HashMap::new()),
+            available: available.into_iter().map(|s| s.language).collect(),
+            missing: missing
+                .into_iter()
+                .map(|s| (s.language, s.command))
+                .collect(),
         })
+    }
+
+    /// The languages the project uses that have a server installed, most used first.
+    pub fn available(&self) -> &[String] {
+        &self.available
+    }
+
+    /// The languages the project uses whose server is not installed, with its command.
+    pub fn missing(&self) -> &[(String, String)] {
+        &self.missing
+    }
+
+    /// Start the servers of the project's languages in the background, so they read the
+    /// project while nobody waits on them.
+    pub fn warm(self: &Arc<Self>) {
+        for language in self.available.clone() {
+            let pool = self.clone();
+            tokio::spawn(async move {
+                if let Some(spec) = pool.languages.named(&language).cloned() {
+                    let _ = pool.ensure(&spec).await;
+                }
+            });
+        }
     }
 
     /// The server that answers for `path`, started if it is not running, or why there is
@@ -55,6 +93,11 @@ impl LspPool {
             .for_path(path)
             .ok_or_else(|| format!("no language server is known for {}", path.display()))?
             .clone();
+        self.ensure(&spec).await
+    }
+
+    /// The server of `spec`, started if it is not running, or why there is none.
+    async fn ensure(&self, spec: &ServerSpec) -> Result<Arc<Server>, String> {
         let mut slots = self.slots.lock().await;
         let restarts = match slots.get(&spec.language) {
             Some(Slot::Up { server, .. }) if server.alive() => return Ok(server.clone()),
@@ -75,7 +118,7 @@ impl LspPool {
             }
             None => 0,
         };
-        match Server::spawn(&spec, &self.root).await {
+        match Server::spawn(spec, &self.root).await {
             Ok(server) => {
                 slots.insert(
                     spec.language.clone(),

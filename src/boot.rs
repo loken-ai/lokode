@@ -73,7 +73,10 @@ pub struct Booted {
 
 pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let tasks = Arc::new(crate::tools::plan::TaskList::default());
-    let ((mut registry, lsp), _) = build_registry_with(cfg.root.clone(), tasks.clone());
+    let ((mut registry, lsp), _) =
+        build_registry_with(cfg.root.clone(), tasks.clone(), cfg.lsp.clone());
+    // The project's servers start reading it now, while the session opens.
+    lsp.warm();
     // Third-party tools go in after the built-ins, so a server cannot take a name the agent
     // already relies on.
     let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root).await;
@@ -516,13 +519,19 @@ fn provider_for(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Pro
 
 /// The twelve tools, and the language-server pool two of them share.
 pub fn build_registry(root: PathBuf) -> (Registry, Arc<LspPool>) {
-    build_registry_with(root, Arc::new(crate::tools::plan::TaskList::default())).0
+    build_registry_with(
+        root,
+        Arc::new(crate::tools::plan::TaskList::default()),
+        crate::lsp::Languages::builtin(),
+    )
+    .0
 }
 
 /// [`build_registry`], keeping the task list the interface has to draw.
 pub fn build_registry_with(
     root: PathBuf,
     tasks: Arc<crate::tools::plan::TaskList>,
+    languages: crate::lsp::Languages,
 ) -> ((Registry, Arc<LspPool>), Arc<crate::tools::plan::TaskList>) {
     use crate::tools::{
         bash::Bash,
@@ -549,12 +558,16 @@ pub fn build_registry_with(
     reg.register(Bash);
     reg.register(RunTests);
     reg.register(WebFetch);
-    let pool = LspPool::new(root);
-    reg.register(LspDiagnostics { pool: pool.clone() });
-    for tool in LspAt::all(&pool) {
-        reg.register(tool);
+    // The language-server tools only where a server can answer for the project: offered
+    // otherwise, they cost the model a tool list and calls that fail.
+    let pool = LspPool::with(root, languages);
+    if !pool.available().is_empty() {
+        reg.register(LspDiagnostics { pool: pool.clone() });
+        for tool in LspAt::all(&pool) {
+            reg.register(tool);
+        }
+        reg.register(LspSymbols { pool: pool.clone() });
     }
-    reg.register(LspSymbols { pool: pool.clone() });
     ((reg, pool), tasks)
 }
 

@@ -223,6 +223,53 @@ pub struct FileConfig {
     /// Whether to look into the project while nobody is waiting, and remember what is
     /// found. Off by default: it spends the machine's time on its own.
     pub discover: Option<bool>,
+    /// The language servers, by language.
+    #[serde(default)]
+    pub lsp: LspSection,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct LspSection {
+    /// False turns every language server off.
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub servers: BTreeMap<String, LspServer>,
+}
+
+/// One language server. For a built-in language, what is given replaces the built-in
+/// setting. A new language needs a command and its extensions.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct LspServer {
+    pub command: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub extensions: Option<Vec<String>>,
+    /// Sent to the server as its initialization options.
+    pub init: Option<serde_json::Value>,
+    /// What the server is answered when it asks for its settings.
+    pub settings: Option<serde_json::Value>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// False keeps the server from being started.
+    pub enabled: Option<bool>,
+}
+
+impl LspServer {
+    /// `self` with what `over` states put over it.
+    fn under(self, over: LspServer) -> LspServer {
+        let mut env = self.env;
+        env.extend(over.env);
+        LspServer {
+            command: over.command.or(self.command),
+            args: over.args.or(self.args),
+            extensions: over.extensions.or(self.extensions),
+            init: over.init.or(self.init),
+            settings: over.settings.or(self.settings),
+            env,
+            enabled: over.enabled.or(self.enabled),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -450,6 +497,22 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
         preload: over.preload.or(base.preload),
         speculate: over.speculate.or(base.speculate),
         discover: over.discover.or(base.discover),
+        lsp: LspSection {
+            enabled: over.lsp.enabled.or(base.lsp.enabled),
+            servers: {
+                // Merged by language and field, so a project can change one setting of a
+                // server the user configured.
+                let mut servers = base.lsp.servers;
+                for (name, server) in over.lsp.servers {
+                    let merged = match servers.remove(&name) {
+                        Some(base) => base.under(server),
+                        None => server,
+                    };
+                    servers.insert(name, merged);
+                }
+                servers
+            },
+        },
         hooks: HooksSection {
             pre_tool: over.hooks.pre_tool.or(base.hooks.pre_tool),
             post_tool: over.hooks.post_tool.or(base.hooks.post_tool),
