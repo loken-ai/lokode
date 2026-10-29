@@ -213,6 +213,13 @@ pub(crate) fn draw(
             _ => None,
         },
         rail_offered: !wide,
+        attaching: {
+            let line = input.lines().join("\n");
+            match line.contains('@') {
+                true => crate::agent::mentions::weigh(&line, root),
+                false => None,
+            }
+        },
         step: state.step,
         max_steps,
         busy: state.busy,

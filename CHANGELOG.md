@@ -10,6 +10,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Interface: close a turn with a receipt that offers /undo and /diff.
 - Interface: keep the plan, the changes, the jobs and the server errors in a rail.
 - Interface: tell in the window title and by notification what the session does.
+- Interface: say what the files named with @ will cost before the line is sent.
 - Interface: follow the terminal's colours, tell Esc and Alt chords apart, show frames whole.
 - Interface: show each step on one line with what it came to and how long it took.
 - Interface: draw again only the entries that changed, so a long session stays fast.

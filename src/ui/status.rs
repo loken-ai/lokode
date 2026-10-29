@@ -22,6 +22,8 @@ pub struct Status {
     /// because the first elision is the moment a session starts forgetting what it was
     /// told.
     pub context_percent: u8,
+    /// The files the line being typed names with `@`, and the characters they hold.
+    pub attaching: Option<(usize, u64)>,
     /// The plan's tasks done and in all, said here when the rail is not on screen.
     pub plan: Option<(usize, usize)>,
     /// Whether the screen is too narrow for the rail to be there unasked, which puts the
@@ -118,6 +120,17 @@ impl Status {
                 _ => theme().bad,
             }),
         ));
+        // What the files named on the line will cost before it is sent: on a local model
+        // a long attachment is minutes of prompt reading.
+        if let Some((files, chars)) = self.attaching {
+            spans.push(Span::styled(
+                format!(
+                    "  attaching {files} file(s) ≈{} tokens",
+                    crate::ui::chat::tokens(chars / crate::agent::session::CHARS_PER_TOKEN as u64)
+                ),
+                Style::default().fg(theme().accent),
+            ));
+        }
         if let Some((done, all)) = self.plan {
             spans.push(Span::styled(format!("  plan {done}/{all}"), theme().dim));
         }
@@ -318,6 +331,7 @@ mod tests {
             context_percent: 40,
             plan: None,
             rail_offered: false,
+            attaching: None,
             step: 2,
             max_steps: 16,
             busy,

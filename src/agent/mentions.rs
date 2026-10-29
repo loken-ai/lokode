@@ -17,6 +17,32 @@ pub struct Expanded {
     pub attached: Vec<String>,
 }
 
+/// How many files the prompt names with `@`, and how many characters they hold, read
+/// off their sizes rather than their contents. `None` when it names none.
+///
+/// Resolved the way [`expand`] resolves them, so what is weighed is what would be sent,
+/// and nothing outside the project counts.
+pub fn weigh(text: &str, root: &Path) -> Option<(usize, u64)> {
+    let mut seen: Vec<std::path::PathBuf> = Vec::new();
+    let mut chars = 0u64;
+    for token in mentions(text) {
+        let Ok(path) = crate::sandbox::allowlist::resolve(root, Path::new(&token), true) else {
+            continue;
+        };
+        if seen.contains(&path) {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        if meta.is_file() {
+            chars += meta.len();
+        }
+        seen.push(path);
+    }
+    (!seen.is_empty()).then_some((seen.len(), chars))
+}
+
 /// Attach every file the prompt names with `@`.
 ///
 /// The mention stays where it was written, so the sentence still reads as the person
@@ -114,6 +140,22 @@ fn list_dir(path: &Path) -> String {
         .unwrap_or_default();
     names.sort();
     names.join("\n")
+}
+
+#[cfg(test)]
+mod weighing {
+    use super::*;
+
+    /// Named files are counted once each by their size, and a name that is not a file
+    /// here counts for nothing.
+    #[test]
+    fn named_files_are_weighed_by_their_size() {
+        let dir = tempfile::tempdir().expect("a directory");
+        std::fs::write(dir.path().join("a.rs"), "x".repeat(400)).expect("a file");
+        let said = weigh("see @a.rs and @a.rs, not @missing.rs", dir.path());
+        assert_eq!(said, Some((1, 400)));
+        assert_eq!(weigh("nothing named", dir.path()), None);
+    }
 }
 
 #[cfg(test)]
