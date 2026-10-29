@@ -34,8 +34,15 @@ pub(crate) fn what_was_said(messages: &[crate::backend::wire::Message]) -> Vec<E
 /// does not: it is read once, it is not part of the conversation, and left there it sits
 /// between two questions for the rest of the session.
 pub(crate) fn show(state: &mut UiState, verb: &str, reply: String) {
+    use crate::ui::sheet::{Body, Sheet};
+    // The window is drawn as the map the interface already holds, rather than as the
+    // agent's description of it.
+    if verb == "context" && state.window.budget > 0 {
+        state.sheet = Some(Sheet::with(verb, Body::Window(state.window.clone())));
+        return;
+    }
     match reply.lines().count() > SHEET_LINES {
-        true => state.sheet = Some(crate::ui::sheet::Sheet::new(format!("/{verb}"), &reply)),
+        true => state.sheet = Some(Sheet::new(verb, &reply)),
         false => state.entries.push(Entry::Notice(reply)),
     }
 }

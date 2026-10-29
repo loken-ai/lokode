@@ -58,7 +58,7 @@ pub struct Rail<'a> {
 }
 
 /// The colours of the window's parts, in the order the session measures them.
-fn part_colour(at: usize) -> Color {
+pub(crate) fn part_colour(at: usize) -> Color {
     let t = theme();
     match at {
         0 => t.accent,
@@ -299,31 +299,9 @@ impl Rail<'_> {
         out
     }
 
-    /// The window as a bar: each part in its colour, by its share of the budget, then
-    /// what is free.
+    /// The window as a bar, `cells` wide.
     fn window_bar(&self, cells: usize) -> Line<'static> {
-        let budget = self.window.budget.max(1);
-        let mut spans = vec![Span::raw(" ")];
-        // Each part ends where the running total of the parts falls on the bar, so rounding
-        // never loses or adds a cell.
-        let mut used = 0usize;
-        let mut total = 0usize;
-        for (at, (_, chars)) in self.window.parts.iter().enumerate() {
-            total += chars;
-            let end = ((total * cells + budget / 2) / budget).min(cells);
-            let n = end.saturating_sub(used);
-            if n > 0 {
-                spans.push(Span::styled(
-                    "█".repeat(n),
-                    Style::default().fg(part_colour(at)),
-                ));
-                used += n;
-            }
-        }
-        if used < cells {
-            spans.push(Span::styled("·".repeat(cells - used), theme().dim));
-        }
-        Line::from(spans)
+        window_bar(self.window, cells)
     }
 
     /// Draw the rail into `area`, on the raised surface when the terminal shows one.
@@ -338,6 +316,33 @@ impl Rail<'_> {
             area,
         );
     }
+}
+
+/// The window as a bar: each part in its colour, by its share of the budget, then what is
+/// free.
+pub(crate) fn window_bar(window: &Occupancy, cells: usize) -> Line<'static> {
+    let budget = window.budget.max(1);
+    let mut spans = vec![Span::raw(" ")];
+    // Each part ends where the running total of the parts falls on the bar, so rounding
+    // never loses or adds a cell.
+    let mut used = 0usize;
+    let mut total = 0usize;
+    for (at, (_, chars)) in window.parts.iter().enumerate() {
+        total += chars;
+        let end = ((total * cells + budget / 2) / budget).min(cells);
+        let n = end.saturating_sub(used);
+        if n > 0 {
+            spans.push(Span::styled(
+                "█".repeat(n),
+                Style::default().fg(part_colour(at)),
+            ));
+            used += n;
+        }
+    }
+    if used < cells {
+        spans.push(Span::styled("·".repeat(cells - used), theme().dim));
+    }
+    Line::from(spans)
 }
 
 /// The last `cells` speeds as bars scaled to the fastest of them.

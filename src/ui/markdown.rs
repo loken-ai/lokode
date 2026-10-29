@@ -175,6 +175,11 @@ impl Renderer {
                         cell.push(Span::styled(t.to_string(), theme().inline_code));
                     }
                 }
+                Event::Html(t) | Event::InlineHtml(t) => {
+                    if let Some(cell) = table.rows.last_mut().and_then(|r| r.last_mut()) {
+                        cell.push(Span::styled(t.to_string(), theme().dim));
+                    }
+                }
                 Event::Start(Tag::Strong) => self.styles.push(bold()),
                 Event::Start(Tag::Emphasis) => self.styles.push(italic()),
                 Event::End(TagEnd::Strong) | Event::End(TagEnd::Emphasis) => {
@@ -410,25 +415,55 @@ impl Renderer {
             }
         }
         let gutter = self.gutter();
+        let lead = gutter
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum::<usize>()
+            + 2;
+        // A table wider than the pane gives its last column what is left, and that column
+        // wraps under itself rather than running off the edge.
+        if let (Some(last), true) = (columns.checked_sub(1), self.width > 0) {
+            let others: usize = widths[..last].iter().map(|w| w + 2).sum();
+            let room = self.width.saturating_sub(lead + others).max(NARROWEST);
+            widths[last] = widths[last].min(room);
+        }
         for (r, row) in table.rows.iter().enumerate() {
             let header = r < table.header_rows;
+            let style_of = |span: &Span<'static>| match header {
+                true => span
+                    .style
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                false => span.style,
+            };
             let mut line = gutter.clone();
             line.push(Span::raw("  "));
+            let mut under: Vec<Line<'static>> = Vec::new();
             for (i, cell) in row.iter().enumerate() {
-                for span in cell {
-                    let style = match header {
-                        true => span
-                            .style
-                            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                        false => span.style,
-                    };
-                    line.push(Span::styled(span.content.to_string(), style));
-                }
+                let spans: Vec<Span<'static>> = cell
+                    .iter()
+                    .map(|s| Span::styled(s.content.to_string(), style_of(s)))
+                    .collect();
                 if i + 1 < row.len() {
-                    line.push(Span::raw(" ".repeat(widths[i] - wide(cell) + 2)));
+                    line.extend(spans);
+                    line.push(Span::raw(
+                        " ".repeat(widths[i].saturating_sub(wide(cell)) + 2),
+                    ));
+                    continue;
+                }
+                let mut rows = wrap(vec![Line::from(spans)], widths[i]).into_iter();
+                if let Some(first) = rows.next() {
+                    line.extend(first.spans);
+                }
+                let indent = lead + widths[..i].iter().map(|w| w + 2).sum::<usize>();
+                for more in rows {
+                    let mut l = gutter.clone();
+                    l.push(Span::raw(" ".repeat(indent.saturating_sub(lead) + 2)));
+                    l.extend(more.spans);
+                    under.push(Line::from(l));
                 }
             }
             self.out.push(Line::from(line));
+            self.out.extend(under);
         }
         self.spaced = false;
         self.blank();
@@ -544,6 +579,25 @@ mod tests {
     fn a_table_lines_up_its_columns() {
         let rows = text("| a | bb |\n|---|---|\n| ccc | d |", 0);
         assert_eq!(rows, vec!["  a    bb", "  ccc  d"]);
+    }
+
+    /// A table wider than the pane wraps its last column under itself, and a word in angle
+    /// brackets in a cell is kept.
+    #[test]
+    fn a_wide_table_wraps_its_last_column() {
+        let rows = text(
+            "| Key | What |\n|---|---|\n| `/model <name>` | switch to another model and remember it |",
+            34,
+        );
+        assert_eq!(
+            rows,
+            vec![
+                "  Key            What",
+                "  /model <name>  switch to another",
+                "                 model and",
+                "                 remember it",
+            ]
+        );
     }
 
     /// A link shows where it goes, unless its text already says so.

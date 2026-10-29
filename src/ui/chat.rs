@@ -678,7 +678,7 @@ const DIFF_LINES: usize = 16;
 ///
 /// Judged on the header a diff has and prose does not, rather than on leading `+` and `-`,
 /// which a bulleted list also has.
-fn looks_like_diff(s: &str) -> bool {
+pub(crate) fn looks_like_diff(s: &str) -> bool {
     s.lines()
         .any(|l| l.starts_with("@@ ") || l.starts_with("--- ") || l.starts_with("diff --git "))
 }

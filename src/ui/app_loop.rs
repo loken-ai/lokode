@@ -1450,8 +1450,10 @@ async fn run_ui(
                                             // the conversation, and left there it sits
                                             // between two questions for the rest of the
                                             // session.
-                                            show(&mut state, verb, reply);
+                                            // Refreshed first, so a page drawn from the
+                                            // state shows the state as it is now.
                                             refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
+                                            show(&mut state, verb, reply);
                                             continue;
                                         }
                                         // A command the project defines is a way of

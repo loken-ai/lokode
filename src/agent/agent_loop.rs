@@ -1286,36 +1286,77 @@ impl Agent {
                 let _ = reply.send(self.explain_choice());
             }
             Control::Spend { reply } => {
-                // The totals, then the last few steps: a session's cost is a sum, and
-                // where it went is a list.
-                let mut out = vec![self.spend.describe()];
-                // What the backend measured, by what it was for, when it measures anything.
-                let by = crate::backend::meter::ledger().totals();
-                if by.sum().is_measured() {
-                    out.push(format!("energy {}", by.sum().describe()));
-                    for (purpose, spent) in by.by_purpose() {
-                        out.push(format!(
-                            "  {:<16} {}  over {} request(s)",
-                            purpose.label(),
-                            spent.describe(),
-                            spent.requests
-                        ));
-                    }
-                }
-                let recent: Vec<String> = self
-                    .steps
-                    .iter()
-                    .rev()
-                    .take(8)
-                    .map(|s| format!("  {}", s.describe()))
-                    .collect();
-                if !recent.is_empty() {
-                    out.push("last steps, most recent first:".to_string());
-                    out.extend(recent);
-                }
-                let _ = reply.send(out.join("\n"));
+                let _ = reply.send(self.spend_page());
             }
         }
+    }
+
+    /// What the session spent, as a page: the totals, the energy by what it was for when
+    /// the backend measures it, and the last steps, most recent first.
+    fn spend_page(&self) -> String {
+        let s = &self.spend;
+        if s.steps == 0 {
+            return s.describe();
+        }
+        let rate = match s.model_ms {
+            0 => 0.0,
+            ms => s.completion_tokens as f64 * 1000.0 / ms as f64,
+        };
+        let mut out = format!(
+            "## This session\n\n\
+             - **{}** steps\n\
+             - **{}** tokens read, **{}** written, at **{rate:.0}** tokens a second\n\
+             - **{:.1}s** in the model, **{:.1}s** in tools\n",
+            s.steps,
+            s.prompt_tokens,
+            s.completion_tokens,
+            s.model_ms as f64 / 1000.0,
+            s.tool_ms as f64 / 1000.0
+        );
+        let by = crate::backend::meter::ledger().totals();
+        if by.sum().is_measured() {
+            out.push_str("\n## Energy\n\n| What for | Energy | Requests |\n|---|---|---|\n");
+            for (purpose, spent) in by.by_purpose() {
+                out.push_str(&format!(
+                    "| {} | {} | {} |\n",
+                    purpose.label(),
+                    spent.describe(),
+                    spent.requests
+                ));
+            }
+            out.push_str(&format!(
+                "| **all of it** | **{}** | {} |\n",
+                by.sum().describe(),
+                by.sum().requests
+            ));
+        }
+        if !self.steps.is_empty() {
+            out.push_str(
+                "\n## Last steps\n\n\
+                 | Turn | Step | Tools | Model | Read | Written | Check |\n\
+                 |---|---|---|---|---|---|---|\n",
+            );
+            for r in self.steps.iter().rev().take(8) {
+                let tools = match r.after.tools.is_empty() {
+                    true => "answered".to_string(),
+                    false => r.after.tools.join(", "),
+                };
+                let check = match r.after.check_passed {
+                    Some(true) => "ok",
+                    Some(false) => "failed",
+                    None => "",
+                };
+                out.push_str(&format!(
+                    "| {} | {} | {tools} | {:.1}s | {} | {} | {check} |\n",
+                    r.turn,
+                    r.before.step,
+                    r.after.model_ms as f64 / 1000.0,
+                    r.after.prompt_tokens,
+                    r.after.completion_tokens
+                ));
+            }
+        }
+        out
     }
 
     /// Why this model is the one answering.

@@ -236,17 +236,20 @@ pub(crate) fn booted_summary(mcp: &crate::mcp::Loaded) -> String {
     if mcp.clients.is_empty() {
         return "no tool servers are configured".to_string();
     }
-    let mut lines: Vec<String> = mcp
-        .clients
-        .iter()
-        .map(|c| format!("{}: running", c.server))
-        .collect();
-    for (server, prompt, about) in &mcp.prompts {
-        lines.push(format!(
-            "{server}/{prompt}: {about} (/mcp {server} {prompt})"
-        ));
+    let mut out = String::from("## Servers\n\n");
+    for c in &mcp.clients {
+        out.push_str(&format!("- **{}** running\n", c.server));
     }
-    lines.join("\n")
+    if !mcp.prompts.is_empty() {
+        out.push_str("\n## Prompts\n\n| Prompt | What it does |\n|---|---|\n");
+        for (server, prompt, about) in &mcp.prompts {
+            out.push_str(&format!(
+                "| `/mcp {server} {prompt}` | {} |\n",
+                about.replace('|', "/")
+            ));
+        }
+    }
+    out
 }
 
 /// What running a command came to.
@@ -490,7 +493,20 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         return Ran::Cleared(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
     }
     if verb == "tools" {
-        return Ran::Said(tools.join("\n"));
+        let mut out = String::from("| Tool | From | What it does |\n|---|---|---|\n");
+        for row in tools {
+            let (head, about) = row.split_once(": ").unwrap_or((row.as_str(), ""));
+            let (name, from) = match head.split_once(" (from ") {
+                Some((name, server)) => (name, server.trim_end_matches(')')),
+                None => (head, "lokode"),
+            };
+            let first = about.split(". ").next().unwrap_or(about).replace('|', "/");
+            out.push_str(&format!(
+                "| `{name}` | {from} | {} |\n",
+                first.trim_end_matches('.')
+            ));
+        }
+        return Ran::Said(out);
     }
     if verb == "approve" {
         // What is in force, which is two things: what the configuration settles without
@@ -505,18 +521,30 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
             });
         }
         let standing = approvals.standing(root).await;
-        let mine = match standing.is_empty() {
-            true => "\n\nnothing has been agreed to for the rest of this session".to_string(),
-            false => format!(
-                "\n\nagreed to for the rest of this session, until /approve forget:\n{}",
-                standing
-                    .iter()
-                    .map(|s| format!("  {s}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
-        };
-        return Ran::Said(format!("{}{mine}", policy.describe()));
+        let mut out = String::from("## Settled in the configuration\n\n");
+        for line in policy.describe().lines() {
+            out.push_str(&match line.split_once(": ") {
+                Some((rule, list)) => format!(
+                    "- **{rule}**: {}\n",
+                    list.split(", ")
+                        .map(|p| format!("`{p}`"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+                None => format!("{line}\n"),
+            });
+        }
+        out.push_str("\n## Agreed for this session\n\n");
+        match standing.is_empty() {
+            true => out.push_str("Nothing has been agreed to for the rest of this session.\n"),
+            false => {
+                for s in &standing {
+                    out.push_str(&format!("- {s}\n"));
+                }
+                out.push_str("\n`/approve forget` takes them back.\n");
+            }
+        }
+        return Ran::Said(out);
     }
     if verb == "plan" || verb == "act" {
         if busy {
@@ -641,24 +669,64 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                 Ok(d) => d,
             },
         },
-        other => format!("no such command: /{other}\n{}", help(root)),
+        other => format!("No such command: `/{other}`.\n\n{}", help(root)),
     })
 }
 
 /// The commands, the project's own listed after the built-ins.
 pub(crate) fn help(root: &std::path::Path) -> String {
-    let mine = crate::config::user_commands(root);
-    if mine.is_empty() {
-        return HELP.to_string();
+    let mut out = String::from("## Commands\n\n| Command | What it does |\n|---|---|\n");
+    for line in HELP.lines().filter_map(|l| l.strip_prefix('/')) {
+        let (name, about) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+        out.push_str(&format!("| `/{name}` | {} |\n", about.trim()));
     }
-    format!(
-        "{HELP}\n\nthis project also defines:\n{}",
-        mine.iter()
-            .map(|n| format!("/{n}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    )
+    let mine = crate::config::user_commands(root);
+    if !mine.is_empty() {
+        out.push_str("\n## This project's commands\n\n");
+        for name in mine {
+            out.push_str(&format!("- `/{name}`\n"));
+        }
+    }
+    out.push_str("\n## Keys\n\n| Key | What it does |\n|---|---|\n");
+    for (key, about) in KEYS {
+        out.push_str(&format!("| `{key}` | {about} |\n"));
+    }
+    out.push_str(
+        "\n## On the line\n\n\
+         - `@path` sends that file with the question\n\
+         - `!command` runs a command here, and the model sees what it printed\n\
+         - `#rule` writes a rule for this project and tells the model at once\n",
+    );
+    out
 }
+
+/// The keys, as `/help` lists them.
+const KEYS: [(&str, &str); 15] = [
+    ("shift-tab", "act, write without asking, plan"),
+    ("enter", "send, or take what the list offers"),
+    ("shift-enter", "a new line"),
+    (
+        "esc",
+        "stop the turn, close a list, clear the line; twice, the last question back",
+    ),
+    ("alt-up alt-down", "move between the steps of the session"),
+    ("space", "unfold what was counted, while pointing at it"),
+    ("u d", "on a receipt, put the turn back or see its diff"),
+    ("ctrl-b", "show or hide the rail"),
+    ("ctrl-f", "find something said earlier"),
+    ("ctrl-g", "write the prompt in your editor"),
+    ("ctrl-y", "take what is selected, or the block pointed at"),
+    ("ctrl-t", "lend the mouse to the terminal, or take it back"),
+    (
+        "y a n e x",
+        "answer a change: once, always, no, no and why, no and fix it",
+    ),
+    (
+        "alt-enter",
+        "while a turn runs, ask it once the turn is over",
+    ),
+    ("ctrl-c", "stop, clear the line, or leave"),
+];
 
 /// The commands, as a list to choose from.
 ///
