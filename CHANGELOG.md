@@ -33,6 +33,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Plans: put the finished plan to the user, and keep the task list when a session resumes.
 - Commands: read commands from the user's configuration and from directories.
 - Skills: offer skills by name and description, loaded with their files when the model asks.
+- Plugins: install, update and list plugins from git or a marketplace, including Claude Code's.
 - Hooks: run hooks at every edge of a session, and read their decision.
 - MCP: reach servers over HTTP, sign in, restart them, and let them ask the model or the user.
 

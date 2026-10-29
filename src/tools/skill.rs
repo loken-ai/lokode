@@ -25,10 +25,11 @@ pub struct Skill {
     pub dir: PathBuf,
 }
 
-/// The directories skills are read from, the user's first.
+/// The directories skills are read from: the user's, the plugins', then the project's.
 pub fn dirs(root: &Path) -> Vec<PathBuf> {
     let user = crate::config::user_config_path().and_then(|p| p.parent().map(|d| d.join("skills")));
     user.into_iter()
+        .chain(crate::plugins::dirs("skills"))
         .chain([root.join(".lokode").join("skills")])
         .collect()
 }

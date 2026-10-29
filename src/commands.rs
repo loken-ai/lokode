@@ -46,11 +46,12 @@ impl Command {
     }
 }
 
-/// The directories commands are read from, the user's first.
+/// The directories commands are read from: the user's, the plugins', then the project's.
 pub fn dirs(root: &Path) -> Vec<PathBuf> {
     let user =
         crate::config::user_config_path().and_then(|p| p.parent().map(|d| d.join("commands")));
     user.into_iter()
+        .chain(crate::plugins::dirs("commands"))
         .chain([crate::config::commands_dir(root)])
         .collect()
 }

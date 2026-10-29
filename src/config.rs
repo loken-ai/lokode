@@ -196,6 +196,17 @@ pub struct FileConfig {
     /// The language servers, by language.
     #[serde(default)]
     pub lsp: LspSection,
+    /// Which installed plugins are turned off.
+    #[serde(default)]
+    pub plugins: PluginsSection,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct PluginsSection {
+    /// The plugins installed and turned off, by name.
+    #[serde(default)]
+    pub disabled: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -265,7 +276,7 @@ pub struct HooksSection {
 
 impl HooksSection {
     /// Both sides' hooks, those of `base` first.
-    fn after(mut self, over: HooksSection) -> HooksSection {
+    pub fn after(mut self, over: HooksSection) -> HooksSection {
         self.session_start.extend(over.session_start);
         self.prompt.extend(over.prompt);
         self.pre_tool.extend(over.pre_tool);
@@ -653,6 +664,13 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
             },
         },
         hooks: base.hooks.after(over.hooks),
+        plugins: PluginsSection {
+            disabled: {
+                let mut d = base.plugins.disabled;
+                d.extend(over.plugins.disabled);
+                d
+            },
+        },
         approve: crate::sandbox::policy::Policy {
             // Added to rather than replaced, on both sides: a project stating what is
             // safe in it must not drop the user's own refusals, and a user's refusal must
@@ -720,6 +738,14 @@ pub fn load(root: &Path, trust: bool) -> Result<Loaded> {
         if let Some(user) = read(&path)? {
             cfg = merge(cfg, user);
         }
+    }
+    // The plugins come after the user's file and before the project's: they are the
+    // user's, and the project still has the last word on its own settings.
+    let (plugins, _) = crate::plugins::load();
+    let (hooks, servers) = crate::plugins::sections(&plugins);
+    cfg.hooks = cfg.hooks.after(hooks);
+    for (name, server) in servers {
+        cfg.mcp.servers.entry(name).or_insert(server);
     }
     let path = project_config_path(root);
     let mut untrusted = None;

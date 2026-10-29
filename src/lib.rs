@@ -46,6 +46,7 @@ pub mod headless;
 pub mod lsp;
 pub mod mcp;
 pub mod paths;
+pub mod plugins;
 pub mod sandbox;
 pub mod tools;
 pub mod trust;

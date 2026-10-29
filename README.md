@@ -237,7 +237,7 @@ list with `no` selected.
 | `/jobs` | what is running now, to point at its step or stop work done outside a turn |
 | `/lsp` | the language servers: where each stands, the files it reports, why one is down |
 | `/approve`, `/approve forget` | what is in force here and in the configuration, or take it back |
-| `/why`, `/digest`, `/tools`, `/agents`, `/skills`, `/mcp` | what is in force, what is known, what can be called |
+| `/why`, `/digest`, `/tools`, `/agents`, `/skills`, `/plugins`, `/mcp` | what is in force, what is known, what can be called |
 
 A command that takes a name offers the names. `/model`, `/undo`, `/resume` and `/mcp` open a
 list that narrows as you type. `/help` lists every command, with those the project ships.
@@ -758,6 +758,40 @@ description: cut a release of this project
   it by.
 
 `/skills` lists them.
+
+## Plugins
+
+A plugin brings commands, agents, skills, hooks and tool servers together. It is a directory
+in `~/.config/lokode/plugins/`, named by the directory:
+
+```text
+~/.config/lokode/plugins/release/
+  plugin.toml
+  commands/ship.md
+  agents/checker.md
+  skills/notes/SKILL.md
+```
+
+```toml
+# plugin.toml
+description = "the team's release routine"
+version = "1.2.0"
+
+[hooks]
+turn-end = "cargo fmt --check"
+
+[mcp.servers.tracker]
+command = "tracker-mcp"
+```
+
+- A plugin is installed by putting its directory there, with `git clone` for instance.
+- Its commands, agents and skills come after the user's and before the project's.
+- Its hooks run after the user's and before the project's.
+- A tool server keeps the name the plugin gives it, and the first to use a name keeps it.
+- `[plugins] disabled = ["release"]` in the user's configuration turns one off.
+- Plugins live in the user's configuration only: a project cannot bring one.
+
+`/plugins` lists them, what each brings, and which are off.
 
 ## Tools from elsewhere
 
