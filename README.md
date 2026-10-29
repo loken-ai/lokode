@@ -74,6 +74,10 @@ or the startup probe. A server that measures nothing shows nothing, never a zero
 - **One root.** Every tool that takes a path is confined under `--root`, and a path that leaves
   it is refused. A file may be created in a directory that does not exist yet. The check
   applies to where the write lands.
+- **A project is trusted first.** A project's `.lokode.toml` can run programs or loosen
+  approvals. Its `[hooks]`, `[mcp]`, `[lsp]`, `[shell]`, `[backend]`, `[web]`, `[session]` and
+  `[approve.allow]` apply once you trust them. The first session in the project shows them
+  and asks. A change to them asks again.
 - **Changes are approved.** A change arrives in the conversation as a diff to accept or
   decline. An agreement covers what you were shown: this command, writes under this
   directory, requests to this host. The prompt says what `a` covers before you press it.
@@ -688,6 +692,17 @@ allow-hosts = ["docs.example.com"]
 [session]
 transcripts = true
 ```
+
+**A project's file.** Its settings that run programs or loosen approvals wait for trust.
+
+| | |
+|---|---|
+| Waits for trust | `[hooks]`, `[mcp]`, `[lsp]`, `[shell]`, `[backend]`, `[web]`, `[session]`, `[approve.allow]` |
+| Applies at once | everything else, `[approve.deny]` included |
+| Asked | at the first interactive session, and again after a change to them |
+| Without a terminal | left out, with a warning. `--trust-project` takes them for one run |
+
+The trusted settings are kept in `$XDG_DATA_HOME/lokode/trusted.json`.
 
 `lokode --show-config` prints the files read and what everything resolved to. It names the
 headers without their values.

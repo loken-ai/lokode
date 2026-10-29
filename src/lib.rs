@@ -46,4 +46,5 @@ pub mod mcp;
 pub mod paths;
 pub mod sandbox;
 pub mod tools;
+pub mod trust;
 pub mod ui;

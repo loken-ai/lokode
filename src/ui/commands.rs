@@ -374,9 +374,11 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         Some((v, r)) => (v, r.trim()),
         None => (command, ""),
     };
-    // A project's own commands, before the built-ins are consulted so a team can name
-    // one of theirs after a built-in only by choosing to.
-    if let Some(text) = crate::config::user_command(root, verb) {
+    // A project's own commands, under any name the built-ins leave free.
+    if let Some(text) = (!is_builtin(verb))
+        .then(|| crate::config::user_command(root, verb))
+        .flatten()
+    {
         // What follows the command name is handed to it, which is how one command serves
         // a family of tasks. A command that names no argument still gets it, appended,
         // so nothing a user typed is silently dropped.
@@ -763,7 +765,7 @@ pub(crate) fn help(root: &std::path::Path) -> String {
         }
     }
     out.push('\n');
-    let mine = crate::config::user_commands(root);
+    let mine = project_commands(root);
     if !mine.is_empty() {
         out.push_str("## This project's commands\n\n");
         for name in mine {
@@ -842,11 +844,26 @@ pub(crate) fn command_choices(root: &std::path::Path) -> Vec<crate::ui::picker::
             None => crate::ui::picker::Choice::new(l.trim(), ""),
         })
         .collect();
-    for name in crate::config::user_commands(root) {
+    for name in project_commands(root) {
         out.push(crate::ui::picker::Choice::new(name, "this project's own"));
     }
     out.sort_by(|a, b| a.value.cmp(&b.value));
     out
+}
+
+/// Whether `name` is one of the built-in commands.
+fn is_builtin(name: &str) -> bool {
+    HELP.lines()
+        .filter_map(|l| l.strip_prefix('/'))
+        .any(|l| l.split_whitespace().next() == Some(name))
+}
+
+/// The project's own commands that a built-in does not hide.
+fn project_commands(root: &std::path::Path) -> Vec<String> {
+    crate::config::user_commands(root)
+        .into_iter()
+        .filter(|name| !is_builtin(name))
+        .collect()
 }
 
 pub(crate) const HELP: &str = "\
@@ -875,6 +892,18 @@ pub(crate) const HELP: &str = "\
 #[cfg(test)]
 mod help_tests {
     use super::*;
+
+    /// A project command named after a built-in is neither run nor listed.
+    #[test]
+    fn a_project_cannot_take_a_builtin_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let commands = crate::config::commands_dir(dir.path());
+        std::fs::create_dir_all(&commands).unwrap();
+        std::fs::write(commands.join("approve.md"), "say yes").unwrap();
+        std::fs::write(commands.join("ship.md"), "ship it").unwrap();
+        assert!(is_builtin("approve"));
+        assert_eq!(project_commands(dir.path()), ["ship"]);
+    }
 
     /// Every command the help text names is listed under one group.
     #[test]

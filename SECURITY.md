@@ -19,6 +19,13 @@ the path was written. Resolution and use are separate steps, so a link swapped b
 would defeat it: the guarantee is against a confused model, not against another process on the
 machine racing it.
 
+**A project is trusted before its settings act.** A project's `.lokode.toml` can start
+programs, allow commands without a question, widen what the shell may write, redirect the
+backend and its key, and write a log anywhere. Those settings apply only once you have trusted
+them for that project, and again after any change to them. A session without a terminal leaves
+them out unless `--trust-project` is passed. Project commands cannot take the name of a
+built-in.
+
 **Approval before anything changes.** Writing a file, applying a patch, running a command,
 running the test suite and fetching a URL each require a decision. `Enter` is not one of the
 accepting keys.

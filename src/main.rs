@@ -115,6 +115,11 @@ struct Cli {
     #[arg(long, value_enum)]
     backend_kind: Option<config::BackendKind>,
 
+    /// Take the project's hooks, servers, approvals and shell settings for this run
+    /// without asking, as a script run in a project it knows does.
+    #[arg(long)]
+    trust_project: bool,
+
     /// Print where settings were read from, and what they resolved to, then exit.
     #[arg(long)]
     show_config: bool,
@@ -153,7 +158,14 @@ fn main() -> Result<()> {
             cli.root.display()
         )
     })?;
-    let file = config::load(&root)?;
+    let mut loaded = config::load(&root, cli.trust_project)?;
+    if let Some(untrusted) = loaded.untrusted.clone() {
+        if cli.prompt.is_none() && !cli.show_config && ask_trust(&untrusted)? {
+            lokode::trust::grant(&root, &untrusted.guarded)?;
+            loaded = config::load(&root, false)?;
+        }
+    }
+    let config::Loaded { file, untrusted } = loaded;
 
     let log_file = cli
         .log_file
@@ -162,7 +174,12 @@ fn main() -> Result<()> {
         .or_else(|| file.session.log_file.clone());
     let _log_guard = init_logging(log_file)?;
 
-    let cfg = resolve(cli, root, file)?;
+    let mut cfg = resolve(cli, root, file)?;
+    if let Some(untrusted) = untrusted {
+        let warning = untrusted.warning();
+        tracing::warn!("{warning}");
+        cfg.app.warnings.push(warning);
+    }
 
     if cfg.show_config {
         print_config(&cfg);
@@ -333,6 +350,33 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             shell_writable,
         },
     })
+}
+
+/// Ask on the terminal whether to trust the project's guarded settings. No when there is
+/// no terminal to ask on.
+fn ask_trust(untrusted: &config::Untrusted) -> Result<bool> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Ok(false);
+    }
+    let mut err = std::io::stderr().lock();
+    writeln!(
+        err,
+        "{} asks for settings that run programs, loosen approvals or reach beyond the \
+         project:\n",
+        untrusted.path.display()
+    )?;
+    for line in untrusted.guarded.lines() {
+        writeln!(err, "    {line}")?;
+    }
+    write!(
+        err,
+        "\nTrust them for this project? A change to them is asked about again. [y/N] "
+    )?;
+    err.flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 
 fn env_string(name: &str) -> Option<String> {

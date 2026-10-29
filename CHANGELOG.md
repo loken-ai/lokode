@@ -26,6 +26,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Checks: say whether each write was checked, and report only what it introduced.
 - Language server: configure servers in [lsp] and start them with the session.
 - Language server: show where each server stands in /lsp and the rail.
+- Configuration: ask before a project's hooks, servers, allow rules or shell settings apply.
 
 ### Changed
 
@@ -36,6 +37,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Interface: stop redrawing while idle.
 - Interface: keep the last lines of a call that prints fast.
 - Language server: answer the server's own requests, count columns as it does, restart it once.
+- Commands: keep a project's command from taking the name of a built-in.
 
 ### Removed
 
