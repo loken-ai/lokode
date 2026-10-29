@@ -671,6 +671,12 @@ api-key-env = "ANTHROPIC_API_KEY"
 - A refusal lists only the lines the proof does not account for, and writes nothing.
 - Once in, the files are checked like any write. An error comes from putting the two together,
   and the session fixes it before the turn ends.
+- When the project changed meanwhile, a model reads the two sides together once, and says what
+  would not work together: a name or signature one side changed and the other uses, the same
+  thing done twice, behaviour that contradicts. It is the `review` role's model, or the
+  session's. It is given the objectives and both sides' changes without their context, cut
+  short, and answers `OK` or five lines at most. What it finds is the session's to fix before
+  the turn ends.
 - An agent stopped by the user is not brought in. Its copy stays, its path said.
 - A proof refused twice in a turn counts as a check that failed: with an `escalate` model named
   in `[roles]`, the session carries on with it to do the reconciling.

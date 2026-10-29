@@ -73,7 +73,13 @@ const SHOWN_GOAL: usize = 600;
 /// The latest questions of the session shown as the project's objectives.
 const SHOWN_ASKED: usize = 3;
 
-/// Lines a refused proof lists before counting the rest.
+/// Characters of one side's changes the coherence check reads.
+const SHOWN_EVIDENCE: usize = 6000;
+
+/// Tokens the coherence check may answer with.
+const CHECK_TOKENS: u32 = 250;
+
+/// Lines of a refused proof listed before counting the rest.
 const SHOWN_UNPROVEN: usize = 20;
 
 /// Why a file both sides changed is as it is now, for one file.
@@ -268,8 +274,12 @@ impl Sides {
 /// What `take_work` did.
 #[derive(Debug)]
 pub enum Taken {
-    /// The work is in the project: the files it changed.
-    In(Vec<String>),
+    /// The work is in the project: the files it changed, and what the coherence check is
+    /// given when the project changed meanwhile.
+    In {
+        files: Vec<String>,
+        evidence: Option<String>,
+    },
     /// Nothing was written: what the session has to look at first.
     Review(String),
     /// Nothing was written: what the proofs do not account for.
@@ -455,7 +465,10 @@ impl Work {
         let sides = self.sides().await?;
         // Nothing changed meanwhile: the agent's work starts from the project as it is.
         if sides.project.is_empty() {
-            return self.copy_in(&sides.agent, &[]).map(Taken::In);
+            return Ok(Taken::In {
+                files: self.copy_in(&sides.agent, &[])?,
+                evidence: None,
+            });
         }
         let both = sides.both();
         let (Some(proofs), Some(reviewed)) = (proofs, self.reviewed.clone()) else {
@@ -493,9 +506,14 @@ impl Work {
         if !refused.is_empty() {
             return Ok(Taken::Refused(refused));
         }
+        // Taken before the agent's own files come in: both sides' diffs are what is checked.
+        let evidence = self.evidence(&sides, asked).await;
         let mut done = self.copy_in(&sides.agent, &both)?;
         done.extend(both);
-        Ok(Taken::In(done))
+        Ok(Taken::In {
+            files: done,
+            evidence: Some(evidence),
+        })
     }
 
     /// Copy into the project the files of `agent` but those in `skip`, the session having
@@ -520,6 +538,57 @@ impl Work {
         Ok(brought)
     }
 
+    /// Both objectives, the agent's task with what it said it did and the last questions
+    /// asked since, each cut short.
+    fn objectives(&self, asked: &[String]) -> String {
+        let short = |t: &str| t.chars().take(SHOWN_GOAL).collect::<String>();
+        let since: Vec<String> = asked
+            .iter()
+            .skip(self.asked_from)
+            .rev()
+            .take(SHOWN_ASKED)
+            .map(|q| format!("\"{}\"", short(q).replace('\n', " ")))
+            .collect();
+        format!(
+            "Objectives:\n- the agent: {task}. It said: {answer}\n- the project since: {since}\n",
+            task = self.task,
+            answer = short(&self.answer),
+            since = match since.is_empty() {
+                true => "changes made outside this session".to_string(),
+                false => since.join("; "),
+            },
+        )
+    }
+
+    /// What the coherence check is given: both objectives and the two sides' changes since
+    /// the agent started, without their context lines and cut short.
+    async fn evidence(&self, sides: &Sides, asked: &[String]) -> String {
+        // Without git's own headers, which say nothing the file names and hunks do not.
+        let cut = |t: String| {
+            t.lines()
+                .filter(|l| !l.starts_with("diff --git") && !l.starts_with("index "))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .chars()
+                .take(SHOWN_EVIDENCE)
+                .collect::<String>()
+        };
+        let project = self
+            .pg(&["diff", "-U0", "--no-renames", &self.base, &sides.now])
+            .await
+            .map(cut)
+            .unwrap_or_default();
+        let agent = self
+            .pg(&["diff", "-U0", "--no-renames", &self.base, &sides.theirs])
+            .await
+            .map(cut)
+            .unwrap_or_default();
+        format!(
+            "{}\nWhat the project changed:\n```diff\n{project}\n```\nWhat the agent changed:\n```diff\n{agent}\n```",
+            self.objectives(asked)
+        )
+    }
+
     /// What the session reads before bringing the work in: both objectives, what the
     /// project changed since the agent started, and both sides of every file both changed.
     /// The agent's own patch was in its answer, and is not repeated.
@@ -534,24 +603,10 @@ impl Work {
             .pg(&["diff", "--stat", "--no-renames", &self.base, &sides.now])
             .await
             .unwrap_or_default();
-        let short = |t: &str| t.chars().take(SHOWN_GOAL).collect::<String>();
-        let since: Vec<String> = asked
-            .iter()
-            .skip(self.asked_from)
-            .rev()
-            .take(SHOWN_ASKED)
-            .map(|q| format!("\"{}\"", short(q).replace('\n', " ")))
-            .collect();
         let mut out = format!(
-            "Nothing was written: the project changed since the agent {agent} started.\n{stat}\n\
-             Objectives:\n- the agent: {task}. It said: {answer}\n- the project since: {since}\n",
+            "Nothing was written: the project changed since the agent {agent} started.\n{stat}\n{goals}",
             agent = self.agent,
-            task = self.task,
-            answer = short(&self.answer),
-            since = match since.is_empty() {
-                true => "changes made outside this session".to_string(),
-                false => since.join("; "),
-            },
+            goals = self.objectives(asked),
         );
         let fits =
             "Check that the rest of the agent's work fits what the project changed, names and \
@@ -631,14 +686,70 @@ impl Work {
     }
 }
 
+/// Who checks that two changes made apart fit together once they are in one project: a
+/// model asked one question about the two changes, with nothing else of the session.
+#[derive(Clone)]
+pub struct Reviewer {
+    pub backend: Arc<dyn crate::backend::provider::Provider>,
+    /// The model of the `review` role, or the session's.
+    pub model: String,
+    pub session: String,
+}
+
+impl Reviewer {
+    /// What does not fit between the two changes in `evidence`, a line a problem, or `None`
+    /// when they fit or the check could not be made.
+    pub async fn check(
+        &self,
+        evidence: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Option<String> {
+        use crate::backend::wire::Message;
+        let req = crate::backend::provider::TurnRequest {
+            model: self.model.clone(),
+            messages: vec![
+                Message::system(
+                    "Two changes were made to one code base apart from each other and are now \
+                     both in it. Answer with the single word OK when they fit together. \
+                     Otherwise answer with up to five lines, each `file: problem`, naming only \
+                     what would not work together: a name, signature or type one change uses \
+                     and the other renamed, changed or removed; the same thing done twice; \
+                     behaviour that contradicts; something one change needed that the other \
+                     removed. Do not comment on style and do not suggest improvements.",
+                ),
+                Message::user(evidence.to_string()),
+            ],
+            tools: None,
+            grammar: None,
+            max_tokens: CHECK_TOKENS,
+            temperature: 0.0,
+            user: Some(format!("{}-coherence", self.session)),
+            reason: false,
+            purpose: crate::backend::meter::Purpose::Review,
+        };
+        let answer = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return None,
+            r = self.backend.complete(req) => r.ok()?,
+        };
+        let answer = answer.trim();
+        let head = answer.trim_start_matches(['"', '`', '*']).trim_start();
+        if head.is_empty() || head.to_lowercase().starts_with("ok") {
+            return None;
+        }
+        Some(head.lines().take(5).collect::<Vec<_>>().join("\n"))
+    }
+}
+
 /// The tool that brings an agent's work into the project.
 pub struct TakeWork {
     pending: Pending,
+    reviewer: Option<Reviewer>,
 }
 
 impl TakeWork {
-    pub fn new(pending: Pending) -> Self {
-        Self { pending }
+    pub fn new(pending: Pending, reviewer: Option<Reviewer>) -> Self {
+        Self { pending, reviewer }
     }
 }
 
@@ -734,7 +845,13 @@ impl Tool for TakeWork {
                  again.",
                 lacking.join("\n")
             ))),
-            Ok(Taken::In(files)) => {
+            Ok(Taken::In { files, evidence }) => {
+                // Both changes are in the project: a model reads them together, once, when
+                // the project changed meanwhile.
+                let objection = match (&self.reviewer, &evidence) {
+                    (Some(reviewer), Some(evidence)) => reviewer.check(evidence, &ctx.cancel).await,
+                    _ => None,
+                };
                 if let Ok(mut p) = self.pending.lock() {
                     p.remove(&a.work);
                 }
@@ -754,6 +871,12 @@ impl Tool for TakeWork {
                     "\nThe files are now checked: an error reported below comes from putting the \
                      two together, and is yours to fix before the turn ends.",
                 );
+                if let Some(objection) = objection {
+                    out.push_str(&format!(
+                        "\n\nThe coherence check says these do not fit together:\n{objection}\n\
+                         Fix each in the project's files now, so the whole works, before the turn ends."
+                    ));
+                }
                 Ok(ToolOutput::ok(out))
             }
             Err(e) => Ok(ToolOutput::err(format!(
@@ -813,7 +936,7 @@ mod tests {
 
         let pending: Pending = Default::default();
         pending.lock().unwrap().insert(3, work.clone());
-        let tool = TakeWork::new(pending);
+        let tool = TakeWork::new(pending, None);
         let out = take(&tool, json!({"work": 3})).await;
         assert!(out.content.contains("patched b.txt"), "{}", out.content);
         assert_eq!(std::fs::read_to_string(p.join("b.txt")).unwrap(), "new\n");
@@ -832,7 +955,7 @@ mod tests {
         std::fs::write(p.join("a.txt"), "ONE\n").unwrap();
         let pending: Pending = Default::default();
         pending.lock().unwrap().insert(4, work);
-        let review = take(&TakeWork::new(pending), json!({"work": 4})).await;
+        let review = take(&TakeWork::new(pending, None), json!({"work": 4})).await;
         assert!(
             review.content.contains("Both changed a.txt"),
             "{}",
@@ -907,7 +1030,7 @@ mod tests {
 
         let pending: Pending = Default::default();
         pending.lock().unwrap().insert(7, work.clone());
-        let tool = TakeWork::new(pending);
+        let tool = TakeWork::new(pending, None);
         let out = take(&tool, json!({"work": 7})).await;
         assert!(out.content.contains("patched b.txt"), "{}", out.content);
         assert_eq!(std::fs::read_to_string(p.join("b.txt")).unwrap(), "new\n");
@@ -939,7 +1062,7 @@ mod tests {
 
         let pending: Pending = Default::default();
         pending.lock().unwrap().insert(8, work.clone());
-        let tool = TakeWork::new(pending);
+        let tool = TakeWork::new(pending, None);
         let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
         *h.ctx.asked.lock().unwrap() = vec!["first".into(), "make a.txt upper case".into()];
         let call = |args: Value| {
@@ -1008,6 +1131,104 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(p.join("c.txt")).unwrap(), "C\n");
         assert!(!work.dir.exists());
+    }
+
+    /// The coherence check is asked once, only when the project changed meanwhile, with the
+    /// two sides and the objectives and nothing else, and its objection is given back.
+    #[tokio::test]
+    async fn the_coherence_check_reads_both_sides_once() {
+        use crate::backend::wire::Message;
+        struct Scripted(std::sync::Mutex<Vec<Vec<Message>>>, &'static str);
+        #[async_trait]
+        impl crate::backend::provider::Provider for Scripted {
+            fn label(&self) -> &str {
+                "scripted"
+            }
+            fn capabilities(&self) -> crate::backend::provider::Capabilities {
+                crate::backend::provider::Capabilities {
+                    native_tools: false,
+                    grammar: false,
+                    usage_in_stream: false,
+                }
+            }
+            async fn stream(
+                &self,
+                _: crate::backend::provider::TurnRequest,
+            ) -> Result<crate::backend::client::ChunkStream> {
+                bail!("not used")
+            }
+            async fn complete(&self, req: crate::backend::provider::TurnRequest) -> Result<String> {
+                self.0.lock().unwrap().push(req.messages);
+                Ok(self.1.to_string())
+            }
+            async fn models(&self) -> Result<Vec<String>> {
+                Ok(Vec::new())
+            }
+        }
+        let seen = Arc::new(Scripted(
+            Default::default(),
+            "lib.rs: parse() was renamed read() in the project",
+        ));
+        let reviewer = Reviewer {
+            backend: seen.clone(),
+            model: "small".into(),
+            session: "s".into(),
+        };
+        let state = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let p = project.path();
+        run(p, &["init", "-q"]);
+        std::fs::write(p.join("lib.rs"), "fn parse() {}\n").unwrap();
+        run(p, &["add", "-A"]);
+        run(p, &["commit", "-qm", "one"]);
+        let mut work = Work::make(state.path(), p, 5, "scribe", "call parse in main")
+            .await
+            .unwrap()
+            .unwrap();
+        work.answer = "main calls parse".into();
+        std::fs::write(work.root.join("main.rs"), "fn main() { parse(); }\n").unwrap();
+        std::fs::write(p.join("lib.rs"), "fn read() {}\n").unwrap();
+        let pending: Pending = Default::default();
+        pending.lock().unwrap().insert(5, work);
+        let tool = TakeWork::new(pending, Some(reviewer));
+        let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
+        *h.ctx.asked.lock().unwrap() = vec!["rename parse to read".into()];
+        // The first call only reviews. The second, with no file both changed, lands.
+        let review = tool.run(&h.ctx, json!({"work": 5})).await.unwrap();
+        assert!(
+            review.content.starts_with("Nothing was written"),
+            "{}",
+            review.content
+        );
+        assert!(
+            seen.0.lock().unwrap().is_empty(),
+            "asked before anything was written"
+        );
+        let out = tool
+            .run(&h.ctx, json!({"work": 5, "merged": []}))
+            .await
+            .unwrap();
+        assert!(out.content.contains("patched main.rs"), "{}", out.content);
+        assert!(
+            out.content.contains("do not fit together") && out.content.contains("renamed read()"),
+            "{}",
+            out.content
+        );
+        let asked = seen.0.lock().unwrap();
+        assert_eq!(asked.len(), 1);
+        let text = &asked[0][1].content;
+        assert!(
+            text.contains("call parse in main") && text.contains("rename parse to read"),
+            "{text}"
+        );
+        assert!(
+            text.contains("-fn parse()") && text.contains("+fn main()"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("\nindex "),
+            "context lines were sent: {text}"
+        );
     }
 
     /// A line one side added must be kept and a line one side removed must be gone, unless

@@ -409,6 +409,15 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // What an agent did in its own copy is taken, or left, by the session.
     registry.register(crate::tools::worktree::TakeWork::new(
         delegation.works.clone(),
+        Some(crate::tools::worktree::Reviewer {
+            backend: backend.clone(),
+            model: cfg
+                .roles
+                .get(crate::agent::roles::Role::Review)
+                .map(str::to_string)
+                .unwrap_or_else(|| model.clone()),
+            session: session_id.clone(),
+        }),
     ));
     registry.register(crate::tools::delegate::Delegate::new(delegation));
     let registry = Arc::new(registry);
