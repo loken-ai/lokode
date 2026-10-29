@@ -80,6 +80,11 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // Third-party tools go in after the built-ins, so a server cannot take a name the agent
     // already relies on.
     let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root).await;
+    // The skills, offered by name and loaded when the model needs one.
+    let (skills, skill_warnings) = crate::tools::skill::load(&crate::tools::skill::dirs(&cfg.root));
+    if let Some(tool) = crate::tools::skill::LoadSkill::new(skills) {
+        registry.register(tool);
+    }
     // What the agents a turn hands work to choose their tools from. The delegation itself
     // is registered later, so it is not among them and an agent cannot delegate again.
     let registry_for_delegation = Arc::new(registry.clone());
@@ -371,6 +376,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         lsp: Some(lsp.clone()),
     });
     model_notes.extend(delegation.unknown());
+    model_notes.extend(skill_warnings);
     registry.register(crate::tools::delegate::Delegate::new(delegation));
     let registry = Arc::new(registry);
 

@@ -237,7 +237,7 @@ list with `no` selected.
 | `/jobs` | what is running now, to point at its step or stop work done outside a turn |
 | `/lsp` | the language servers: where each stands, the files it reports, why one is down |
 | `/approve`, `/approve forget` | what is in force here and in the configuration, or take it back |
-| `/why`, `/digest`, `/tools`, `/agents`, `/mcp` | what is in force, what is known, what can be called |
+| `/why`, `/digest`, `/tools`, `/agents`, `/skills`, `/mcp` | what is in force, what is known, what can be called |
 
 A command that takes a name offers the names. `/model`, `/undo`, `/resume` and `/mcp` open a
 list that narrows as you type. `/help` lists every command, with those the project ships.
@@ -732,6 +732,32 @@ Write a commit message for what is staged, scoped to $1.
   word in double quotes keeps its spaces. A command that names none of them has it appended.
 - The project's command takes the place of the user's of the same name.
 - A built-in keeps its name: a file named after one is not read.
+
+## Skills
+
+A skill is know-how the model loads when a task calls for it: a directory with a `SKILL.md`,
+named by the directory.
+
+```text
+.lokode/skills/release/SKILL.md   (or ~/.config/lokode/skills/release/SKILL.md)
+.lokode/skills/release/scripts/notes.sh
+
+---
+description: cut a release of this project
+---
+1. Bump the version in Cargo.toml.
+2. Write the notes with scripts/notes.sh.
+```
+
+- The model sees each skill's name and description, and nothing more until it loads one with
+  the `skill` tool. The window holds what is used.
+- Loading a skill gives its text and the names of the files it keeps. The tool loads one of
+  them by name, and nothing outside the skill's directory.
+- The project's skill takes the place of the user's of the same name.
+- A skill without a description is refused, since the description is what the model chooses
+  it by.
+
+`/skills` lists them.
 
 ## Tools from elsewhere
 

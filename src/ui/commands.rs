@@ -668,6 +668,30 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         }
         return Ran::Said(out);
     }
+    if verb == "skills" {
+        let (skills, warnings) = crate::tools::skill::load(&crate::tools::skill::dirs(root));
+        let mut out =
+            String::from("## Skills\n\n| Skill | What it is for | From |\n|---|---|---|\n");
+        for s in &skills {
+            out.push_str(&format!(
+                "| `{}` | {} | {} |\n",
+                s.name,
+                s.description.replace('|', "/"),
+                s.dir.display()
+            ));
+        }
+        if skills.is_empty() {
+            out.push_str("| | none yet | |\n");
+        }
+        for w in warnings {
+            out.push_str(&format!("\n{w}\n"));
+        }
+        out.push_str(
+            "\nA skill is a directory with a `SKILL.md` in `.lokode/skills/` or \
+             `~/.config/lokode/skills/`. The model loads one with the `skill` tool.\n",
+        );
+        return Ran::Said(out);
+    }
     if verb == "agents" {
         let (agents, warnings) = crate::agent::agents::load(&crate::agent::agents::dirs(root));
         let mut out = String::from(
@@ -920,7 +944,8 @@ const GROUPS: [(&str, &[&str]); 4] = [
     (
         "Where things stand",
         &[
-            "why", "cost", "context", "jobs", "lsp", "digest", "tools", "agents", "mcp", "help",
+            "why", "cost", "context", "jobs", "lsp", "digest", "tools", "agents", "skills", "mcp",
+            "help",
         ],
     ),
 ];
@@ -1016,6 +1041,7 @@ pub(crate) const HELP: &str = "\
 /init   write a first draft of this project's instructions
 /tools  the tools this session can call, and where they came from
 /agents the agents a turn can hand work to, and what each may use
+/skills the skills the model can load, and what each is for
 /mcp    the tool servers, or /mcp <server> <prompt> to take one of their prompts
 /clear  start the conversation again, keeping the project and the model
 /resume come back to a session recorded earlier, choosing from what there is
