@@ -8,16 +8,24 @@ use std::sync::OnceLock;
 
 use ratatui::style::Style;
 use ratatui::text::Span;
-use syntaxmate::{Highlighter, Scopes};
+use syntaxmate::{Catalog, Highlighter, Scopes};
 
 use crate::ui::theme::theme;
 
-static HIGHLIGHTER: OnceLock<Option<Highlighter>> = OnceLock::new();
+static CATALOG: OnceLock<Catalog> = OnceLock::new();
+static HIGHLIGHTER: OnceLock<Highlighter> = OnceLock::new();
 
-fn highlighter() -> Option<&'static Highlighter> {
-    HIGHLIGHTER
-        .get_or_init(|| Highlighter::bundled().ok())
-        .as_ref()
+fn catalog() -> &'static Catalog {
+    CATALOG.get_or_init(Catalog::bundled)
+}
+
+fn highlighter() -> &'static Highlighter {
+    HIGHLIGHTER.get_or_init(|| Highlighter::new(catalog()))
+}
+
+/// The language a file is written in, from its name, when the grammars know it.
+pub fn language_for(path: &str) -> Option<String> {
+    catalog().detect_path(path).map(str::to_string)
 }
 
 /// Read the grammars now, so the first code block does not wait for them.
@@ -34,7 +42,7 @@ pub fn rows(lang: &str, code: &str, base: Style) -> Option<Vec<Vec<Span<'static>
     if lang.is_empty() {
         return None;
     }
-    let document = highlighter()?.tokenize(lang, code).ok()?;
+    let document = highlighter().tokenize(lang, code).ok()?;
     let mut tokenized = document.lines().iter();
     let mut out = Vec::new();
     for line in code.lines() {
@@ -179,6 +187,14 @@ mod tests {
         ] {
             assert!(rows(lang, "x\n", Style::default()).is_some(), "{lang}");
         }
+    }
+
+    /// A file's language is read off its name.
+    #[test]
+    fn a_file_names_its_language() {
+        assert_eq!(language_for("src/ui/chat.rs").as_deref(), Some("rust"));
+        assert_eq!(language_for("Cargo.toml").as_deref(), Some("toml"));
+        assert_eq!(language_for("notes.unknown-kind"), None);
     }
 
     /// A language the grammars do not know is left to be drawn plain.

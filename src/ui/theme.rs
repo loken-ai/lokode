@@ -20,6 +20,16 @@ const TINT: u8 = 14;
 /// How far code moves from the text towards the accent, out of 255.
 const CODE_TOWARDS_ACCENT: u8 = 60;
 
+/// The colours an added and a removed line lean towards, when the colours are known.
+const ADDED: (u8, u8, u8) = (70, 190, 110);
+const REMOVED: (u8, u8, u8) = (220, 80, 80);
+
+/// How far a changed line moves from the background towards its colour, out of 255.
+const LINE_TINT: u8 = 36;
+
+/// How far a changed word moves from the background towards its colour, out of 255.
+const WORD_TINT: u8 = 90;
+
 /// The accent the colour of code leans towards, when the colours are known.
 const CODE_ACCENT: (u8, u8, u8) = (90, 160, 220);
 
@@ -60,6 +70,33 @@ pub struct Theme {
     pub tint: Option<Color>,
     /// The colours of code, by what each part of it is.
     pub syntax: Syntax,
+    /// How a diff's added and removed lines are drawn.
+    pub diff: DiffStyle,
+}
+
+/// How a diff's added and removed lines are drawn, and the words that changed in them.
+#[derive(Debug, Clone)]
+pub struct DiffStyle {
+    /// Whether the lines sit on a tint, which leaves the code on them its own colours.
+    pub tinted: bool,
+    pub added: Style,
+    pub removed: Style,
+    pub added_word: Style,
+    pub removed_word: Style,
+}
+
+impl Default for DiffStyle {
+    /// Named colours for the lines, and the changed words in bold and underlined.
+    fn default() -> Self {
+        let word = Modifier::BOLD | Modifier::UNDERLINED;
+        Self {
+            tinted: false,
+            added: Style::default().fg(Color::Green),
+            removed: Style::default().fg(Color::Red),
+            added_word: Style::default().fg(Color::Green).add_modifier(word),
+            removed_word: Style::default().fg(Color::Red).add_modifier(word),
+        }
+    }
 }
 
 /// The colours of code, in the terminal's named colours.
@@ -119,6 +156,7 @@ impl Default for Theme {
                 .add_modifier(Modifier::BOLD),
             tint: None,
             syntax: Syntax::default(),
+            diff: DiffStyle::default(),
         }
     }
 }
@@ -169,6 +207,14 @@ impl Theme {
         }
         if truecolor {
             theme.tint = Some(rgb(mix(bg, fg, TINT)));
+            let on = |towards: Rgb, by: u8| Style::default().bg(rgb(mix(bg, towards, by)));
+            theme.diff = DiffStyle {
+                tinted: true,
+                added: on(ADDED, LINE_TINT),
+                removed: on(REMOVED, LINE_TINT),
+                added_word: on(ADDED, WORD_TINT),
+                removed_word: on(REMOVED, WORD_TINT),
+            };
             theme.code = Style::default().fg(rgb(mix(fg, CODE_ACCENT, CODE_TOWARDS_ACCENT)));
         }
         theme

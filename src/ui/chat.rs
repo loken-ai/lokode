@@ -153,7 +153,7 @@ impl Entry {
                 out.push(Line::from(""));
                 out
             }
-            _ => self.lines_inner(open),
+            _ => self.lines_inner(open, width),
         };
         if here {
             // The mark goes in the left margin every line already leaves empty, so
@@ -173,7 +173,7 @@ impl Entry {
         lines
     }
 
-    fn lines_inner(&self, open: bool) -> Vec<Line<'static>> {
+    fn lines_inner(&self, open: bool, width: usize) -> Vec<Line<'static>> {
         match self {
             // The person's own words, marked the way a shell marks a prompt rather than
             // with a header of their own: a line that says "you" over what you just typed
@@ -231,15 +231,16 @@ impl Entry {
                     Span::styled(summary.clone(), ask),
                 ])];
                 if let Some(d) = diff {
+                    let rows = crate::ui::diff::rows(d, width.saturating_sub(4));
+                    let more = rows.len().saturating_sub(DIFF_LINES);
                     out.extend(
-                        d.lines()
+                        rows.into_iter()
                             .take(match open {
                                 true => usize::MAX,
                                 false => DIFF_LINES,
                             })
-                            .map(|l| indent(diff_line(l))),
+                            .map(indent),
                     );
-                    let more = d.lines().count().saturating_sub(DIFF_LINES);
                     if more > 0 && !open {
                         out.push(Line::from(Span::styled(
                             format!("    … {more} more line(s), space to see them"),
@@ -265,7 +266,7 @@ impl Entry {
             // error in the same grey as a footnote is an error nobody reads.
             Entry::Notice(s) => {
                 if looks_like_diff(s) {
-                    return s.lines().map(diff_line).collect();
+                    return crate::ui::diff::rows(s, width);
                 }
                 let bad = says_something_went_wrong(s);
                 let style = match bad {
@@ -519,20 +520,22 @@ fn step_lines(step: &Step, open: bool, width: usize) -> Vec<Line<'static>> {
         }
         Some(o) => {
             let rest: Vec<&str> = o.body.lines().skip(1).collect();
-            let shown = match open {
-                true => rest.len(),
-                false => rest.len().min(BODY_LINES),
+            let evidence: Vec<Line<'static>> = match looks_like_diff(&o.body) {
+                true => crate::ui::diff::rows(&rest.join("\n"), width.saturating_sub(5))
+                    .into_iter()
+                    .map(rail_line)
+                    .collect(),
+                false => rest.iter().map(|l| rail(l.to_string(), t.dim)).collect(),
             };
-            let diff = looks_like_diff(&o.body);
-            for l in &rest[..shown] {
-                out.push(match diff {
-                    true => rail_line(diff_line(l)),
-                    false => rail(l.to_string(), t.dim),
-                });
-            }
-            if rest.len() > shown {
+            let shown = match open {
+                true => evidence.len(),
+                false => evidence.len().min(BODY_LINES),
+            };
+            let more = evidence.len() - shown;
+            out.extend(evidence.into_iter().take(shown));
+            if more > 0 {
                 out.push(rail(
-                    format!("… {} more line(s), space to see them", rest.len() - shown),
+                    format!("… {more} more line(s), space to see them"),
                     t.dim,
                 ));
             }
@@ -667,21 +670,6 @@ const DIFF_LINES: usize = 16;
 fn looks_like_diff(s: &str) -> bool {
     s.lines()
         .any(|l| l.starts_with("@@ ") || l.starts_with("--- ") || l.starts_with("diff --git "))
-}
-
-fn diff_line(l: &str) -> Line<'static> {
-    let style = if l.starts_with("+++") || l.starts_with("---") {
-        theme().dim
-    } else if l.starts_with('+') {
-        Style::default().fg(theme().good)
-    } else if l.starts_with('-') {
-        Style::default().fg(theme().bad)
-    } else if l.starts_with("@@") {
-        Style::default().fg(theme().hunk)
-    } else {
-        Style::default()
-    };
-    Line::from(Span::styled(l.to_string(), style))
 }
 
 #[cfg(test)]
@@ -843,20 +831,6 @@ mod tests {
         assert!(looks_like_diff("diff --git a/x b/x"));
         assert!(!looks_like_diff("- one\n- two\n+ three"));
         assert!(!looks_like_diff("nothing here"));
-    }
-
-    fn colour_of(l: &str) -> Option<Color> {
-        diff_line(l).spans.first().and_then(|s| s.style.fg)
-    }
-
-    #[test]
-    fn diff_lines_are_coloured_by_what_they_are() {
-        assert_eq!(colour_of("+added"), Some(Color::Green));
-        assert_eq!(colour_of("-removed"), Some(Color::Red));
-        assert_eq!(colour_of("@@ -1 +1 @@"), Some(Color::Cyan));
-        // The file headers are not additions and removals, whatever they start with.
-        assert_eq!(colour_of("+++ b/x"), Some(Color::DarkGray));
-        assert_eq!(colour_of("--- a/x"), Some(Color::DarkGray));
     }
 
     /// A tool result that happens to be a diff gets read as one.
@@ -1059,7 +1033,12 @@ pub fn mark_found(line: &Line<'static>, needle: &str) -> Line<'static> {
 ///
 /// Spans are split where the range starts and ends: a span carries its colour, and what is
 /// put on top has to sit over whatever colour is already there rather than replace it.
-fn mark_range(line: &Line<'static>, from: usize, to: usize, marked: Style) -> Line<'static> {
+pub(crate) fn mark_range(
+    line: &Line<'static>,
+    from: usize,
+    to: usize,
+    marked: Style,
+) -> Line<'static> {
     if from >= to {
         return line.clone();
     }

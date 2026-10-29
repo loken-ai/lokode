@@ -3,6 +3,7 @@ pub mod chat;
 pub mod chooser;
 pub mod clipboard;
 mod commands;
+mod diff;
 mod highlight;
 mod input;
 mod markdown;
