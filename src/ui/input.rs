@@ -27,6 +27,11 @@ pub(crate) fn at_start(input: &TextArea) -> bool {
 /// backspace do nothing at all.
 pub(crate) fn fresh_input(text: &str) -> TextArea<'static> {
     let mut input = TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
+    // The line being typed is not underlined: the cursor says where it is.
+    input.set_cursor_line_style(ratatui::style::Style::default());
+    // An empty line says what it is for, every time it is empty.
+    input.set_placeholder_text("ask for something   / commands   @ files   ! a command of yours");
+    input.set_placeholder_style(crate::ui::theme::theme().dim);
     input.move_cursor(ratatui_textarea::CursorMove::End);
     input.move_cursor(ratatui_textarea::CursorMove::Bottom);
     input.move_cursor(ratatui_textarea::CursorMove::End);

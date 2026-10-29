@@ -8,12 +8,7 @@
 //! and closes leaving nothing behind - a chooser is not part of the conversation.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
-
-use crate::ui::theme::theme;
 
 /// How many rows the list may take. Enough to choose from, short enough to leave the
 /// conversation visible behind it.
@@ -113,43 +108,32 @@ impl Picker {
             return;
         }
         let rows = shown.len().min(ROWS);
-        let top = below.y.saturating_sub(rows as u16);
+        let height = rows as u16 + 1;
         let area = Rect {
             x: below.x,
-            y: top,
+            y: below.y.saturating_sub(height),
             width: below.width,
-            height: rows as u16,
+            height,
         };
         // The highlight stays in view when the list is longer than the rows allow.
         let first = self.at.saturating_sub(rows.saturating_sub(1));
-        let lines: Vec<Line<'static>> = shown
-            .iter()
-            .enumerate()
-            .skip(first)
-            .take(rows)
-            .map(|(i, c)| {
-                let here = i == self.at;
-                let mark = if here { "❯ " } else { "  " };
-                let value = Style::default().fg(if here { theme().accent } else { theme().text });
-                let value = match here {
-                    true => value.add_modifier(Modifier::BOLD),
-                    false => value,
-                };
-                Line::from(vec![
-                    Span::styled(mark, value),
-                    Span::styled(c.value.clone(), value),
-                    Span::styled(
-                        match c.about.is_empty() {
-                            true => String::new(),
-                            false => format!("  {}", c.about),
-                        },
-                        theme().dim,
-                    ),
-                ])
-            })
-            .collect();
-        f.render_widget(Clear, area);
-        f.render_widget(Paragraph::new(lines), area);
+        let title = match &self.kind {
+            Kind::Command => "commands".to_string(),
+            Kind::Path => "files".to_string(),
+            Kind::Argument(verb) => format!("/{verb}"),
+        };
+        crate::ui::listing::Listing {
+            title: &title,
+            items: &shown,
+            at: self.at,
+            first,
+            rows,
+            filter: &self.filter,
+            marked: None,
+            keys: &[("tab", "take"), ("↑↓", "move"), ("esc", "close")],
+            paths: self.kind == Kind::Path,
+        }
+        .render(f, area);
     }
 }
 

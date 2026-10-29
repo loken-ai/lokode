@@ -1,24 +1,24 @@
- ▏   test mcp::client::a_silent_server_times_out ... ok                        ▕
-                                                                               ▕
-The client waits on rx.await forever. I add timeout-secs:                      ▕
-                                                                               ▕
-• one setting per server, thirty seconds unless it says otherwise              ▕
-• a test against a server that never answers                                   ▕
-                                                                               ▐
-  rust                                                                         ▐
-  let reply = timeout(self.timeout, rx).await??;                               ▐
-                                                                               ▐
-? edit src/mcp/client.rs                                                       ▐
-    src/mcp/client.rs                                                          ▐
-    @@ -212 +212 @@                                                            ▐
-    212 -     let reply = rx.await?;                                           ▐
-    212 +     let reply = timeout(self.timeout, rx).await??;                   ▐
-  y once   a always (src/mcp/)   n or esc no   e no, and say why               ▐
-                                                                               ▐
- ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files · 0.42 Wh     ▐
-                                                                               ▐
-! backend error: gave up after 3 attempts                                      ▐
+ lokode  /p/demo  main ●2                  qwen3-coder  127.0.0.1:11435  native
+The client waits on rx.await forever. I add timeout-secs:
+
+• one setting per server, thirty seconds unless it says otherwise
+• a test against a server that never answers
+
+  rust
+  let reply = timeout(self.timeout, rx).await??;
+
+ ◉ edit src/mcp/client.rs  waiting for you
+    src/mcp/client.rs
+    ⋯ line 212
+    212 -     let reply = rx.await?;
+    212 +     let reply = timeout(self.timeout, rx).await??;
+
+    y  once   a  always in src/mcp/   n  no   e  no, and say why
+
+ ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files · 0.42 Wh
+
+! backend error: gave up after 3 attempts
 
 ❯
-    ACT    qwen3-coder  demo  ctx 23%  plan 1/3
+    ACT    ctx 23%  plan 1/3
   shift-tab write  enter send  alt-↑ steps  ctrl-f find  ctrl-b rail …

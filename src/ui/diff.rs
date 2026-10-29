@@ -66,10 +66,7 @@ pub fn rows(text: &str, width: usize) -> Vec<Line<'static>> {
                 lang = crate::ui::highlight::language_for(&path);
                 Line::from(Span::styled(path, theme().dim))
             }
-            Row::Hunk(h) => Line::from(Span::styled(
-                h.to_string(),
-                Style::default().fg(theme().hunk),
-            )),
+            Row::Hunk(h) => hunk_row(h),
             Row::Other(o) => Line::from(Span::styled(o.to_string(), theme().dim)),
             Row::Change(c) => change_row(&c, digits, lang.as_deref(), width),
         });
@@ -101,6 +98,22 @@ pub fn changes(text: &str) -> Vec<crate::ui::rail::FileChange> {
         }
     }
     out
+}
+
+/// A hunk's header as where it is: the line it starts at and the code it sits in, rather
+/// than the counts a patch tool needs.
+fn hunk_row(header: &str) -> Line<'static> {
+    let t = theme();
+    let start = hunk_start(header).map(|(_, new)| new).unwrap_or(0);
+    let context = header.splitn(3, "@@").nth(2).map(str::trim).unwrap_or("");
+    let mut spans = vec![Span::styled(
+        format!("⋯ line {start}"),
+        Style::default().fg(t.hunk),
+    )];
+    if !context.is_empty() {
+        spans.push(Span::styled(format!("  {context}"), t.dim));
+    }
+    Line::from(spans)
 }
 
 fn change_row(c: &Change<'_>, digits: usize, lang: Option<&str>, width: usize) -> Line<'static> {
@@ -316,7 +329,7 @@ mod tests {
             text(EDIT),
             vec![
                 "src/mcp/client.rs",
-                "@@ -211,3 +211,3 @@ impl Client",
+                "⋯ line 211  impl Client",
                 "211       let (tx, rx) = oneshot::channel();",
                 "212 -     let reply = rx.await?;",
                 "212 +     let reply = timeout(self.timeout, rx).await?;",

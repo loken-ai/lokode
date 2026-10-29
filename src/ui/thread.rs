@@ -95,6 +95,7 @@ struct Drawn {
     width: usize,
     open: bool,
     here: bool,
+    joined: bool,
     rows: Arc<Vec<Line<'static>>>,
 }
 
@@ -110,6 +111,7 @@ pub struct Drawings {
 impl Drawings {
     /// The rows of an entry wrapped to `width`, drawn again only when the entry, the width,
     /// its unfolding or the pointing mark changed.
+    #[allow(clippy::too_many_arguments)]
     pub fn rows(
         &mut self,
         rev: u64,
@@ -117,9 +119,10 @@ impl Drawings {
         width: usize,
         open: bool,
         here: bool,
+        joined: bool,
     ) -> Arc<Vec<Line<'static>>> {
         if let Some(d) = self.by_rev.get(&rev) {
-            if d.width == width && d.open == open && d.here == here {
+            if d.width == width && d.open == open && d.here == here && d.joined == joined {
                 return d.rows.clone();
             }
         }
@@ -128,7 +131,7 @@ impl Drawings {
             self.drawn += 1;
         }
         let rows = Arc::new(crate::ui::chat::wrap(
-            entry.render_within(open, here, width),
+            entry.render_joined(open, here, width, joined),
             width,
         ));
         self.by_rev.insert(
@@ -137,6 +140,7 @@ impl Drawings {
                 width,
                 open,
                 here,
+                joined,
                 rows: rows.clone(),
             },
         );
@@ -241,21 +245,21 @@ mod tests {
         let mut t = Thread::default();
         t.push(Entry::Notice("hello".into()));
         let mut d = Drawings::default();
-        let first = d.rows(t.rev(0), &t[0], 40, false, false);
+        let first = d.rows(t.rev(0), &t[0], 40, false, false, false);
         assert!(Arc::ptr_eq(
             &first,
-            &d.rows(t.rev(0), &t[0], 40, false, false)
+            &d.rows(t.rev(0), &t[0], 40, false, false, false)
         ));
         assert!(!Arc::ptr_eq(
             &first,
-            &d.rows(t.rev(0), &t[0], 30, false, false)
+            &d.rows(t.rev(0), &t[0], 30, false, false, false)
         ));
         assert!(!Arc::ptr_eq(
             &first,
-            &d.rows(t.rev(0), &t[0], 30, false, true)
+            &d.rows(t.rev(0), &t[0], 30, false, true, false)
         ));
         t[0] = Entry::Notice("changed".into());
-        let after = d.rows(t.rev(0), &t[0], 30, false, true);
+        let after = d.rows(t.rev(0), &t[0], 30, false, true, false);
         assert_eq!(crate::ui::chat::line_text(&after[0]), "▌· changed");
     }
 
@@ -266,7 +270,7 @@ mod tests {
         let mut d = Drawings::default();
         for i in 0..10 {
             t.push(Entry::Notice(format!("{i}")));
-            d.rows(t.rev(i), &t[i], 40, false, false);
+            d.rows(t.rev(i), &t[i], 40, false, false, false);
         }
         t.truncate(2);
         d.forget_gone(&t);

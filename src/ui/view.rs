@@ -32,6 +32,7 @@ pub(crate) fn draw(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Min(3),
             Constraint::Length(1),
             Constraint::Length(typed),
@@ -39,6 +40,9 @@ pub(crate) fn draw(
             Constraint::Length(1),
         ])
         .split(f.area());
+    // The band at the top, then the same areas as before it.
+    let header = chunks[0];
+    let chunks = &chunks[1..];
 
     // Wrapped entry by entry, so where each one begins is known. Pointing at a
     // step said nothing about where it is: the mark went on an entry that could be
@@ -72,15 +76,24 @@ pub(crate) fn draw(
         }
         (false, _) => (chunks[0], None),
     };
-    let width = pane_area.width.saturating_sub(1) as usize;
+    // At most a comfortable reading width: on a wide screen the conversation keeps its
+    // measure, and its surfaces do not run the width of the screen.
+    let width = (pane_area.width.saturating_sub(1) as usize).min(READING_AT_MOST);
     let mut pane = crate::ui::thread::Pane::default();
     for i in 0..state.entries.len() {
+        // A step followed by another step of the turn keeps the rail between them.
+        let joined = matches!(state.entries[i], crate::ui::chat::Entry::Step(_))
+            && matches!(
+                state.entries.get(i + 1),
+                Some(crate::ui::chat::Entry::Step(_))
+            );
         pane.push(state.drawings.rows(
             state.entries.rev(i),
             &state.entries[i],
             width,
             state.unfolded.contains(&i),
             state.at_entry == Some(i),
+            joined,
         ));
     }
     state.drawings.forget_gone(&state.entries);
@@ -133,23 +146,33 @@ pub(crate) fn draw(
     // Nothing used to say the conversation had been scrolled back, or by how
     // much: a pane showing an hour-old answer looks exactly like a pane showing
     // the newest one.
-    if total > inner_h {
+    // Shown once the conversation has been scrolled back, where it says how far: at the
+    // newest line there is nothing for it to say.
+    if total > inner_h && scroll > 0 {
         let mut bar = ratatui::widgets::ScrollbarState::new(total.saturating_sub(inner_h))
             .position(total.saturating_sub(inner_h).saturating_sub(scroll));
         f.render_stateful_widget(
             ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
                 .end_symbol(None)
-                .track_symbol(Some("▕"))
-                .track_style(theme().dim)
+                .track_symbol(None)
                 .thumb_symbol("▐")
-                .thumb_style(Style::default().fg(theme().text)),
+                .thumb_style(theme().dim),
             pane_area,
             &mut bar,
         );
     }
     // Kept for the mouse, which can only say which row was pointed at.
     state.wrapped = pane;
+
+    draw_header(f, header, state, root);
+    // The line being typed sits on a surface of its own, where the terminal can show one.
+    if let Some(tint) = theme().tint {
+        f.render_widget(
+            ratatui::widgets::Block::default().style(Style::default().bg(tint)),
+            chunks[2],
+        );
+    }
 
     // The prompt mark, in its own column, so the text the user types starts where
     // the answers do and a wrapped line does not sit under the mark.
@@ -171,10 +194,6 @@ pub(crate) fn draw(
         typing[0],
     );
     f.render_widget(input, typing[1]);
-    if let Some(picker) = state.picker.as_ref() {
-        picker.render(f, typing[1]);
-    }
-
     if let Some(area) = rail_area {
         crate::ui::rail::Rail {
             model: &state.model,
@@ -190,15 +209,20 @@ pub(crate) fn draw(
         .render(f, area);
     }
 
+    // The completion list, as wide as the conversation it opens over and drawn after the
+    // rail, so the rail never cuts into it.
+    if let Some(picker) = state.picker.as_ref() {
+        picker.render(
+            f,
+            ratatui::layout::Rect {
+                width: pane_area.width,
+                ..chunks[2]
+            },
+        );
+    }
+
     let waiting = state.pending_approval.is_some();
     let status = Status {
-        model: state.model.clone(),
-        // The last component: it is what names the project, and the rest is where
-        // it happens to sit on this disk.
-        root: root
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| root.display().to_string()),
         planning: state.planning,
         pointing: state.at_entry.is_some(),
         context_percent: state.window.percent,
@@ -254,8 +278,12 @@ pub(crate) fn draw(
         } else {
             match (&state.phase, state.prefill) {
                 (Some(crate::agent::agent_loop::Phase::Waiting), Some((done, total))) => {
+                    let cells = 10u64;
+                    let full = (done * cells).checked_div(total).unwrap_or(0).min(cells) as usize;
                     Some(format!(
-                        "reading the prompt, {} of {}",
+                        "reading the prompt {}{} {} of {}",
+                        "▰".repeat(full),
+                        "▱".repeat(cells as usize - full),
                         crate::ui::chat::tokens(done),
                         crate::ui::chat::tokens(total)
                     ))
@@ -289,6 +317,68 @@ pub(crate) fn draw(
     }
 }
 
+/// The band at the top: what this is, where, on which branch with how many files changed,
+/// and which model on which backend answers.
+fn draw_header(f: &mut Frame, area: ratatui::layout::Rect, state: &UiState, root: &Path) {
+    let t = theme();
+    let surface = match t.tint {
+        Some(tint) => Style::default().bg(tint),
+        None => Style::default(),
+    };
+    let home = std::env::var("HOME").unwrap_or_default();
+    let place = root.display().to_string();
+    let place = match (!home.is_empty())
+        .then(|| place.strip_prefix(&home))
+        .flatten()
+    {
+        Some(rest) => format!("~{rest}"),
+        None => place,
+    };
+    let mut left = vec![
+        Span::styled(
+            " lokode ",
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" {place}"), t.dim),
+    ];
+    if let Some((branch, dirty)) = &state.git {
+        left.push(Span::styled(
+            format!("  {branch}"),
+            Style::default().fg(t.syntax.keyword.fg.unwrap_or(t.accent)),
+        ));
+        if *dirty > 0 {
+            left.push(Span::styled(
+                format!(" ●{dirty}"),
+                Style::default().fg(t.warn),
+            ));
+        }
+    }
+    let backend = state
+        .backend
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .to_string();
+    let right = vec![
+        Span::styled(
+            state.model.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("  {backend}  {} ", state.protocol.label()), t.dim),
+    ];
+    let wide = |s: &[Span<'static>]| s.iter().map(|x| x.content.chars().count()).sum::<usize>();
+    let room = area.width as usize;
+    let mut spans = left;
+    let gap = room.saturating_sub(wide(&spans) + wide(&right));
+    if gap >= 2 {
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.extend(right);
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)).style(surface), area);
+}
+
+/// The widest the conversation is laid out, in columns.
+const READING_AT_MOST: usize = 110;
+
 /// How tall the input may grow before it scrolls inside itself.
 const INPUT_MAX_LINES: usize = 6;
 
@@ -319,6 +409,8 @@ mod tests {
             },
             ..Default::default()
         };
+        state.backend = "http://127.0.0.1:11435".into();
+        state.git = Some(("main".into(), 2));
         state.tasks = vec![
             crate::tools::plan::Task {
                 what: "read the MCP client".into(),
@@ -565,5 +657,210 @@ mod tests {
         state.entries.push(Entry::Notice("one more".into()));
         frame(&mut state, 120, 32);
         assert_eq!(state.drawings.drawn, all + 1);
+    }
+
+    /// One scene for the screens: a name, a size, the state and what is typed.
+    struct Scene {
+        name: &'static str,
+        width: u16,
+        height: u16,
+        state: UiState,
+        typed: &'static str,
+    }
+
+    /// The scenes a design pass looks at: a session at three widths, a turn at work, the
+    /// completion lists, a list a command opens, and two pages.
+    fn scenes() -> Vec<Scene> {
+        use crate::ui::picker::{Choice, Kind, Picker};
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut out = Vec::new();
+        for (name, width, height) in [
+            ("session-160", 160, 42),
+            ("session-120", 120, 34),
+            ("session-90", 90, 30),
+        ] {
+            out.push(Scene {
+                name,
+                width,
+                height,
+                state: a_session(),
+                typed: "",
+            });
+        }
+        let mut busy = a_session();
+        busy.busy = true;
+        busy.tick = 3;
+        busy.step = 5;
+        busy.phase = Some(crate::agent::agent_loop::Phase::Waiting);
+        busy.phase_since = Some(std::time::Instant::now());
+        busy.prefill = Some((8192, 20431));
+        let mut running = Step::called("9".into(), "bash".into(), r#"{"cmd":"cargo test"}"#);
+        running.live = (1..=14)
+            .map(|i| format!("test module::case_{i} ... ok"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        busy.entries.push(Entry::Step(running));
+        out.push(Scene {
+            name: "busy-120",
+            width: 120,
+            height: 34,
+            state: busy,
+            typed: "and add a test for a silent server",
+        });
+        let mut commands = a_session();
+        let mut picker = Picker::new(Kind::Command, crate::ui::commands::command_choices(root));
+        picker.narrow("");
+        commands.picker = Some(picker);
+        out.push(Scene {
+            name: "complete-command-120",
+            width: 120,
+            height: 34,
+            state: commands,
+            typed: "/",
+        });
+        let mut paths = a_session();
+        let mut picker = Picker::new(
+            Kind::Path,
+            [
+                "src/ui/app_loop.rs",
+                "src/ui/chat.rs",
+                "src/ui/commands.rs",
+                "src/ui/diff.rs",
+                "src/ui/highlight.rs",
+                "src/ui/markdown.rs",
+                "src/ui/rail.rs",
+            ]
+            .iter()
+            .map(|p| Choice::new(*p, ""))
+            .collect(),
+        );
+        picker.narrow("src/ui/");
+        paths.picker = Some(picker);
+        out.push(Scene {
+            name: "complete-path-120",
+            width: 120,
+            height: 34,
+            state: paths,
+            typed: "why does @src/ui/",
+        });
+        let mut models = a_session();
+        models.choosing = Some(crate::ui::chooser::Chooser::new(
+            "model",
+            "which model answers",
+            [
+                "qwen3-coder:30b",
+                "qwen3:8b",
+                "deepseek-v4.1-flash",
+                "gpt-oss:20b",
+            ]
+            .iter()
+            .map(|m| {
+                crate::ui::chooser::Choice::new(*m, if *m == "qwen3:8b" { "search" } else { "" })
+            })
+            .collect(),
+            Some("qwen3-coder:30b".into()),
+        ));
+        out.push(Scene {
+            name: "choose-model-120",
+            width: 120,
+            height: 34,
+            state: models,
+            typed: "",
+        });
+        let mut help = a_session();
+        help.sheet = Some(crate::ui::sheet::Sheet::new(
+            "help",
+            &crate::ui::commands::help(root),
+        ));
+        out.push(Scene {
+            name: "help-120",
+            width: 120,
+            height: 34,
+            state: help,
+            typed: "",
+        });
+        let mut context = a_session();
+        context.sheet = Some(crate::ui::sheet::Sheet::with(
+            "context",
+            crate::ui::sheet::Body::Window(context.window.clone()),
+        ));
+        out.push(Scene {
+            name: "context-120",
+            width: 120,
+            height: 34,
+            state: context,
+            typed: "",
+        });
+        out
+    }
+
+    /// A colour as the screens write it: `#rrggbb`, a named colour, or `reset`.
+    fn colour_name(c: ratatui::style::Color) -> String {
+        match c {
+            ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            ratatui::style::Color::Reset => "reset".into(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// Draw every scene and write its cells, with their colours and weights, as JSON in
+    /// the directory `LOKODE_SCREENS` names, under the theme `LOKODE_SCREEN_THEME` names.
+    /// Ignored unless asked for: `scripts/screens.sh` runs it and turns the cells into
+    /// pictures.
+    #[test]
+    #[ignore]
+    fn screens() {
+        let Some(dir) = std::env::var_os("LOKODE_SCREENS") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let light = std::env::var("LOKODE_SCREEN_THEME").as_deref() == Ok("light");
+        let (fg, bg) = match light {
+            true => ((30, 30, 30), (250, 250, 248)),
+            false => ((208, 208, 208), (24, 26, 30)),
+        };
+        crate::ui::theme::set(crate::ui::theme::Theme::for_colours(fg, bg, true));
+        std::fs::create_dir_all(&dir).expect("the screens directory");
+        for mut scene in scenes() {
+            let mut terminal =
+                Terminal::new(TestBackend::new(scene.width, scene.height)).expect("a terminal");
+            let input = crate::ui::input::fresh_input(scene.typed);
+            terminal
+                .draw(|f| draw(f, &mut scene.state, &input, Path::new("/p/demo"), 16))
+                .expect("a frame");
+            let buffer = terminal.backend().buffer();
+            let mut rows = Vec::new();
+            for y in 0..scene.height {
+                let mut cells = Vec::new();
+                for x in 0..scene.width {
+                    let cell = &buffer[(x, y)];
+                    let m = cell.modifier;
+                    cells.push(serde_json::json!([
+                        cell.symbol(),
+                        colour_name(cell.fg),
+                        colour_name(cell.bg),
+                        m.contains(Modifier::BOLD),
+                        m.contains(Modifier::ITALIC),
+                        m.contains(Modifier::UNDERLINED),
+                        m.contains(Modifier::REVERSED),
+                        m.contains(Modifier::DIM),
+                    ]));
+                }
+                rows.push(serde_json::Value::Array(cells));
+            }
+            let doc = serde_json::json!({
+                "name": scene.name,
+                "theme": if light { "light" } else { "dark" },
+                "fg": format!("#{:02x}{:02x}{:02x}", fg.0, fg.1, fg.2),
+                "bg": format!("#{:02x}{:02x}{:02x}", bg.0, bg.1, bg.2),
+                "rows": rows,
+            });
+            let path = dir.join(format!(
+                "{}-{}.json",
+                scene.name,
+                if light { "light" } else { "dark" }
+            ));
+            std::fs::write(&path, doc.to_string()).expect("a screen written");
+        }
     }
 }

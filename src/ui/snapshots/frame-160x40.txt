@@ -1,12 +1,13 @@
+ lokode  /p/demo  main ●2                                                                                                  qwen3-coder  127.0.0.1:11435  native
 · backend http://127.0.0.1:11435
-> add a configurable timeout to the MCP calls                                                                                PLAN                           1/3
+› add a configurable timeout to the MCP calls                                                                                PLAN                           1/3
                                                                                                                              ● read the MCP client
   the client awaits its reply without a bound                                                                                ◉ a timeout for every server
- ● read_file  src/mcp/client.rs                                                                          guessed  212 lines  ○ test a silent server
+ ● read_file  src/mcp/client.rs                                                   guessed  212 lines                         ○ test a silent server
  ▏     1 use std::time::Duration;
  ▏     2 use tokio::sync::oneshot;                                                                                           CHANGES                      +5 -1
-                                                                                                                             src/mcp/client.rs            +3 -1
- ● bash  cargo test mcp                                                                                     14 passed  9.8s  src/config.rs                +2 -0
+ ▏                                                                                                                           src/mcp/client.rs            +3 -1
+ ● bash  cargo test mcp                                                              14 passed  9.8s                         src/config.rs                +2 -0
  ▏   test mcp::client::a_silent_server_times_out ... ok
                                                                                                                              CONTEXT                        23%
 The client waits on rx.await forever. I add timeout-secs:                                                                    ████████··························
@@ -17,15 +18,16 @@ The client waits on rx.await forever. I add timeout-secs:                       
   rust                                                                                                                       qwen3-coder
   let reply = timeout(self.timeout, rx).await??;                                                                             ▄▆████ 93 tok/s
                                                                                                                              power   ▄▇██ 312 W  87% busy
-? edit src/mcp/client.rs                                                                                                     time    read 0.7s · write 3.1s
+ ◉ edit src/mcp/client.rs  waiting for you                                                                                   time    read 0.7s · write 3.1s
     src/mcp/client.rs                                                                                                        prompt  6.1k, 4.2k held
-    @@ -212 +212 @@                                                                                                          cache   ▰▰▱▱▱▱▱▱▱▱ 15%
+    ⋯ line 212                                                                                                               cache   ▰▰▱▱▱▱▱▱▱▱ 15%
     212 -     let reply = rx.await?;                                                                                         drafts  82% kept
     212 +     let reply = timeout(self.timeout, rx).await??;                                                                 energy  ≈0.31 Wh  session ≈0.42 Wh
-  y once   a always (src/mcp/)   n or esc no   e no, and say why
-                                                                                                                             TURNS TO PUT BACK
- ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files · 0.42 Wh                     /undo put back  /diff see it    1  src/config.rs
-                                                                                                                             /undo <turn> puts one back
+
+    y  once   a  always in src/mcp/   n  no   e  no, and say why                                                             TURNS TO PUT BACK
+                                                                                                                               1  src/config.rs
+ ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files · 0.42 Wh        /undo put back  /diff see it               /undo <turn> puts one back
+
 ! backend error: gave up after 3 attempts
 
 
@@ -33,8 +35,6 @@ The client waits on rx.await forever. I add timeout-secs:                       
 
 
 
-
-
 ❯
-    ACT    qwen3-coder  demo  ctx 23%
+    ACT    ctx 23%
   shift-tab write  enter send  alt-↑ steps  ctrl-f find  /help more  ctrl-c leave

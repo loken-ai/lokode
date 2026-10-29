@@ -145,9 +145,22 @@ impl Entry {
     /// The entry's lines for a pane `width` columns wide, which a step uses to put its
     /// outcome at the right edge. Zero leaves the outcome beside the call.
     pub fn render_within(&self, open: bool, here: bool, width: usize) -> Vec<Line<'static>> {
+        self.render_joined(open, here, width, false)
+    }
+
+    /// As [`Entry::render_within`], with `joined` saying a step follows this one in the
+    /// same turn, so the rail carries on through the row between them.
+    pub fn render_joined(
+        &self,
+        open: bool,
+        here: bool,
+        width: usize,
+        joined: bool,
+    ) -> Vec<Line<'static>> {
         let mut lines = match self {
-            Entry::Step(step) => step_lines(step, open, width),
+            Entry::Step(step) => step_lines(step, open, width, joined),
             Entry::Receipt(r) => receipt_lines(r, width, here),
+            Entry::User(s) => user_lines(s, width),
             Entry::Assistant(s) | Entry::AssistantStreaming(s) => {
                 let mut out = crate::ui::markdown::render(s, width);
                 out.push(Line::from(""));
@@ -202,7 +215,7 @@ impl Entry {
                 out.push(Line::from(""));
                 out
             }
-            Entry::Step(step) => step_lines(step, open, 0),
+            Entry::Step(step) => step_lines(step, open, 0, false),
             Entry::Receipt(r) => receipt_lines(r, 0, false),
             // `/diff` answers through a notice, and a wall of uncoloured diff is the thing
             // it is least useful as.
@@ -223,12 +236,14 @@ impl Entry {
                 scope,
                 ..
             } => {
-                let ask = Style::default()
-                    .fg(theme().warn)
-                    .add_modifier(Modifier::BOLD);
+                let t = theme();
+                let ask = Style::default().fg(t.warn).add_modifier(Modifier::BOLD);
                 let mut out = vec![Line::from(vec![
-                    Span::styled("? ", ask),
+                    Span::raw(" "),
+                    Span::styled("◉", Style::default().fg(t.warn)),
+                    Span::raw(" "),
                     Span::styled(summary.clone(), ask),
+                    Span::styled("  waiting for you", t.dim),
                 ])];
                 if let Some(d) = diff {
                     let rows = crate::ui::diff::rows(d, width.saturating_sub(4));
@@ -248,16 +263,54 @@ impl Entry {
                         )));
                     }
                 }
-                // The line a shell command is given is the one worth correcting, so the
-                // key that does it is offered only where there is a command to correct.
-                let fix = match summary.starts_with("$ ") {
-                    true => "   x no, let me fix it",
-                    false => "",
+                // The keys as badges, the letter on the colour of the question. The line a
+                // shell command is given is the one worth correcting, so the key that does it
+                // is offered only where there is a command to correct.
+                let badge = |k: &str| {
+                    Span::styled(
+                        format!(" {k} "),
+                        Style::default()
+                            .fg(t.ink)
+                            .bg(t.warn)
+                            .add_modifier(Modifier::BOLD),
+                    )
                 };
-                out.push(Line::from(Span::styled(
-                    format!("  y once   a always ({scope})   n or esc no   e no, and say why{fix}"),
-                    Style::default().fg(theme().warn),
-                )));
+                let mut keys = vec![
+                    Span::raw("   "),
+                    badge("y"),
+                    Span::styled(" once  ", t.dim),
+                    badge("a"),
+                    Span::styled(format!(" always in {scope}  "), t.dim),
+                    badge("n"),
+                    Span::styled(" no  ", t.dim),
+                    badge("e"),
+                    Span::styled(" no, and say why", t.dim),
+                ];
+                if summary.starts_with("$ ") {
+                    keys.push(Span::raw("  "));
+                    keys.push(badge("x"));
+                    keys.push(Span::styled(" no, let me fix it", t.dim));
+                }
+                out.push(Line::from(""));
+                out.push(Line::from(keys));
+                // On a raised surface of its own, where the terminal can show one: the one
+                // thing on screen that waits for the reader.
+                if let (Some(tint), true) = (t.tint, width > 0) {
+                    for line in out.iter_mut() {
+                        for span in line.spans.iter_mut() {
+                            if span.style.bg.is_none() {
+                                span.style = span.style.bg(tint);
+                            }
+                        }
+                        let used = line_width(line);
+                        if width > used {
+                            line.spans.push(Span::styled(
+                                " ".repeat(width - used),
+                                Style::default().bg(tint),
+                            ));
+                        }
+                    }
+                }
                 out.push(Line::from(""));
                 out
             }
@@ -427,8 +480,9 @@ fn call_subject(name: &str, args: &str) -> String {
 /// The first line of a tool's own result is its answer and goes on the call's line. What
 /// follows is evidence: up to a few lines, the rest counted. An error is shown whole. While
 /// the call runs, the end of what it is printing stands in for the evidence.
-fn step_lines(step: &Step, open: bool, width: usize) -> Vec<Line<'static>> {
+fn step_lines(step: &Step, open: bool, width: usize, joined: bool) -> Vec<Line<'static>> {
     let t = theme();
+    let width = width.min(STEP_AT_MOST);
     let (glyph, glyph_style) = match &step.outcome {
         None => ("◌", Style::default().fg(t.accent)),
         Some(o) if o.is_error && o.body.starts_with("user denied") => {
@@ -541,8 +595,68 @@ fn step_lines(step: &Step, open: bool, width: usize) -> Vec<Line<'static>> {
             }
         }
     }
+    // The row after a step carries the rail on when another step of the turn follows.
+    out.push(match joined {
+        true => Line::from(vec![Span::raw(" "), Span::styled("▏", t.dim)]),
+        false => Line::from(""),
+    });
+    out
+}
+
+/// The person's own words, opening a turn: on a band of the accent where the terminal can
+/// show one, so each turn starts where the eye can find it, and marked with the prompt's
+/// sign otherwise.
+fn user_lines(s: &str, width: usize) -> Vec<Line<'static>> {
+    let t = theme();
+    let mut out = Vec::new();
+    match t.band {
+        Some(band) => {
+            let surface = Style::default().bg(band);
+            let room = width.saturating_sub(3).max(1);
+            for (i, l) in s.lines().enumerate() {
+                for (k, row) in wrap(vec![Line::from(l.to_string())], room)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mark = match (i, k) {
+                        (0, 0) => {
+                            Span::styled(" › ", surface.fg(t.accent).add_modifier(Modifier::BOLD))
+                        }
+                        _ => Span::styled("   ", surface),
+                    };
+                    let mut spans = vec![mark];
+                    spans.extend(
+                        row.spans
+                            .into_iter()
+                            .map(|x| Span::styled(x.content, surface.add_modifier(Modifier::BOLD))),
+                    );
+                    out.push(pad_to(spans, width, surface));
+                }
+            }
+        }
+        None => {
+            for (i, l) in s.lines().enumerate() {
+                out.push(Line::from(vec![
+                    Span::styled(
+                        if i == 0 { "› " } else { "  " },
+                        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(l.to_string(), Style::default().fg(t.accent)),
+                ]));
+            }
+        }
+    }
     out.push(Line::from(""));
     out
+}
+
+/// `spans` filled out to `width` in `style`, so a band's colour runs across the pane.
+fn pad_to(mut spans: Vec<Span<'static>>, width: usize, style: Style) -> Line<'static> {
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    if width > used {
+        spans.push(Span::styled(" ".repeat(width - used), style));
+    }
+    Line::from(spans)
 }
 
 /// The line that closes a turn: how long, how many steps, what was read and written, and
@@ -670,7 +784,10 @@ const BODY_LINES: usize = 8;
 /// less than the pane, because the conversation it is judged against has to stay visible
 /// behind it.
 /// How much of a tool's output is shown while it is still running.
-const RUNNING_LINES: usize = 12;
+const RUNNING_LINES: usize = 6;
+
+/// The widest a step's row is laid out, so its outcome stays near the call on a wide pane.
+const STEP_AT_MOST: usize = 100;
 
 const DIFF_LINES: usize = 16;
 
@@ -895,6 +1012,7 @@ mod tests {
             )),
             false,
             60,
+            false,
         );
         let head = line_text(&rows[0]);
         assert!(
@@ -913,6 +1031,7 @@ mod tests {
             &step(done("12 lines", Duration::ZERO, Origin::Guessed)),
             false,
             0,
+            false,
         );
         let head = line_text(&rows[0]);
         assert!(head.ends_with("guessed  12 lines"), "{head}");
@@ -926,7 +1045,7 @@ mod tests {
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let rows = step_lines(&running, false, 0);
+        let rows = step_lines(&running, false, 0, false);
         assert!(line_text(&rows[0]).starts_with(" ◌ read_file"));
         assert!(line_text(&rows[1]).contains("earlier line(s)"));
         assert_eq!(line_text(&rows[rows.len() - 2]), " ▏   line 29");
@@ -936,7 +1055,7 @@ mod tests {
             took: Duration::ZERO,
             origin: Origin::Ran,
         }));
-        let rows = step_lines(&failed, false, 0);
+        let rows = step_lines(&failed, false, 0, false);
         assert!(line_text(&rows[0]).starts_with(" ✕ read_file"));
         assert!(line_text(&rows[0]).ends_with("failed"));
         assert_eq!(line_text(&rows[1]), " ▏   no such file");

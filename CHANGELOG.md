@@ -15,6 +15,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Interface: follow the terminal's colours, tell Esc and Alt chords apart, show frames whole.
 - Interface: show each step on one line with what it came to and how long it took.
 - Interface: draw again only the entries that changed, so a long session stays fast.
+- Interface: lay out turns, lists and the status line as cards and bands.
 - Engine: read loken's timings, cache, drafts and energy, and the power drawn.
 
 ### Changed

@@ -372,9 +372,19 @@ impl Renderer {
             Some(tint) => Style::default().bg(tint),
             None => Style::default(),
         };
+        // The language heads the block, on its surface, so the block reads as one thing.
         if !lang.is_empty() {
             let mut line = gutter.clone();
-            line.push(Span::styled(format!("  {lang}"), theme().dim));
+            line.push(Span::raw("  "));
+            let label = Line::from(Span::styled(lang.to_string(), theme().dim.patch(surface)));
+            let pad = match (self.width, theme().tint) {
+                (0, _) | (_, None) => 0,
+                (w, Some(_)) => w.saturating_sub(lead + line_width(&label)),
+            };
+            line.extend(label.spans);
+            if pad > 0 {
+                line.push(Span::styled(" ".repeat(pad), surface));
+            }
             self.out.push(Line::from(line));
         }
         let code = code.trim_end_matches('\n');
@@ -408,8 +418,16 @@ impl Renderer {
         let wide = |cell: &Vec<Span<'static>>| -> usize {
             cell.iter().map(|s| s.content.chars().count()).sum()
         };
+        // A row with only its first cell filled heads the rows under it, and takes no part
+        // in how wide the first column is.
+        let heads = |row: &Vec<Vec<Span<'static>>>| {
+            row.len() > 1 && row.iter().skip(1).all(|c| wide(c) == 0)
+        };
         let mut widths = vec![0usize; columns];
-        for row in &table.rows {
+        for (r, row) in table.rows.iter().enumerate() {
+            if r >= table.header_rows && heads(row) {
+                continue;
+            }
             for (i, cell) in row.iter().enumerate() {
                 widths[i] = widths[i].max(wide(cell));
             }
@@ -430,9 +448,7 @@ impl Renderer {
         for (r, row) in table.rows.iter().enumerate() {
             let header = r < table.header_rows;
             let style_of = |span: &Span<'static>| match header {
-                true => span
-                    .style
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                true => span.style.patch(theme().dim).add_modifier(Modifier::BOLD),
                 false => span.style,
             };
             let mut line = gutter.clone();
@@ -598,6 +614,17 @@ mod tests {
                 "                 remember it",
             ]
         );
+    }
+
+    /// A row with only its first cell filled heads the rows under it without widening the
+    /// first column.
+    #[test]
+    fn a_heading_row_does_not_widen_its_column() {
+        let rows = text(
+            "| A | B |\n|---|---|\n| **a long heading** | |\n| x | y |",
+            0,
+        );
+        assert_eq!(rows[2], "  x  y");
     }
 
     /// A link shows where it goes, unless its text already says so.

@@ -206,6 +206,7 @@ pub(crate) async fn refresh_status(
     checkpoints: Option<&Checkpoints>,
     state: &mut UiState,
 ) {
+    state.git = git_state(&state.root).await;
     // What the change history holds, for the rail: the turns that can be put back and
     // what the session changed, file by file.
     if let Some(cp) = checkpoints {
@@ -229,6 +230,26 @@ pub(crate) async fn refresh_status(
         state.window = report.window;
         state.protocol = report.protocol;
     }
+}
+
+/// The branch the project is on and how many files differ from it, or nothing when the
+/// project is not a git repository.
+pub(crate) async fn git_state(root: &std::path::Path) -> Option<(String, usize)> {
+    let git = |args: &'static [&'static str]| {
+        tokio::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+    };
+    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).await.ok()?;
+    if !branch.status.success() {
+        return None;
+    }
+    let status = git(&["status", "--porcelain"]).await.ok()?;
+    Some((
+        String::from_utf8_lossy(&branch.stdout).trim().to_string(),
+        String::from_utf8_lossy(&status.stdout).lines().count(),
+    ))
 }
 
 /// What the servers are and what they offer, for `/mcp`.
@@ -675,14 +696,21 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
 
 /// The commands, the project's own listed after the built-ins.
 pub(crate) fn help(root: &std::path::Path) -> String {
+    // One table, so the columns line up down the page, with each group a row of its own.
     let mut out = String::from("## Commands\n\n| Command | What it does |\n|---|---|\n");
-    for line in HELP.lines().filter_map(|l| l.strip_prefix('/')) {
-        let (name, about) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
-        out.push_str(&format!("| `/{name}` | {} |\n", about.trim()));
+    for (group, names) in GROUPS {
+        out.push_str(&format!("| **{group}** | |\n"));
+        for line in HELP.lines().filter_map(|l| l.strip_prefix('/')) {
+            let (name, about) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+            if names.contains(&name) {
+                out.push_str(&format!("| `/{name}` | {} |\n", about.trim()));
+            }
+        }
     }
+    out.push('\n');
     let mine = crate::config::user_commands(root);
     if !mine.is_empty() {
-        out.push_str("\n## This project's commands\n\n");
+        out.push_str("## This project's commands\n\n");
         for name in mine {
             out.push_str(&format!("- `/{name}`\n"));
         }
@@ -699,6 +727,18 @@ pub(crate) fn help(root: &std::path::Path) -> String {
     );
     out
 }
+
+/// The commands by what they are for, in the order `/help` lists them. Every command of
+/// the help text is in one group.
+const GROUPS: [(&str, &[&str]); 4] = [
+    ("Asking", &["plan", "act", "retry", "model", "compact"]),
+    ("Changes", &["diff", "undo", "approve"]),
+    ("The session", &["clear", "resume", "copy", "init"]),
+    (
+        "Where things stand",
+        &["why", "cost", "context", "digest", "tools", "mcp", "help"],
+    ),
+];
 
 /// The keys, as `/help` lists them.
 const KEYS: [(&str, &str); 15] = [
@@ -768,3 +808,18 @@ pub(crate) const HELP: &str = "\
 /clear  start the conversation again, keeping the project and the model
 /resume come back to a session recorded earlier, choosing from what there is
 /help   this, and any command the project defines";
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+
+    /// Every command the help text names is listed under one group.
+    #[test]
+    fn every_command_has_a_group() {
+        for line in HELP.lines().filter_map(|l| l.strip_prefix('/')) {
+            let name = line.split_whitespace().next().unwrap_or("");
+            let groups = GROUPS.iter().filter(|(_, n)| n.contains(&name)).count();
+            assert_eq!(groups, 1, "/{name} is in {groups} groups");
+        }
+    }
+}

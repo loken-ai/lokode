@@ -20,6 +20,18 @@ const TINT: u8 = 14;
 /// How far code moves from the text towards the accent, out of 255.
 const CODE_TOWARDS_ACCENT: u8 = 60;
 
+/// How far a list or a page over the rest moves from the background, out of 255.
+const RAISED: u8 = 26;
+
+/// The colour the highlighted row and the person's band lean towards.
+const ACCENT: (u8, u8, u8) = (86, 182, 194);
+
+/// How far the highlighted row of a list moves towards the accent, out of 255.
+const CHOSEN: u8 = 80;
+
+/// How far the band under the person's words moves towards the accent, out of 255.
+const BAND: u8 = 24;
+
 /// The colours an added and a removed line lean towards, when the colours are known.
 const ADDED: (u8, u8, u8) = (70, 190, 110);
 const REMOVED: (u8, u8, u8) = (220, 80, 80);
@@ -68,6 +80,12 @@ pub struct Theme {
     pub found: Style,
     /// The background of a raised surface, when the terminal can show one.
     pub tint: Option<Color>,
+    /// The background of a list or a page opened over the rest, raised above a tint.
+    pub raised: Option<Color>,
+    /// The highlighted row of a list.
+    pub chosen_row: Style,
+    /// The band under the person's own words.
+    pub band: Option<Color>,
     /// The colours of code, by what each part of it is.
     pub syntax: Syntax,
     /// How a diff's added and removed lines are drawn.
@@ -155,6 +173,9 @@ impl Default for Theme {
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
             tint: None,
+            raised: None,
+            chosen_row: Style::default().fg(Color::Black).bg(Color::Cyan),
+            band: None,
             syntax: Syntax::default(),
             diff: DiffStyle::default(),
         }
@@ -207,6 +228,11 @@ impl Theme {
         }
         if truecolor {
             theme.tint = Some(rgb(mix(bg, fg, TINT)));
+            theme.raised = Some(rgb(mix(bg, fg, RAISED)));
+            theme.chosen_row = Style::default()
+                .fg(rgb(fg))
+                .bg(rgb(mix(bg, ACCENT, CHOSEN)));
+            theme.band = Some(rgb(mix(bg, ACCENT, BAND)));
             let on = |towards: Rgb, by: u8| Style::default().bg(rgb(mix(bg, towards, by)));
             theme.diff = DiffStyle {
                 tinted: true,

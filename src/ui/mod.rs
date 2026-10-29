@@ -6,6 +6,7 @@ mod commands;
 mod diff;
 mod highlight;
 mod input;
+mod listing;
 mod markdown;
 pub mod picker;
 mod rail;

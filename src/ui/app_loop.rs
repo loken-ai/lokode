@@ -8,7 +8,6 @@ use crossterm::event::{
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use ratatui_textarea::TextArea;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -355,6 +354,8 @@ async fn run_ui(
     let mut state = UiState {
         mouse_ours: true,
         focused: true,
+        backend: cfg.backend_url.clone(),
+        root: cfg.root.clone(),
         planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
         model: model.to_string(),
         protocol,
@@ -392,10 +393,7 @@ async fn run_ui(
             .push(Entry::Notice(format!("warning: {warning}")));
     }
 
-    let mut input = TextArea::default();
-    input.set_placeholder_text(
-        "Ask the model to do something… (Enter to send, Shift-Enter for newline)",
-    );
+    let mut input = fresh_input("");
 
     // The power the backend's machine draws, read while a turn runs against a backend on
     // this machine or network. A hosted one has no such listing to read.
@@ -412,6 +410,8 @@ async fn run_ui(
             ));
         }
     }
+
+    state.git = crate::ui::commands::git_state(&cfg.root).await;
 
     let mut events = EventStream::new();
 
@@ -1344,7 +1344,7 @@ async fn run_ui(
                                 let text: String = input.lines().join("\n");
                                 if text.trim().is_empty() { continue; }
                                 state.entries.push(Entry::User(text.clone()));
-                                input = TextArea::default();
+                                input = fresh_input("");
                                                             // A line beginning with `/` is for lokode, not the model.
                                 // Handled before the turn is started so that `/undo` works
                                 // when the thing you want undone is what the model just did.

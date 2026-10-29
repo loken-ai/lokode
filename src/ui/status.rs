@@ -8,8 +8,6 @@ use crate::ui::theme::theme;
 
 #[derive(Debug, Clone)]
 pub struct Status {
-    pub model: String,
-    pub root: String,
     /// Shown only while planning: acting is the ordinary state and does not need saying.
     pub planning: bool,
     /// Whether the user is looking through the conversation rather than typing into it.
@@ -67,7 +65,7 @@ pub struct Status {
 }
 
 /// The frames of the spinner, one per tick.
-const SPINNER: [&str; 8] = ["|", "/", "-", "\\", "|", "/", "-", "\\"];
+const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
 impl Status {
     /// The line under the input: what is in force on the left, what is happening on the
@@ -86,7 +84,7 @@ impl Status {
                 false => "   ".to_string(),
             },
             Style::default().fg(if self.busy {
-                theme().warn
+                theme().accent
             } else {
                 theme().faint()
             }),
@@ -105,12 +103,17 @@ impl Status {
                 .bg(colour)
                 .add_modifier(Modifier::BOLD),
         ));
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            self.model.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(format!("  {}", self.root), theme().dim));
+        // What the turn is doing comes first, beside the mode: it is what the eye looks for
+        // when the screen has stopped changing. The model and the project are on the band
+        // at the top.
+        if let Some(phase) = self.phase.as_deref().filter(|_| self.busy) {
+            spans.push(Span::styled(
+                format!("  {phase} {}", how_long(self.in_phase)),
+                Style::default()
+                    .fg(theme().warn)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
         // Named, because a bare percentage on a status bar is a number nobody can act
         // on: this one says how close the conversation is to the point where its oldest
         // steps start being dropped to make room.
@@ -138,7 +141,7 @@ impl Status {
         }
         if self.busy {
             spans.push(Span::styled(
-                format!("  {}/{}", self.step, self.max_steps),
+                format!("  step {}/{}", self.step, self.max_steps),
                 theme().dim,
             ));
         }
@@ -178,12 +181,6 @@ impl Status {
             spans.push(Span::styled(
                 format!("  {said}"),
                 Style::default().fg(theme().accent),
-            ));
-        }
-        if let Some(phase) = self.phase.as_deref().filter(|_| self.busy) {
-            spans.push(Span::styled(
-                format!("  {phase} {}", how_long(self.in_phase)),
-                Style::default().fg(theme().warn),
             ));
         }
         Line::from(spans)
@@ -321,8 +318,6 @@ mod tests {
 
     fn status(busy: bool, phase: Option<&str>, in_phase: Duration) -> Status {
         Status {
-            model: "qwen3:8b".into(),
-            root: "/p".into(),
             planning: false,
             pointing: false,
             typing: false,
@@ -368,7 +363,7 @@ mod tests {
         .to_string();
         assert!(line.contains("waiting for the model 8.4s"), "{line}");
         // The spinner takes the place of the dot, so something moves every tick.
-        assert!(line.starts_with(" / "), "{line}");
+        assert!(line.starts_with(" ◓ "), "{line}");
     }
 
     #[test]

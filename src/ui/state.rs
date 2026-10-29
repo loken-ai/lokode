@@ -156,6 +156,12 @@ pub(crate) struct UiState {
     pub(crate) power: Option<crate::backend::devices::Power>,
     /// The latest readings of that power, in watts, oldest first, for the sparkline.
     pub(crate) watts: std::collections::VecDeque<f64>,
+    /// The project's branch and how many files differ from it, when it is a repository.
+    pub(crate) git: Option<(String, usize)>,
+    /// The backend's address, for the band at the top.
+    pub(crate) backend: String,
+    /// The project's root, for asking git where it stands.
+    pub(crate) root: std::path::PathBuf,
     /// Whether the terminal window has the focus, as it last said.
     pub(crate) focused: bool,
     /// The window title as it was last set.
