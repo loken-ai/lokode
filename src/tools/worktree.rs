@@ -14,8 +14,10 @@
 //! The session thus reconciles what both sides meant itself, and the whole stays coherent.
 //! The worktree goes once its work is in, and stays, with its path said, when it cannot be.
 //!
-//! A project outside git, or one its repository does not track, has no worktree: the agent
-//! writes in the project, holding what it writes until it answers.
+//! A project outside git is copied through a private repository kept in the same place, which
+//! holds where the agent started and goes with the copy. A project too large to copy, or one
+//! its repository does not track, has no copy: the agent writes in the project, holding what
+//! it writes until it answers.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,8 +43,12 @@ pub struct Work {
     pub dir: PathBuf,
     /// The project's directory inside the copy, where the agent works.
     pub root: PathBuf,
-    /// The top of the project's repository, where the patch applies.
+    /// The top of the project, where the work comes in: its repository's top, or the
+    /// project itself when it is not in git.
     top: PathBuf,
+    /// The private repository kept for a project outside git, which holds where the agent
+    /// started. `None` when the project's own repository does.
+    git_dir: Option<PathBuf>,
     /// The commit the copy started from.
     base: String,
     /// How many of the session's questions had been asked when the agent started: those
@@ -56,6 +62,10 @@ pub struct Work {
 
 /// Opens what `take_work` says when the proofs do not account for the files.
 pub const REFUSED: &str = "Nothing was written: the proofs do not account for";
+
+/// Bytes of a project outside git a copy may hold. A larger project is worked in directly,
+/// its files held for the agent, rather than copied.
+const MAX_COPY_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Characters of an objective shown in a review: the agent's answer, a question asked.
 const SHOWN_GOAL: usize = 600;
@@ -191,18 +201,22 @@ async fn git_raw(dir: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Result<Ve
 /// A commit of the project at `top` as it stands, files not committed and files git does
 /// not track included, its ignored files left out. Made with an index of its own in
 /// `home`, so the project's branch, index and stash are not touched.
-async fn snapshot(top: &Path, home: &Path, id: u64) -> Result<String> {
+async fn snapshot(top: &Path, home: &Path, id: u64, repo: &[(&str, &Path)]) -> Result<String> {
     let index = home.join(format!("index-{id}-{}", std::process::id()));
-    let envs = [("GIT_INDEX_FILE", index.as_path())];
-    let head = git(top, &["rev-parse", "--verify", "--quiet", "HEAD"])
+    let mut envs: Vec<(&str, &Path)> = repo.to_vec();
+    envs.push(("GIT_INDEX_FILE", index.as_path()));
+    let envs = envs.as_slice();
+    let head = git_raw(top, &["rev-parse", "--verify", "--quiet", "HEAD"], repo)
         .await
-        .ok();
+        .ok()
+        .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+        .filter(|h| !h.is_empty());
     let made = async {
         if let Some(head) = &head {
-            git_raw(top, &["read-tree", head], &envs).await?;
+            git_raw(top, &["read-tree", head], envs).await?;
         }
-        git_raw(top, &["add", "--all"], &envs).await?;
-        let tree = String::from_utf8_lossy(&git_raw(top, &["write-tree"], &envs).await?)
+        git_raw(top, &["add", "--all"], envs).await?;
+        let tree = String::from_utf8_lossy(&git_raw(top, &["write-tree"], envs).await?)
             .trim()
             .to_string();
         let mut args = vec![
@@ -214,7 +228,7 @@ async fn snapshot(top: &Path, home: &Path, id: u64) -> Result<String> {
         if let Some(head) = &head {
             args.extend(["-p", head.as_str()]);
         }
-        let commit = git_raw(top, &args, &envs).await?;
+        let commit = git_raw(top, &args, envs).await?;
         anyhow::Ok(String::from_utf8_lossy(&commit).trim().to_string())
     }
     .await;
@@ -264,7 +278,9 @@ pub enum Taken {
 
 impl Work {
     /// A copy, made in `home`, of the project at `root` for the agent `agent`, numbered
-    /// `id`, as the project stands now. `None` for a project outside git.
+    /// `id`, as the project stands now. A project outside git has a private repository kept
+    /// for it in `home`, which holds where the agent started. `None` when the project is
+    /// too large to copy.
     pub async fn make(
         home: &Path,
         root: &Path,
@@ -272,32 +288,55 @@ impl Work {
         agent: &str,
         task: &str,
     ) -> Result<Option<Work>> {
-        let Ok(top) = git(root, &["rev-parse", "--show-toplevel"]).await else {
-            return Ok(None);
-        };
-        let top = PathBuf::from(top);
         std::fs::create_dir_all(home)?;
-        let base = snapshot(&top, home, id).await?;
-        let dir = home.join(format!("{agent}-{id}-{}", std::process::id()));
-        let shown = dir.display().to_string();
-        git(
-            &top,
-            &["worktree", "add", "--quiet", "--detach", &shown, &base],
-        )
-        .await?;
-        let inside = root.strip_prefix(&top).unwrap_or(Path::new(""));
-        let work = Work {
+        let tag = format!("{agent}-{id}-{}", std::process::id());
+        let (top, git_dir) = match git(root, &["rev-parse", "--show-toplevel"]).await {
+            Ok(top) => (PathBuf::from(top), None),
+            Err(_) => {
+                let repo = home.join(format!("{tag}.git"));
+                git_raw(
+                    home,
+                    &["init", "--quiet", "--bare"],
+                    &[("GIT_DIR", repo.as_path())],
+                )
+                .await?;
+                (root.to_path_buf(), Some(repo))
+            }
+        };
+        let mut work = Work {
             id,
             agent: agent.to_string(),
             task: task.to_string(),
-            root: dir.join(inside),
-            dir,
+            root: PathBuf::new(),
+            dir: home.join(&tag),
             top,
-            base,
+            git_dir,
+            base: String::new(),
             asked_from: 0,
             answer: String::new(),
             reviewed: None,
         };
+        work.base = snapshot(&work.top, home, id, &work.repo_env()).await?;
+        if work.git_dir.is_some() && work.size().await > MAX_COPY_BYTES {
+            work.remove().await;
+            return Ok(None);
+        }
+        let shown = work.dir.display().to_string();
+        // Only the repository's own directory: a work tree named here would make git take
+        // the project for the main checkout of a repository it is not.
+        let envs: Vec<(&str, &Path)> = work
+            .git_dir
+            .iter()
+            .map(|g| ("GIT_DIR", g.as_path()))
+            .collect();
+        git_raw(
+            &work.top,
+            &["worktree", "add", "--quiet", "--detach", &shown, &work.base],
+            &envs,
+        )
+        .await?;
+        let inside = root.strip_prefix(&work.top).unwrap_or(Path::new(""));
+        work.root = work.dir.join(inside);
         // A project its repository does not track, an ignored directory of an enclosing one,
         // is not in the copy: the agent then writes in the project, holding what it writes.
         if !work.root.is_dir() {
@@ -305,6 +344,36 @@ impl Work {
             return Ok(None);
         }
         Ok(Some(work))
+    }
+
+    /// The environment that points git at the repository holding where the agent started.
+    fn repo_env(&self) -> Vec<(&'static str, &Path)> {
+        match &self.git_dir {
+            Some(dir) => vec![
+                ("GIT_DIR", dir.as_path()),
+                ("GIT_WORK_TREE", self.top.as_path()),
+            ],
+            None => Vec::new(),
+        }
+    }
+
+    /// Git in the project's side: its repository, or the private one for a project outside
+    /// git.
+    async fn pg(&self, args: &[&str]) -> Result<String> {
+        let out = git_raw(&self.top, args, &self.repo_env()).await?;
+        Ok(String::from_utf8_lossy(&out).trim_end().to_string())
+    }
+
+    /// The bytes the project's files take, as the copy would hold them.
+    async fn size(&self) -> u64 {
+        self.pg(&["ls-tree", "-r", "-l", &self.base])
+            .await
+            .map(|out| {
+                out.lines()
+                    .filter_map(|l| l.split_whitespace().nth(3)?.parse::<u64>().ok())
+                    .sum()
+            })
+            .unwrap_or(0)
     }
 
     /// The agent's copy as it stands, as a commit on where it started.
@@ -327,21 +396,19 @@ impl Work {
 
     /// The files changed between two commits.
     async fn changed(&self, from: &str, to: &str) -> Result<Vec<String>> {
-        Ok(git(
-            &self.top,
-            &["diff", "--name-only", "--no-renames", from, to],
-        )
-        .await?
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
-        .collect())
+        Ok(self
+            .pg(&["diff", "--name-only", "--no-renames", from, to])
+            .await?
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect())
     }
 
     /// What the project and the agent changed since the agent started.
     pub async fn sides(&self) -> Result<Sides> {
         let home = self.dir.parent().unwrap_or(&self.dir).to_path_buf();
-        let now = snapshot(&self.top, &home, self.id).await?;
+        let now = snapshot(&self.top, &home, self.id, &self.repo_env()).await?;
         let theirs = self.theirs().await?;
         Ok(Sides {
             project: self.changed(&self.base, &now).await?,
@@ -354,11 +421,9 @@ impl Work {
     /// Everything the agent changed in its copy, as one patch against where it started.
     pub async fn patch(&self) -> Result<String> {
         let theirs = self.theirs().await?;
-        let mut patch = git(
-            &self.top,
-            &["diff", "-U1", "--no-renames", &self.base, &theirs],
-        )
-        .await?;
+        let mut patch = self
+            .pg(&["diff", "-U1", "--no-renames", &self.base, &theirs])
+            .await?;
         if !patch.is_empty() {
             patch.push('\n');
         }
@@ -368,10 +433,14 @@ impl Work {
     /// The text of `path` at `commit`, empty when it is not there.
     async fn at(&self, commit: &str, path: &str) -> String {
         // As stored, its last newline kept: a comparison by lines depends on it.
-        git_raw(&self.top, &["show", &format!("{commit}:{path}")], &[])
-            .await
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default()
+        git_raw(
+            &self.top,
+            &["show", &format!("{commit}:{path}")],
+            &self.repo_env(),
+        )
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default()
     }
 
     /// Bring the work in, or say what the session must do first. `proofs` say how each
@@ -461,12 +530,10 @@ impl Work {
         asked: &[String],
         max_chars: usize,
     ) -> String {
-        let stat = git(
-            &self.top,
-            &["diff", "--stat", "--no-renames", &self.base, &sides.now],
-        )
-        .await
-        .unwrap_or_default();
+        let stat = self
+            .pg(&["diff", "--stat", "--no-renames", &self.base, &sides.now])
+            .await
+            .unwrap_or_default();
         let short = |t: &str| t.chars().take(SHOWN_GOAL).collect::<String>();
         let since: Vec<String> = asked
             .iter()
@@ -502,18 +569,14 @@ impl Work {
                 both.join(", ")
             ));
             for path in both {
-                let ours = git(
-                    &self.top,
-                    &["diff", "-U1", &self.base, &sides.now, "--", path],
-                )
-                .await
-                .unwrap_or_default();
-                let theirs = git(
-                    &self.top,
-                    &["diff", "-U1", &self.base, &sides.theirs, "--", path],
-                )
-                .await
-                .unwrap_or_default();
+                let ours = self
+                    .pg(&["diff", "-U1", &self.base, &sides.now, "--", path])
+                    .await
+                    .unwrap_or_default();
+                let theirs = self
+                    .pg(&["diff", "-U1", &self.base, &sides.theirs, "--", path])
+                    .await
+                    .unwrap_or_default();
                 out.push_str(&format!(
                     "\n{path}, the project:\n```diff\n{ours}\n```\n{path}, the agent:\n```diff\n{theirs}\n```\n"
                 ));
@@ -525,13 +588,22 @@ impl Work {
     /// Take the copy away.
     pub async fn remove(&self) {
         let shown = self.dir.display().to_string();
-        if git(&self.top, &["worktree", "remove", "--force", &shown])
+        // Naming the repository alone, as when the copy was made.
+        let envs: Vec<(&str, &Path)> = self
+            .git_dir
+            .iter()
+            .map(|g| ("GIT_DIR", g.as_path()))
+            .collect();
+        if git_raw(&self.top, &["worktree", "remove", "--force", &shown], &envs)
             .await
             .is_err()
         {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
-        let _ = git(&self.top, &["worktree", "prune"]).await;
+        let _ = git_raw(&self.top, &["worktree", "prune"], &envs).await;
+        if let Some(repo) = &self.git_dir {
+            let _ = std::fs::remove_dir_all(repo);
+        }
     }
 
     /// What the session is told once the agent answered: its answer, what it changed and
@@ -712,6 +784,76 @@ mod tests {
     async fn take(tool: &TakeWork, args: Value) -> ToolOutput {
         let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
         tool.run(&h.ctx, args).await.unwrap()
+    }
+
+    /// A project outside git is copied through a private repository, its ignored files left
+    /// out, its work reconciled as in git, and the private repository goes with the copy.
+    #[tokio::test]
+    async fn a_project_outside_git_is_copied_and_taken_back() {
+        let state = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let p = project.path();
+        std::fs::write(p.join(".gitignore"), "*.tmp\n").unwrap();
+        std::fs::write(p.join("a.txt"), "one\n").unwrap();
+        std::fs::write(p.join("skip.tmp"), "ignored\n").unwrap();
+        assert!(!p.join(".git").exists());
+
+        let work = Work::make(state.path(), p, 3, "scribe", "write b")
+            .await
+            .unwrap()
+            .expect("a small project outside git is copied");
+        assert_eq!(
+            std::fs::read_to_string(work.root.join("a.txt")).unwrap(),
+            "one\n"
+        );
+        assert!(!work.root.join("skip.tmp").exists());
+        assert!(!p.join(".git").exists(), "the project became a repository");
+        std::fs::write(work.root.join("b.txt"), "new\n").unwrap();
+        assert!(!p.join("b.txt").exists());
+
+        let pending: Pending = Default::default();
+        pending.lock().unwrap().insert(3, work.clone());
+        let tool = TakeWork::new(pending);
+        let out = take(&tool, json!({"work": 3})).await;
+        assert!(out.content.contains("patched b.txt"), "{}", out.content);
+        assert_eq!(std::fs::read_to_string(p.join("b.txt")).unwrap(), "new\n");
+        assert!(!work.dir.exists());
+        assert!(
+            std::fs::read_dir(state.path()).unwrap().next().is_none(),
+            "the private repository stayed"
+        );
+
+        // The project changed meanwhile: the same review as in git.
+        let work = Work::make(state.path(), p, 4, "scribe", "edit a")
+            .await
+            .unwrap()
+            .unwrap();
+        std::fs::write(work.root.join("a.txt"), "one\ntheirs\n").unwrap();
+        std::fs::write(p.join("a.txt"), "ONE\n").unwrap();
+        let pending: Pending = Default::default();
+        pending.lock().unwrap().insert(4, work);
+        let review = take(&TakeWork::new(pending), json!({"work": 4})).await;
+        assert!(
+            review.content.contains("Both changed a.txt"),
+            "{}",
+            review.content
+        );
+    }
+
+    /// A project too large to copy is not copied.
+    #[tokio::test]
+    async fn a_project_too_large_is_not_copied() {
+        let state = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let big = vec![b'x'; (MAX_COPY_BYTES / 4 + 1) as usize];
+        for n in 0..5 {
+            std::fs::write(project.path().join(format!("f{n}")), &big).unwrap();
+        }
+        let none = Work::make(state.path(), project.path(), 1, "scribe", "t")
+            .await
+            .unwrap();
+        assert!(none.is_none());
+        assert!(std::fs::read_dir(state.path()).unwrap().next().is_none());
     }
 
     /// A copy starts from the project as it stands, files not committed or not tracked
