@@ -416,9 +416,7 @@ async fn run_ui(
     let mut events = EventStream::new();
     let mut injected: std::collections::VecDeque<Event> = Default::default();
     // What a command of the person's own came to, when it ends.
-    // Lines a command prints are dropped when the screen is behind, and its end is waited
-    // for, so a command that prints without pause cannot fill memory.
-    let (hand_tx, mut hand_rx) = mpsc::channel::<Hand>(HAND_LINES_HELD);
+    let (hand_tx, mut hand_rx) = mpsc::channel::<Hand>(HAND_NEWS_HELD);
     let mut hand_runs = 0usize;
 
     loop {
@@ -519,7 +517,7 @@ async fn run_ui(
             Some(power) = power_rx.recv() => state.note_power(power),
 
             Some(news) = hand_rx.recv() => match news {
-                Hand::Line(id, line) => state.print_line(Some(&id), "$", &line),
+                Hand::Printed(id, tail) => state.show_tail(Some(&id), "$", tail.read()),
                 Hand::Done { id, command, is_error, body, took } => {
                     state.hand.retain(|(running, _)| *running != id);
                     // Handed to the conversation as well: running a test and then asking
@@ -547,9 +545,13 @@ async fn run_ui(
                 // Kept as one entry that grows rather than a line each: a build's output
                 // is one thing happening, and a hundred entries would push the answer it
                 // belongs to off the screen.
-                match printed.sub {
-                    Some(sub) => state.apply_sub(printed.call.as_deref(), sub),
-                    None => state.print_line(printed.call.as_deref(), &printed.tool, &printed.line),
+                match printed.what {
+                    crate::tools::registry::Live::Printed(tail) => {
+                        state.show_tail(printed.call.as_deref(), &printed.tool, tail.read())
+                    }
+                    crate::tools::registry::Live::Sub(sub) => {
+                        state.apply_sub(printed.call.as_deref(), sub)
+                    }
                 }
             }
 
@@ -1630,8 +1632,15 @@ async fn run_ui(
                                         let started = Instant::now();
                                         let printed = done.clone();
                                         let line_id = id.clone();
+                                        let tail = std::sync::Arc::new(crate::tools::registry::Tail::default());
                                         let (is_error, body) = run_shell(&command, &root, cap, stop, |line| {
-                                            let _ = printed.try_send(Hand::Line(line_id.clone(), line));
+                                            if tail.push(line)
+                                                && printed
+                                                    .try_send(Hand::Printed(line_id.clone(), tail.clone()))
+                                                    .is_err()
+                                            {
+                                                tail.untell();
+                                            }
                                         })
                                         .await;
                                         let _ = done
@@ -1907,13 +1916,14 @@ async fn run_ui(
     }
 }
 
-/// How many lines of the person's own commands wait for the screen before more are dropped.
-const HAND_LINES_HELD: usize = 256;
+/// How many messages from the person's own commands wait for the screen. A command has
+/// at most one about its tail waiting, so the end of a command always finds room.
+const HAND_NEWS_HELD: usize = 64;
 
 /// What a command of the person's own sends while it runs.
 enum Hand {
-    /// A line it printed, by the id of its step.
-    Line(String, String),
+    /// Its tail changed, by the id of its step.
+    Printed(String, std::sync::Arc<crate::tools::registry::Tail>),
     /// What it came to.
     Done {
         id: String,

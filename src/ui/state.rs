@@ -70,12 +70,6 @@ pub(crate) enum Click {
 /// How long the status line keeps saying what was just done.
 pub(crate) const SAID_FOR: Duration = Duration::from_secs(4);
 
-/// How much of a running tool's output is kept for the rest to be unfolded onto.
-///
-/// A build that fails a hundred lines before it stops used to have those hundred lines
-/// dropped as they arrived, so the only way to see them was to wait for the run to end.
-pub(crate) const KEPT_OUTPUT_LINES: usize = 400;
-
 /// How often the spinner moves and the phase clock counts, while there is work to show.
 const TICK_EVERY: Duration = Duration::from_millis(120);
 
@@ -636,13 +630,13 @@ impl UiState {
         }
     }
 
-    /// Add a line a tool just printed to the step that is running it.
+    /// Show the end of what a tool has printed under the step that is running it.
     ///
     /// A line from a tool with no step running is dropped: the result carries it anyway.
-    pub(crate) fn print_line(&mut self, call: Option<&str>, tool: &str, line: &str) {
-        // By the call when the line says which, so calls to one tool side by side keep
-        // their lines apart. A call that is not a step here, one made inside a delegated
-        // session, prints nothing.
+    pub(crate) fn show_tail(&mut self, call: Option<&str>, tool: &str, tail: String) {
+        // By the call when it says which, so calls to one tool side by side keep their
+        // output apart. A call that is not a step here, one made inside a delegated
+        // session, shows nothing.
         let at = match call {
             Some(id) => self.step_of_call(id),
             None => self.step_running(tool),
@@ -650,20 +644,10 @@ impl UiState {
         let Some(at) = at else {
             return;
         };
-        let Entry::Step(Step { live: body, .. }) = &mut self.entries[at] else {
+        let Entry::Step(Step { live, .. }) = &mut self.entries[at] else {
             unreachable!("step_running names a step")
         };
-        if !body.is_empty() {
-            body.push('\n');
-        }
-        body.push_str(line);
-        // Only the tail is kept, and only the end of that is shown: the whole of it
-        // reaches the model in the result, and what a person wants while it runs is where
-        // it is now, with the rest a keypress away.
-        let lines: Vec<&str> = body.lines().collect();
-        if lines.len() > KEPT_OUTPUT_LINES {
-            *body = lines[lines.len() - KEPT_OUTPUT_LINES..].join("\n");
-        }
+        *live = tail;
     }
 
     /// Put the screen back to how it opened, keeping what a session is rather than what
@@ -842,11 +826,11 @@ mod tests {
         state
             .entries
             .push(Entry::Step(Step::called("7".into(), "shell".into(), "{}")));
-        state.print_line(None, "shell", "compiling");
+        state.show_tail(None, "shell", "compiling".into());
         state
             .entries
             .push(Entry::Notice("context budget now".into()));
-        state.print_line(None, "shell", "linking");
+        state.show_tail(None, "shell", "compiling\nlinking".into());
         assert_eq!(state.entries.len(), 2);
         assert!(matches!(
             &state.entries[0],
@@ -885,9 +869,9 @@ mod tests {
             "delegate".into(),
             "{}",
         )));
-        state.print_line(Some("a"), "delegate", "read_file  src/x.rs");
-        state.print_line(Some("b"), "delegate", "grep  timeout");
-        state.print_line(Some("elsewhere"), "bash", "dropped");
+        state.show_tail(Some("a"), "delegate", "read_file  src/x.rs".into());
+        state.show_tail(Some("b"), "delegate", "grep  timeout".into());
+        state.show_tail(Some("elsewhere"), "bash", "dropped".into());
         let live = |at: usize| match &state.entries[at] {
             Entry::Step(s) => s.live.clone(),
             _ => String::new(),
@@ -925,17 +909,26 @@ mod tests {
         state
             .entries
             .push(Entry::Step(Step::called("1".into(), "shell".into(), "{}")));
-        for i in 0..KEPT_OUTPUT_LINES + 50 {
-            state.print_line(None, "shell", &format!("line {i}"));
-        }
+        let tail = crate::tools::registry::Tail::default();
+        let kept = crate::tools::registry::TAIL_LINES;
+        let told = (0..kept + 50)
+            .filter(|i| tail.push(format!("line {i}")))
+            .count();
+        // Told once, however many lines came before the screen read them.
+        assert_eq!(told, 1);
+        state.show_tail(None, "shell", tail.read());
         let Entry::Step(Step { live: body, .. }) = &state.entries[0] else {
             panic!("one block of output")
         };
-        assert_eq!(body.lines().count(), KEPT_OUTPUT_LINES);
-        assert!(body.ends_with(&format!("line {}", KEPT_OUTPUT_LINES + 49)));
+        assert_eq!(body.lines().count(), kept);
+        assert!(body.ends_with(&format!("line {}", kept + 49)));
+        assert!(
+            tail.push("more".into()),
+            "a line after a read tells the screen again"
+        );
         // Folded, only the end of it is on screen; unfolded, all of it is.
-        assert!(state.entries[0].render(false, false).len() < KEPT_OUTPUT_LINES);
-        assert!(state.entries[0].render(true, false).len() > KEPT_OUTPUT_LINES);
+        assert!(state.entries[0].render(false, false).len() < kept);
+        assert!(state.entries[0].render(true, false).len() > kept);
     }
 
     /// A row on screen is a line of the conversation, and which line depends on where the

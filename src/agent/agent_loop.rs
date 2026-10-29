@@ -2841,9 +2841,11 @@ impl Agent {
     }
 
     async fn dispatch_tool(&self, id: &str, name: &str, args: Value) -> ToolOutput {
-        // The call's own context, so what the tool prints carries the id of its step.
+        // The call's own context: what it prints carries the id of its step and fills a
+        // tail of its own.
         let ctx = crate::tools::registry::ToolCtx {
             call: Some(id.to_string()),
+            tail: Default::default(),
             ..self.ctx.clone()
         };
         let Some(tool) = self.registry.get(name) else {

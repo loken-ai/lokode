@@ -29,6 +29,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 ### Fixed
 
 - Interface: stop redrawing while idle.
+- Interface: keep the last lines of a call that prints fast.
 
 ### Removed
 

@@ -76,6 +76,7 @@ impl Harness {
             allow_hosts: Arc::new(Default::default()),
             shell_writable: None,
             known: Default::default(),
+            tail: Default::default(),
         };
 
         Self {

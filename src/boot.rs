@@ -113,6 +113,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         http: crate::tools::registry::tool_http_client()?,
         allow_hosts: Arc::new(cfg.allow_hosts.clone()),
         known: Default::default(),
+        tail: Default::default(),
         shell_writable: cfg.shell_writable.clone().map(Arc::new),
     };
 

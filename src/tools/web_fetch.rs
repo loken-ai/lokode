@@ -490,6 +490,7 @@ mod tests {
             allow_hosts: Arc::new(allow.iter().map(|s| s.to_string()).collect()),
             shell_writable: None,
             known: Default::default(),
+            tail: Default::default(),
         }
     }
 

@@ -195,6 +195,7 @@ pub(crate) fn draw(
     );
     f.render_widget(input, typing[1]);
     if let Some(area) = rail_area {
+        let jobs = state.jobs();
         crate::ui::rail::Rail {
             model: &state.model,
             tasks: &state.tasks,
@@ -205,7 +206,7 @@ pub(crate) fn draw(
             engine: &state.engine,
             power: state.power.as_ref(),
             watts: &state.watts,
-            jobs: &state.jobs(),
+            jobs: &jobs,
         }
         .render(f, area);
     }

@@ -195,7 +195,9 @@ mod live_tests {
         let mut seen = Vec::new();
         while let Ok(printed) = rx.try_recv() {
             assert_eq!(printed.tool, "bash");
-            seen.push(printed.line);
+            if let crate::tools::registry::Live::Printed(tail) = printed.what {
+                seen = tail.read().lines().map(String::from).collect();
+            }
         }
         assert!(seen.contains(&"line 1".to_string()), "{seen:?}");
         assert!(seen.contains(&"line 3".to_string()), "{seen:?}");

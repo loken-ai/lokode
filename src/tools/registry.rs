@@ -66,6 +66,54 @@ pub struct ToolCtx {
     /// someone changed it in their editor in between, that belief is out of date and the
     /// write silently discards their work.
     pub known: Arc<std::sync::Mutex<HashMap<PathBuf, u64>>>,
+    /// The end of what the call has printed, which the screen reads when told it changed.
+    pub tail: Arc<Tail>,
+}
+
+/// How many of the last lines a call printed are kept for the screen.
+pub const TAIL_LINES: usize = 400;
+
+/// The last lines a call printed, shared with the screen.
+///
+/// The screen is told once that there is something new and reads all of it then, so a call
+/// that prints faster than the screen draws loses no line of its tail.
+#[derive(Debug, Default)]
+pub struct Tail {
+    lines: std::sync::Mutex<std::collections::VecDeque<String>>,
+    told: std::sync::atomic::AtomicBool,
+}
+
+impl Tail {
+    /// Keep `line`, and say whether the screen has to be told: it does when it has read
+    /// everything there was.
+    pub fn push(&self, line: String) -> bool {
+        if let Ok(mut lines) = self.lines.lock() {
+            lines.push_back(line);
+            while lines.len() > TAIL_LINES {
+                lines.pop_front();
+            }
+        }
+        !self.told.swap(true, std::sync::atomic::Ordering::AcqRel)
+    }
+
+    /// Forget that the screen was told, when telling it failed, so the next line tells it.
+    pub fn untell(&self) {
+        self.told.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Everything kept, one line after another. A line kept after this tells the screen
+    /// again.
+    pub fn read(&self) -> String {
+        self.told.store(false, std::sync::atomic::Ordering::Release);
+        match self.lines.lock() {
+            Ok(lines) => lines
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Err(_) => String::new(),
+        }
+    }
 }
 
 /// A cheap content fingerprint, for telling a file that changed from one that did not.
@@ -195,33 +243,38 @@ impl ToolCtx {
         }
     }
 
-    /// Report what a session this call runs is doing, a step at a time. Waited for rather
-    /// than dropped when the screen is behind: a step that never reported its end would be
-    /// shown running for ever.
+    /// Report what a session this call runs is doing, a step at a time. Waited for: a step
+    /// that never reported its end would be shown running for ever.
     pub async fn report(&self, tool: &str, sub: SubEvent) {
+        self.tell(tool, Live::Sub(sub)).await;
+    }
+
+    async fn tell(&self, tool: &str, what: Live) {
         if let Some(live) = &self.live {
             let _ = live
                 .send(LiveOutput {
                     tool: tool.to_string(),
                     call: self.call.clone(),
-                    line: String::new(),
-                    sub: Some(sub),
+                    what,
                 })
                 .await;
         }
     }
 
-    /// Show a line a tool has just printed. Dropped rather than queued when the screen is
-    /// behind: a stale line is worth nothing and holding up a build to deliver one would
-    /// be worse than losing it.
+    /// Keep a line a tool has just printed in the call's tail, and tell the screen when it
+    /// has read the rest. Never waits: a build is not held up for the screen.
     pub fn show(&self, tool: &str, line: &str) {
         if let Some(live) = &self.live {
-            let _ = live.try_send(LiveOutput {
-                tool: tool.to_string(),
-                call: self.call.clone(),
-                line: line.to_string(),
-                sub: None,
-            });
+            if self.tail.push(line.to_string()) {
+                let told = live.try_send(LiveOutput {
+                    tool: tool.to_string(),
+                    call: self.call.clone(),
+                    what: Live::Printed(self.tail.clone()),
+                });
+                if told.is_err() {
+                    self.tail.untell();
+                }
+            }
         }
     }
 
@@ -250,15 +303,22 @@ impl ToolCtx {
     }
 }
 
-/// A line a tool has just printed, on its way to the screen.
+/// What a call tells the screen while it runs.
 #[derive(Debug, Clone)]
 pub struct LiveOutput {
     pub tool: String,
-    /// The id of the call printing it, when it is printed from inside one.
+    /// The id of the call, when it comes from inside one.
     pub call: Option<String>,
-    pub line: String,
-    /// What a session the call runs did, when that is what this carries instead of a line.
-    pub sub: Option<SubEvent>,
+    pub what: Live,
+}
+
+/// What a running call has for the screen.
+#[derive(Debug, Clone)]
+pub enum Live {
+    /// Its tail changed.
+    Printed(Arc<Tail>),
+    /// A session the call runs did something.
+    Sub(SubEvent),
 }
 
 /// What a session run by a call did: a step asked for, a step settled, its answer.
