@@ -304,6 +304,7 @@ impl Tool for Delegate {
             },
             checkpoints: None,
             tasks: None,
+            mcp: Vec::new(),
             turn: 0,
         };
 

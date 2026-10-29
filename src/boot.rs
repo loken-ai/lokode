@@ -451,6 +451,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         ctx,
         checkpoints: checkpoints.clone(),
         tasks: Some(tasks.clone()),
+        mcp: mcp.clients.clone(),
         turn: 0,
     };
 

@@ -240,6 +240,7 @@ impl Discovery {
             ctx: self.ctx.clone(),
             checkpoints: None,
             tasks: None,
+            mcp: Vec::new(),
             turn: 0,
         };
 

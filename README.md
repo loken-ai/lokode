@@ -716,8 +716,12 @@ headers = { "X-Team" = "lokode" }
 - A server that does not start takes only itself down.
 - Its resources become one tool, `<server>__read_resource`, whose description lists them.
 
-`/mcp` lists the running servers and their prompts. `/mcp <server> <prompt>` makes one the
-turn's prompt.
+- A server that says its tools changed has them taken again at the next turn.
+
+`/mcp` shows each server, whether it runs, its tools, its protocol and how it is reached, with
+what a stopped one said last. It lists the prompts and what each takes.
+`/mcp <server> <prompt> name=value` makes one the turn's prompt. A value in double quotes takes
+spaces, and an argument the prompt needs is asked for before the server is.
 
 ## Without the interface
 

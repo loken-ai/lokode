@@ -908,6 +908,8 @@ pub struct Agent {
     /// The task list the model keeps, when this session keeps one, so it outlives a resume
     /// and an elision.
     pub tasks: Option<Arc<crate::tools::plan::TaskList>>,
+    /// The tool servers, so a change to what one offers reaches the next turn.
+    pub mcp: Vec<Arc<crate::mcp::client::McpClient>>,
     /// Which turn this is, counted from one. Checkpoints are labelled with it, which is
     /// what lets `/undo` take back a turn rather than a single tool call.
     pub turn: u32,
@@ -1657,6 +1659,7 @@ impl Agent {
         }
 
         self.ctx.cancel = cancel.clone();
+        self.take_changed_tools(&events).await;
         self.turn += 1;
         self.this_turn.turn = self.turn;
         tracing::info!(
@@ -2630,6 +2633,39 @@ impl Agent {
         self.end_turn(events).await;
     }
 
+    /// Take again the tools of each server that said they changed, so this turn offers
+    /// what the servers offer now.
+    async fn take_changed_tools(&mut self, events: &mpsc::Sender<AgentEvent>) {
+        let changed: Vec<_> = self
+            .mcp
+            .iter()
+            .filter(|c| c.take_tools_changed())
+            .cloned()
+            .collect();
+        if changed.is_empty() {
+            return;
+        }
+        let mut registry = (*self.registry).clone();
+        for client in changed {
+            let said = match crate::mcp::readopt(&client, &mut registry).await {
+                Ok((n, notices)) => {
+                    let mut said = format!("{} changed its tools: {n} now", client.server);
+                    for notice in notices {
+                        said.push_str(&format!("; {notice}"));
+                    }
+                    said
+                }
+                Err(e) => format!(
+                    "{} changed its tools and would not list them: {e:#}",
+                    client.server
+                ),
+            };
+            let _ = events.send(AgentEvent::Notice(said)).await;
+        }
+        self.registry = Arc::new(registry);
+        self.rebuild_preamble();
+    }
+
     /// Have the note left where steps are elided carry the task list, so the model keeps
     /// the goal when the call that set it is elided.
     async fn carry_tasks(&mut self) {
@@ -3342,6 +3378,7 @@ mod tests {
             ctx: h.ctx.clone(),
             checkpoints: None,
             tasks: None,
+            mcp: Vec::new(),
             turn: 0,
         };
         (agent, steer_tx)

@@ -77,9 +77,22 @@ struct Http {
     session: Mutex<Option<String>>,
 }
 
+/// One of a server's prompts, with what it takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptInfo {
+    pub name: String,
+    pub description: String,
+    /// Each argument: its name, and whether it must be given.
+    pub arguments: Vec<(String, bool)>,
+}
+
 pub struct McpClient {
     /// Named by the configuration, and used to prefix its tools.
     pub server: String,
+    /// How it is reached: the command it was started with, or its url.
+    pub origin: String,
+    /// How many of its tools the session adopted.
+    adopted: std::sync::atomic::AtomicUsize,
     child: Mutex<Option<Child>>,
     http: Option<Http>,
     shared: Arc<Shared>,
@@ -132,6 +145,11 @@ impl McpClient {
 
         Self {
             server: server.to_string(),
+            origin: std::iter::once(command)
+                .chain(args.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" "),
+            adopted: Default::default(),
             child: Mutex::new(Some(child)),
             http: None,
             shared,
@@ -163,6 +181,8 @@ impl McpClient {
         });
         Self {
             server: server.to_string(),
+            origin: url.to_string(),
+            adopted: Default::default(),
             child: Mutex::new(None),
             http: Some(Http {
                 client: reqwest::Client::builder().build()?,
@@ -219,6 +239,49 @@ impl McpClient {
             .notify("notifications/initialized", json!({}))
             .await?;
         Ok(Arc::new(self))
+    }
+
+    /// How many of its tools the session adopted.
+    pub fn adopted(&self) -> usize {
+        self.adopted.load(Ordering::Relaxed)
+    }
+
+    pub fn set_adopted(&self, n: usize) {
+        self.adopted.store(n, Ordering::Relaxed);
+    }
+
+    /// Its prompts, with the arguments each takes. Empty when it offers none.
+    pub async fn prompts(&self) -> Vec<PromptInfo> {
+        let Ok(page) = self.request("prompts/list", json!({}), None).await else {
+            return Vec::new();
+        };
+        page.get("prompts")
+            .and_then(|p| p.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                Some(PromptInfo {
+                    name: p.get("name")?.as_str()?.to_string(),
+                    description: p
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    arguments: p
+                        .get("arguments")
+                        .and_then(|a| a.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|a| {
+                            Some((
+                                a.get("name")?.as_str()?.to_string(),
+                                a.get("required").and_then(|r| r.as_bool()).unwrap_or(false),
+                            ))
+                        })
+                        .collect(),
+                })
+            })
+            .collect()
     }
 
     /// Whether the server is still running.

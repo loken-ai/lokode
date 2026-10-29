@@ -29,6 +29,52 @@ pub struct Loaded {
     pub tools: usize,
 }
 
+/// Register the tools `offered` by `client`, and say which could not be.
+pub fn adopt(
+    client: &Arc<client::McpClient>,
+    offered: &[client::McpToolInfo],
+    registry: &mut Registry,
+) -> (usize, Vec<String>) {
+    let name = &client.server;
+    let mut adopted = 0;
+    let mut notices = Vec::new();
+    for info in offered {
+        match tool::McpTool::adopt(client.clone(), info) {
+            Err(why) => {
+                tracing::warn!(server = %name, tool = %info.name, %why, "MCP tool refused");
+                notices.push(format!("{name}/{}: refused because {why}", info.name));
+            }
+            Ok(t) => {
+                let tool_name = t.name().to_string();
+                if registry.add(Arc::new(t)) {
+                    adopted += 1;
+                } else {
+                    notices.push(format!(
+                        "{name}/{}: {tool_name} is already taken",
+                        info.name
+                    ));
+                }
+            }
+        }
+    }
+    (adopted, notices)
+}
+
+/// Take the tools of `client` again, after it said they changed: those it no longer
+/// offers leave `registry`, and the new ones join it. Says how many it has now.
+pub async fn readopt(
+    client: &Arc<client::McpClient>,
+    registry: &mut Registry,
+) -> anyhow::Result<(usize, Vec<String>)> {
+    let offered = client.list_tools().await?;
+    let prefix = format!("{}__", client.server);
+    let resources = tool::McpResources::tool_name(&client.server);
+    registry.retain(|name| !name.starts_with(&prefix) || name == resources);
+    let (adopted, notices) = adopt(client, &offered, registry);
+    client.set_adopted(adopted);
+    Ok((adopted, notices))
+}
+
 /// Start one server, or reach it over HTTP.
 async fn start(
     name: &str,
@@ -93,28 +139,8 @@ pub async fn load(
             }
         };
 
-        let mut adopted = 0;
-        for info in &offered {
-            match tool::McpTool::adopt(client.clone(), info) {
-                Err(why) => {
-                    tracing::warn!(server = %name, tool = %info.name, %why, "MCP tool refused");
-                    out.notices
-                        .push(format!("{name}/{}: refused because {why}", info.name));
-                }
-                Ok(t) => {
-                    let tool_name = t.name().to_string();
-                    if registry.add(Arc::new(t)) {
-                        adopted += 1;
-                    } else {
-                        out.notices.push(format!(
-                            "{name}/{}: {tool_name} is already taken",
-                            info.name
-                        ));
-                    }
-                }
-            }
-        }
-
+        let (mut adopted, notices) = adopt(&client, &offered, registry);
+        out.notices.extend(notices);
         // A server's documents become one tool that reads them, so the approval flow,
         // the checkpoints and the transcript apply to them unchanged.
         let resources = client.list_resources().await;
@@ -150,6 +176,7 @@ pub async fn load(
             "MCP server ready"
         );
         out.tools += adopted;
+        client.set_adopted(adopted);
         out.clients.push(client);
     }
     out

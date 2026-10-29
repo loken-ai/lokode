@@ -459,6 +459,11 @@ impl Registry {
         self.tools.is_empty()
     }
 
+    /// Keep only the tools whose name `keep` holds to.
+    pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        self.tools.retain(|name, _| keep(name));
+    }
+
     /// The tools that change nothing, without those named in `except`.
     pub fn read_only(&self, except: &[&str]) -> Registry {
         Registry {

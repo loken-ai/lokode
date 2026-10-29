@@ -19,8 +19,7 @@ use crate::checkpoint::Checkpoints;
 use crate::sandbox::approval::ApprovalPrompt;
 use crate::ui::chat::{Entry, Outcome, Step};
 use crate::ui::commands::{
-    booted_summary, copy_out, refresh_status, remember_rule, run_command, run_shell, take_back,
-    CommandCtx, Ran,
+    copy_out, refresh_status, remember_rule, run_command, run_shell, take_back, CommandCtx, Ran,
 };
 use crate::ui::input::{
     accept_choice, approval_key, at_start, fresh_input, nothing_left_to_complete, open_picker,
@@ -234,7 +233,6 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
     });
 
     let startup_notices = [instruction_notes, mcp.notices.clone()].concat();
-    let mcp_summary = booted_summary(&mcp);
 
     // The hook goes in before the terminal is taken, so the window in which a panic could
     // escape uncovered never opens.
@@ -269,7 +267,6 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         lsp.clone(),
         &mut live,
         mcp.clients.clone(),
-        mcp_summary,
         session_approvals,
         &mut agent_evt_rx,
         &mut approval_rx,
@@ -346,7 +343,6 @@ async fn run_ui(
     // The servers, for the prompts /mcp can take. Cloned handles: the process still owns
     // them and still shuts them down.
     mcp: Vec<std::sync::Arc<crate::mcp::client::McpClient>>,
-    mcp_summary: String,
     // What has been agreed to for this session, so a standing decision can be taken from
     // the keyboard as well as at the prompt.
     session_approvals: std::sync::Arc<crate::sandbox::approval::SessionApprovals>,
@@ -1180,7 +1176,6 @@ async fn run_ui(
                                             tools: &tools,
                                             digest: &digest,
                                             mcp: &mcp,
-                                            mcp_summary: &mcp_summary,
                                             session_id: &session_id,
                                             approvals: &session_approvals,
                                             busy: state.busy,
@@ -1361,7 +1356,6 @@ async fn run_ui(
                                         tools: &tools,
                                         digest: &digest,
                                         mcp: &mcp,
-                                        mcp_summary: &mcp_summary,
                                         session_id: &session_id,
                                         approvals: &session_approvals,
                                         busy: state.busy,
@@ -1764,7 +1758,6 @@ async fn run_ui(
                                             tools: &tools,
                                             digest: &digest,
                                             mcp: &mcp,
-                                            mcp_summary: &mcp_summary,
                                             session_id: &session_id,
                                             approvals: &session_approvals,
                                             busy: state.busy,

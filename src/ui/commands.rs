@@ -295,25 +295,81 @@ pub(crate) async fn git_state(root: &std::path::Path) -> Option<(String, usize)>
     ))
 }
 
-/// What the servers are and what they offer, for `/mcp`.
-pub(crate) fn booted_summary(mcp: &crate::mcp::Loaded) -> String {
-    if mcp.clients.is_empty() {
+/// What the servers are, where each stands and what it offers, for `/mcp`.
+async fn mcp_page(mcp: &[std::sync::Arc<crate::mcp::client::McpClient>]) -> String {
+    if mcp.is_empty() {
         return "no tool servers are configured".to_string();
     }
-    let mut out = String::from("## Servers\n\n");
-    for c in &mcp.clients {
-        out.push_str(&format!("- **{}** running\n", c.server));
+    let mut out = String::from(
+        "## Servers\n\n| Server | State | Tools | Protocol | Reached by |\n|---|---|---|---|---|\n",
+    );
+    let mut stopped = Vec::new();
+    let mut prompts = Vec::new();
+    for c in mcp {
+        let state = match c.alive() {
+            true => "running",
+            false => "stopped",
+        };
+        out.push_str(&format!(
+            "| `{}` | {state} | {} | {} | `{}` |\n",
+            c.server,
+            c.adopted(),
+            c.version,
+            c.origin.replace('|', "/")
+        ));
+        if c.alive() {
+            prompts.extend(c.prompts().await.into_iter().map(|p| (c.server.clone(), p)));
+        } else {
+            stopped.push((c.server.clone(), c.stderr_tail().await));
+        }
     }
-    if !mcp.prompts.is_empty() {
-        out.push_str("\n## Prompts\n\n| Prompt | What it does |\n|---|---|\n");
-        for (server, prompt, about) in &mcp.prompts {
+    for (server, said) in stopped {
+        out.push_str(&format!("\n{server} stopped.{said}\n"));
+    }
+    if !prompts.is_empty() {
+        out.push_str("\n## Prompts\n\n| Prompt | Takes | What it does |\n|---|---|---|\n");
+        for (server, p) in prompts {
+            let takes: Vec<String> = p
+                .arguments
+                .iter()
+                .map(|(name, required)| match required {
+                    true => format!("{name}="),
+                    false => format!("[{name}=]"),
+                })
+                .collect();
             out.push_str(&format!(
-                "| `/mcp {server} {prompt}` | {} |\n",
-                about.replace('|', "/")
+                "| `/mcp {server} {}` | {} | {} |\n",
+                p.name,
+                takes.join(" "),
+                p.description.replace('|', "/")
             ));
         }
     }
     out
+}
+
+/// The `name=value` pairs of a line, a value in double quotes taking spaces. Says what it
+/// could not read.
+fn prompt_arguments(text: &str) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let mut out = serde_json::Map::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() {
+        let (name, after) = rest
+            .split_once('=')
+            .ok_or_else(|| format!("{rest:?} is not name=value"))?;
+        let (value, after) = match after.strip_prefix('"') {
+            Some(quoted) => quoted
+                .split_once('"')
+                .ok_or_else(|| format!("the value of {name} has no closing quote"))?,
+            None => after.split_once(char::is_whitespace).unwrap_or((after, "")),
+        };
+        out.insert(
+            name.trim().to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+        rest = after.trim_start();
+    }
+    Ok(out)
 }
 
 /// What running a command came to.
@@ -341,7 +397,6 @@ pub(crate) struct CommandCtx<'a> {
     /// What is known about the project, for /digest.
     pub(crate) digest: &'a tokio::sync::Mutex<crate::agent::digest::Digest>,
     pub(crate) mcp: &'a [std::sync::Arc<crate::mcp::client::McpClient>],
-    pub(crate) mcp_summary: &'a str,
     /// The session being had now, so coming back to a session does not offer this one.
     pub(crate) session_id: &'a str,
     /// What has been agreed to here, which is the half of the policy that can change.
@@ -365,7 +420,6 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         tools,
         digest,
         mcp,
-        mcp_summary,
         session_id,
         approvals,
         busy,
@@ -456,14 +510,51 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
     }
     if verb == "mcp" {
         // With a server and a prompt named, the prompt is fetched and becomes the turn.
-        let mut words = rest.split_whitespace();
-        match (words.next(), words.next()) {
+        // The server, the prompt, and the prompt's arguments, each when given.
+        let word = |text: &str| -> (String, String) {
+            let text = text.trim();
+            match text.split_once(char::is_whitespace) {
+                Some((first, after)) => (first.to_string(), after.trim_start().to_string()),
+                None => (text.to_string(), String::new()),
+            }
+        };
+        let (server, after) = word(rest);
+        let (prompt, arguments) = word(&after);
+        fn given(w: &str) -> Option<&str> {
+            (!w.is_empty()).then_some(w)
+        }
+        match (given(&server), given(&prompt)) {
             (Some(server), Some(prompt)) => {
                 let Some(client) = mcp.iter().find(|c| c.server == server) else {
                     return Ran::Said(format!("no server called {server}"));
                 };
-                let args: serde_json::Value = serde_json::json!({});
-                return match client.get_prompt(prompt, args).await {
+                let args = match prompt_arguments(&arguments) {
+                    Ok(args) => args,
+                    Err(why) => return Ran::Said(why),
+                };
+                // What it must be given and was not, said before the server is asked.
+                let missing: Vec<String> = client
+                    .prompts()
+                    .await
+                    .into_iter()
+                    .find(|p| p.name == prompt)
+                    .map(|p| p.arguments)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|(name, required)| *required && !args.contains_key(name))
+                    .map(|(name, _)| format!("{name}="))
+                    .collect();
+                if !missing.is_empty() {
+                    return Ran::Said(format!(
+                        "{server}/{prompt} needs {}: `/mcp {server} {prompt} {}`",
+                        missing.join(", "),
+                        missing.join("... ")
+                    ));
+                }
+                return match client
+                    .get_prompt(prompt, serde_json::Value::Object(args))
+                    .await
+                {
                     Ok(text) => Ran::Prompt(text),
                     Err(e) => Ran::Said(format!("{server}/{prompt}: {e:#}")),
                 };
@@ -489,7 +580,7 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                     None,
                 )));
             }
-            _ => return Ran::Said(mcp_summary.to_string()),
+            _ => return Ran::Said(mcp_page(mcp).await),
         }
     }
     if verb == "resume" {
@@ -932,6 +1023,17 @@ pub(crate) const HELP: &str = "\
 #[cfg(test)]
 mod help_tests {
     use super::*;
+
+    /// Arguments are read as name=value, a quoted value taking spaces.
+    #[test]
+    fn prompt_arguments_are_read() {
+        let args = prompt_arguments(r#"topic=rust depth="very deep" x="""#).unwrap();
+        assert_eq!(args["topic"], "rust");
+        assert_eq!(args["depth"], "very deep");
+        assert_eq!(args["x"], "");
+        assert!(prompt_arguments("loose").is_err());
+        assert!(prompt_arguments(r#"a="open"#).is_err());
+    }
 
     /// A project command named after a built-in is neither run nor listed.
     #[test]
