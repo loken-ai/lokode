@@ -1,57 +1,51 @@
 # lokode
 
-A coding agent that runs in your terminal, against a model on your own machine. No account,
-no request leaving the box, no editor to adopt.
+A coding agent that runs in your terminal, against a model on your own machine. It needs no
+account, sends no request off the machine and asks you to adopt no editor.
 
-> **EXPERIMENTAL.** This is a young component and it is not production ready. It is where
-> ideas about local agents get tried out and where the rest of the stack gets debugged, so
-> its interface, its configuration and its defaults change without ceremony. Point it at
-> work you can afford to lose, read [SECURITY.md](SECURITY.md) before pointing it anywhere
-> else, and keep the change history it writes: `/undo` exists because this is a tool that
-> is still learning its manners.
+> **EXPERIMENTAL.** This component is young and not production ready. Its interface, its
+> configuration and its defaults change without notice. Point it at work you can afford to
+> lose, read [SECURITY.md](SECURITY.md) before pointing it anywhere else, and keep the change
+> history it writes.
 
 ```sh
 lokode --model qwen3-coder:latest --root .
 ```
 
 It speaks the OpenAI-compatible API, so it works against [loken](https://github.com/loken-ai/loken),
-ollama, vLLM, llama.cpp or anything else that serves one - the default backend is
-`http://127.0.0.1:11435`. It also speaks the Anthropic Messages API, for the days you want a
-model that is not on your machine.
+ollama, vLLM, llama.cpp or any other server of that API. The default backend is
+`http://127.0.0.1:11435`. It also speaks the Anthropic Messages API.
 
 ## What it does
 
-Reads, searches and edits files under one root, runs commands, and talks to a language
-server for the things a language server is better at than a grep. The loop is bounded:
-`--max-steps` caps how far it will go on a single turn before handing control back.
+It reads, searches and edits files under one root, runs commands and asks a language server.
+`--max-steps` caps the steps of one turn.
 
-Everything below is a section of this page. The ones marked local are things it can do
-because the model is on your machine and the project is on your disk, which is the whole
-reason for building another one of these.
+The sections of this page. Those marked local rely on the model running on your machine.
 
 | | |
 |---|---|
-| [The screen](#the-screen) | the thread, a rail with the plan, the changes, the window and the engine, the status line |
-| [The pane](#using-it) | one line per step, completion on `/` and `@`, steps you can move between and unfold |
-| [Approvals](#where-it-is-careful) | a change is a diff to accept or decline, asked in the thread, remembered against what you were shown |
-| [Plan and act](#planning-before-acting) | read without changing anything, then carry it out, on `shift-tab` |
-| [Undo](#taking-something-back) | a change history of its own, beside your git, never touching it |
-| [Sessions](#sessions) | every turn recorded, resumable, and `/retry` to ask the last question again of another model |
-| [Roles](#one-model-per-kind-of-work) *(local)* | a model per kind of work, and a second one reading a change before it is written |
-| [Escalation](#one-model-per-kind-of-work) *(local)* | a change that does not check out raises the session to a stronger model, and what each model manages here is remembered |
-| [Checks](#changing-a-file) | the language server after every write, and the compiler underneath it where there is none |
-| [Background discovery](#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody is waiting, kept between sessions |
+| [The screen](#the-screen) | the conversation, a rail with what runs, the plan, the changes, the window and the engine, the status line and the keys in force |
+| [Using it](#using-it) | one line per step, completion on `/` and `@`, steps you point at, unfold and open |
+| [What runs](#what-runs) | what is running, where it is, and stopping one thing while the rest goes on |
+| [Approvals](#where-it-is-careful) | a change is a diff to accept or decline, asked in the conversation |
+| [Plan and act](#planning-before-acting) | read without changing anything, then carry it out |
+| [Undo](#taking-something-back) | a change history of its own, beside your git |
+| [Sessions](#sessions) | every turn recorded and resumable |
+| [Roles](#one-model-per-kind-of-work) *(local)* | a model per kind of work, a reviewer, and a stronger model when a change fails its check |
+| [Checks](#changing-a-file) | the language server after every write, or the compiler where there is none |
+| [Background discovery](#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody waits, kept between sessions |
 | [Speculation](#using-it) *(local)* | the next read guessed while the model is still writing |
 | [The engine](#what-the-engine-measures) *(local)* | what loken measured of each request, its energy and the power of the machine |
-| [Delegation](#handing-off-a-search) | a search answered in a window of its own, so its results do not fill yours |
-| [Plans](#work-of-several-steps) | work of several steps stated as a list and kept up to date |
-| [Hooks](#hooks) | commands at the edges of a tool call and a turn |
+| [Delegation](#handing-off-a-search) | a search answered in a window of its own |
+| [Plans](#work-of-several-steps) | work of several steps kept as a list |
+| [Hooks](#hooks) | commands around a tool call and at the end of a turn |
 | [MCP](#tools-from-elsewhere) | tools, documents and prompts from another server |
 | [Headless](#without-the-interface) | one prompt, a JSON report, an exit code |
 
 ## What the engine measures
 
-Against a loken server, lokode reads what the server measured of each request and shows it.
+Against a loken server, lokode reads what the server measured of each request.
 
 | Reading | Where |
 |---|---|
@@ -62,59 +56,53 @@ Against a loken server, lokode reads what the server measured of each request an
 | how much of a speculative draft the server kept | the rail |
 | the energy each request drew | the rail, the receipt, `/cost`, the session file and `-p --output json` |
 
-The power is read from the device listing loken serves to its own interface, every two
-seconds and only while a turn runs. It is shown as read, and never turned into an energy
-figure: that comes from the server, request by request.
+The power comes from the device listing loken serves to its own interface. It is read every
+two seconds while a turn runs, and shown as read. The energy comes from the server, request by
+request.
 
-Energy is counted against what a request was for: a step, a read guessed ahead, a second
-opinion, a repaired reply or the probe at startup. It is marked `≈` when other requests
-shared the server and `~` when part of it was estimated. A server that measures nothing
-shows nothing, never a zero.
+Energy is counted by what a request was for: a step, a guessed read, a review, a repaired reply
+or the startup probe. A server that measures nothing shows nothing, never a zero.
+
+| Mark | Meaning |
+|---|---|
+| `≈` | other requests shared the server |
+| `~` | part of the energy was estimated |
 
 ## Where it is careful
 
-- **One root, and it is enforced.** Every path-taking tool is confined under `--root`. A tool
-  call that walks outside it is refused rather than resolved. A file may be created in
-  directories that do not exist yet; the containment check applies to where the write would
-  actually land, not to how the path was spelled.
-- **Edits are approved, not applied.** A change arrives as a diff to accept or decline, and
-  an agreement is remembered against *what you were shown* - this command, writes under this
-  directory, requests to this host - not against the tool that showed it. The question is
-  asked in the thread, beside the conversation it has to be judged against, and says what
-  `a` will cover before you press it.
-- **A patch is one change or none.** Every file in it is resolved and applied in memory before
-  you are asked, and a failure part-way through the commit puts back what was already written.
-- **A model's tool arguments are repaired before they are trusted.** They arrive slightly
-  wrong often enough that guessing is not acceptable: the arguments are validated against a
-  schema, repaired where the repair is unambiguous, and rejected where it is not. `--no-grammar`
-  turns off the server-side constraint to exercise that path on purpose.
-- **Egress is confined to public addresses.** `web_fetch` resolves a host rather than trusting
-  the name, follows redirects itself, and re-checks every hop - so an approved public URL
-  cannot bounce onto loopback or a cloud metadata endpoint. `--allow-host` opens a named
-  exception for a service on your own network.
+- **One root.** Every tool that takes a path is confined under `--root`, and a path that leaves
+  it is refused. A file may be created in a directory that does not exist yet. The check
+  applies to where the write lands.
+- **Changes are approved.** A change arrives in the conversation as a diff to accept or
+  decline. An agreement covers what you were shown: this command, writes under this
+  directory, requests to this host. The prompt says what `a` covers before you press it.
+- **A patch is all or nothing.** Every file of it is resolved and applied in memory before you
+  are asked. A failure while writing puts back what was already written.
+- **Tool arguments are checked.** They are validated against the tool's schema, repaired where
+  the repair is unambiguous and refused otherwise. `--no-grammar` turns off the server-side
+  constraint.
+- **Egress goes to public addresses only.** `web_fetch` resolves the host, follows redirects
+  itself and checks every hop. `--allow-host` names an exception on your own network.
 
-Read [SECURITY.md](SECURITY.md) before pointing this at anything you care about. In
-particular, an approved `bash` command is not confined by the root by default: the sandbox
-covers the tools that take paths, and a shell does not. On Linux, `--confine-shell` makes
-everything outside the project read-only for it.
+Read [SECURITY.md](SECURITY.md) first. An approved `bash` command is not confined to the root
+by default. On Linux, `--confine-shell` makes everything outside the project read-only for it.
 
 ## Install
 
 ```sh
-cargo install --path .     # or: cargo build --release  -> target/release/lokode
+cargo install --path .     # or cargo build --release, then target/release/lokode
 ```
 
-Needs Rust 1.92 or later, and a Unix-like system - the shell tool runs `/bin/sh`.
+It needs Rust 1.92 or later and a Unix-like system. The shell tool runs `/bin/sh`.
 
-One thing it uses if it is there, and one it needs:
+| Optional | What it adds |
+|---|---|
+| ripgrep (`rg`) | a faster `grep`. Without it the built-in walker runs the same search with the same ignore files |
+| a language server | `lsp_diagnostics` and `lsp_hover`, from `rust-analyzer`, `pyright-langserver` or `typescript-language-server` |
 
-- **ripgrep** (`rg`) makes `grep` faster and is not required - without it the same search
-  runs on the built-in walker, honouring the same ignore files.
-- **A language server** for `lsp_diagnostics` and `lsp_hover`: `rust-analyzer`,
-  `pyright-langserver`, or `typescript-language-server`. If one is on your `PATH` under the
-  usual name but does not work - a `rustup` shim for a component that was never installed
-  answers to `rust-analyzer` and fails - point at a working one with `LOKODE_LSP_RUST`,
-  `LOKODE_LSP_PYTHON`, `LOKODE_LSP_TYPESCRIPT` or `LOKODE_LSP_JAVASCRIPT`.
+When the language server on your `PATH` does not work, point at one that does with
+`LOKODE_LSP_RUST`, `LOKODE_LSP_PYTHON`, `LOKODE_LSP_TYPESCRIPT` or `LOKODE_LSP_JAVASCRIPT`. A
+`rustup` shim for a component that is not installed is the usual case.
 
 ## The screen
 
@@ -159,210 +147,199 @@ The client waits on rx.await forever. I add timeout-secs:                       
 
 | Part | What it holds |
 |---|---|
-| the thread | your questions, the model's answers, one row per step with what it came to, and a receipt per turn |
-| the rail | the plan, the files changed, what fills the window, the engine and the turns to put back, from 120 columns or with `Ctrl-B` |
-| the input | what you are typing, with completion on `/` and `@` |
-| the status line | the mode, the model, the project, how full the window is, and what the turn is doing |
-| the line of keys | the keys in force now |
+| the band | the project, the branch and its changes, the model, the backend and the tool protocol |
+| the conversation | your questions, the answers, one row per step with what it came to, and a receipt per turn |
+| the rail | what runs, the plan, the files changed, what fills the window, the engine and the turns to put back. It shows from 120 columns, or with `Ctrl-B` |
+| the input | what you type, with completion on `/` and `@` |
+| the status line | the mode, what the turn is doing and for how long, and how full the window is |
+| the line of keys | the keys of what is in front: the input, a list, a page or the step pointed at |
 
 ## Using it
 
-The keys are on their own line under the input, always in view, because a shortcut nobody
-can see is a shortcut nobody uses, and they change with what is in force.
+A `/` at the start of a line opens the commands, and an `@` opens the files under the root.
+Both lists narrow as you type.
 
-A slash at the start of a line opens the commands, narrowed as you type; an at-sign opens
-the files under the root. Tab takes what is highlighted, enter sends once there is nothing
-left to complete. A command's answer longer than a sentence opens on a page over the
-conversation and closes leaving nothing behind, rather than sitting in the thread for the
-rest of the session.
+| Key | In a completion list |
+|---|---|
+| `Tab` | take the item. A command that takes an argument gets a space after it |
+| `Enter` | take a command and send it, or take a path |
 
-`Alt` with the arrow keys moves between the steps of a session rather than the rows of the
-pane, and `space` opens a block that was counted. A change waiting to be agreed to is asked
-about in the thread, with its diff beside it, not in a window over the conversation it has
-to be judged against.
+A command's answer longer than a sentence opens on a page over the conversation. `Esc`,
+`Enter` or `q` closes it.
 
-The window is read from the backend rather than assumed: its model list states the widest
-window each model takes (`max_model_len`), and the session never plans past it. Guessing
-small wastes what is there, and guessing large sends prompts the server cuts, which
-produces an answer that is fluent and wrong about what it was asked. `--context-tokens`
-still caps it where it is stated.
+`Alt-Up` and `Alt-Down` move between the steps of the session. What the step pointed at
+offers:
+
+| Pointed at | Keys |
+|---|---|
+| a step | `Space` unfolds it, `Enter` opens it on a page, `Ctrl-C` stops it while it runs |
+| a receipt | `u` puts the turn back, `d` shows what it changed |
+| a question | `Enter` brings it back to the input |
 
 | Key | |
 |---|---|
-| `Shift-Tab` | act, write without asking, plan - the setting you change several times an hour |
+| `Shift-Tab` | act, write without asking, or plan, in turn |
 | `Enter` | send, take what the list offers, or bring back the question you are pointing at |
 | `Tab` | take what the list offers |
 | `Shift-Enter` | newline |
-| `Esc` | interrupt the turn, close a list, drop a selection, clear the line; twice, bring back the last question |
+| `Esc` | interrupt the turn, stop a command of yours, close a list, drop a selection, clear the line |
+| `Esc` twice | bring back the last question |
 | `Alt-Up` / `Alt-Down` | move between the steps of the session |
 | `Space` | open a block that was counted, while pointing at it |
 | `Enter` | open the step you are pointing at on a page, with every step of a session it ran |
 | `u` / `d` | put back the turn whose receipt you are pointing at, or see what it changed |
-| `Ctrl-F` | find something said earlier; enter and up walk the matches |
+| `Ctrl-F` | find something said earlier, then walk the matches with enter and up |
 | `Ctrl-B` | show or hide the rail: the plan, what changed, the window, the speed, the turns to put back |
 | `Ctrl-G` | write the prompt in `$EDITOR` and bring it back |
-| `Ctrl-Y` | take what is selected, or the block you are pointing at |
+| `Ctrl-Y` | put the selection, or the block pointed at, on the clipboard |
 | `y` / `a` / `n` | answer a change: once, always in the stated scope, no |
-| `e` / `x` | refuse and say what to do instead; refuse and correct the command yourself |
+| `e` / `x` | refuse and say what to do instead, or refuse and correct the command yourself |
 | `Enter` while it works | hand the line to the turn in flight |
 | `Alt-Enter` while it works | ask it once the turn is over |
 | `Up` / `Down` | walk what you cleared, then what you have already sent |
 | `PageUp` / `PageDown`, `Home` / `End`, wheel | scroll |
-| click | unfold a step, answer a question by its badge, take an item of a list, go to what runs from the rail |
+| click | unfold a step, answer a question by its badge, take an item of a list |
 | drag with the mouse | select here, and scroll when dragging past an edge |
 | `Shift` + drag | select in the terminal itself, for its own copy key |
 | `Ctrl-T` | hand the mouse to the terminal, or take it back |
-| `Ctrl-C` | stop the step you point at alone, stop the turn or a command of yours, clear the line, or leave when pressed twice on an empty line |
+| `Ctrl-C` | stop the turn or a command of yours, clear the line, or leave when pressed twice on an empty line |
 | `Ctrl-D`, `Ctrl-Q` | leave, and ask first when a turn, an answer or a typed line would be lost |
 
-The window's title says whether the session is working or waiting for you. Ghostty, WezTerm,
-Windows Terminal and iTerm2 from 3.6 also show it as progress in the tab. When the terminal is
-not in front, a question waiting for an answer and a turn coming to an end reach you as a
-desktop notification, or as a bell where the terminal has no notifications.
+It asks before something is lost. Leaving asks for the key a second time. The others open a
+list with `no` selected.
 
-Taking the mouse is what buys the wheel and a selection that scrolls past the edge of the
-pane, and it costs the terminal's own selection - and with it the terminal's own copy key,
-which never reaches a program to be reassigned. Both are kept within reach: hold `Shift`
-while dragging for a terminal selection, or press `Ctrl-T` to lend it the mouse entirely.
+| Action | Asks when |
+|---|---|
+| `Ctrl-D`, `Ctrl-Q`, `Ctrl-C` on an empty line | a turn runs, a question waits or a line is typed |
+| `/clear` | always |
+| `u` on a receipt | always |
+| `Enter` on a question | turns came after it |
 
-A line beginning with `!` is a command of your own, run here rather than asked of the model,
-and what it printed joins the conversation. A line beginning with `#` is a rule for the
-project, appended to `.lokode.md` and told to the model at once.
+| On the line | |
+|---|---|
+| `!command` | run the command here, beside the screen, under a step of its own. Its output joins the conversation |
+| `#rule` | append a rule to `.lokode.md` and tell the model at once |
+| `@path` | send that file, or that directory's listing, with the question |
 
 | Command | |
 |---|---|
 | `/plan`, `/act` | plan without changing anything, then carry it out |
 | `/model` | choose from what the backend serves, with the one answering marked |
-| `/clear`, `/resume` | start again; come back to a session recorded earlier |
+| `/clear`, `/resume` | start again, or come back to a session recorded earlier |
 | `/retry`, `/retry <model>` | ask the last question again, of the same model or another |
-| `/copy`, `/copy last` | the conversation to the clipboard and to a file |
+| `/copy`, `/copy last` | the conversation, or the last answer, to the clipboard and to a file |
 | `/undo`, `/diff` | put the project back to before a turn, or see everything changed |
 | `/context`, `/compact`, `/cost` | where the window stands, elide now, what it spent |
-| `/jobs` | what is running now, to point at its step or stop work done aside |
-| `/approve`, `/approve forget` | what is in force here and in the configuration; take it back |
+| `/jobs` | what is running now, to point at its step or stop work done outside a turn |
+| `/approve`, `/approve forget` | what is in force here and in the configuration, or take it back |
 | `/why`, `/digest`, `/tools`, `/mcp` | what is in force, what is known, what can be called |
-| `@path` in a prompt | send that file, or that directory's listing, with the question |
 
-A command that takes a name offers the names: `/model`, `/undo`, `/resume` and `/mcp` open a
-list that filters as you type, and what you type after any of them is completed.
+A command that takes a name offers the names. `/model`, `/undo`, `/resume` and `/mcp` open a
+list that narrows as you type. `/help` lists every command, with those the project ships.
 
-`/help` lists them all, and the commands a project ships beside them.
+The window title says whether the session works or waits for you. Ghostty, WezTerm, Windows
+Terminal and iTerm2 from 3.6 also show it as progress in the tab. While the terminal is not in
+front, a waiting question and the end of a turn arrive as a desktop notification, or as a bell
+where the terminal has none.
 
-The model's prose is rendered as the light markdown it tends to write - fenced code,
-headings, `code` and **bold** - and anything that is a diff is coloured as one. A tool call
-is one line, the verb and the thing it acts on, and its result is the answer with a few
-lines of evidence under it: printing every argument and every line turned each step into a
-wall of JSON nobody read.
+lokode takes the mouse for the wheel, clicks and a selection that scrolls past the edge.
+`Ctrl-Y` puts a selection on the terminal's clipboard, through ssh and tmux. Hold `Shift`
+while dragging for the terminal's own selection, or press `Ctrl-T` to hand it the mouse.
 
-There are no borders. They cost four columns and two lines, they land in every selection
-made with the mouse, and they separate nothing that a blank line and a prompt mark do not
-separate better. The wheel scrolls the pane and dragging selects in it, which is what
-taking the mouse buys and what it would otherwise cost: letting go puts what was selected
-on the terminal's own clipboard - through ssh and tmux, no daemon. `/copy` does the same
-for the whole conversation and writes it to a file besides, because a terminal that ignores
-the sequence says so to nobody.
+Answers are rendered as markdown: fenced code coloured by language, headings, lists, quotes,
+tables, links and emphasis. A diff is numbered, with the changed words marked. There are no
+borders.
 
-The shape of the project goes in with the contract, and the contract says never to ask for
-a file: a model told nothing about the tree asks for the source to be pasted in, because
-asking is cheaper than guessing a path.
+A line sent while the agent works joins the turn at the next step, and the screen says when.
+A slash command typed then runs at once.
 
-Typing while the agent works is allowed: the line joins the conversation at the next step
-boundary and the screen says when it was handed over. That is the difference between
-steering a turn and abandoning it. A slash command typed then runs immediately.
+A file named with `@` goes with the question. A directory sends its listing. The status line
+says what the files will cost before the line is sent. What is attached is bounded like any
+other content. A mention that is not a path here is left alone, and nothing outside the
+project can be named.
 
-Naming a file with `@` sends it with the question: "why does `@src/main.rs` do nothing?"
-arrives with the file rather than costing a round trip to fetch what you had already
-decided was relevant. A directory sends its listing. What is attached is bounded like any
-other thing that lands in the window, a mention that is not a path here is left alone, and
-nothing outside the project can be reached by naming it.
+A shell command and a test suite show the end of their output under their step while they
+run. The tool's result replaces it when they finish. The model reads the whole output.
 
-A shell command and a test suite show their output while they run, as a dimmed tail that
-the tool's own result replaces when it is over. A build that says nothing for two minutes
-cannot be told from one that has hung, and the line naming the failing test is worth having
-before the suite finishes. What reaches the model is still the whole of it.
+The status line says what the turn is doing and for how long: fitting the history, waiting for
+the model, reading the prompt, thinking, answering, repairing a reply or running a tool. While loken reads a long prompt, it
+shows how far it has got.
 
-The status line says what the turn is doing whenever nothing is being printed - fitting the
-history, waiting for the model, thinking, answering, repairing a reply, running a named
-tool - with how long it has been doing it, beside a spinner that moves while a turn is
-alive. Most of a turn is spent in those phases: the request has gone out and the model is
-reading a context of thousands of tokens, or a command is running under a tool. Without
-them the screen is identical to one that has stopped.
+While the model writes its answer, a small model guesses the next read and the read is made
+ahead. The step that asks for it is answered without a round trip, and its row says
+`guessed`. A guess never delays the turn, and a guess that would change something is dropped.
+The guessing model is the project's search model, or the one answering. It runs against a
+backend on this machine or this network, never a hosted one. `speculate = false` turns it off.
 
-While the model writes its answer the card is busy and the rest of the machine is not. A
-small model spends that time guessing which read is coming next, the read is made, and the
-step that asks for it is answered without a round trip. It is abandoned the moment the
-answer arrives: a guess is worth having only if it lands first, and one that has not must
-never be something the turn waits on. Read-only by construction too, so a guess that would
-change something is dropped rather than run, because being wrong has to stay free. The request goes out at a priority that yields, which is what keeps it out of the way: a
-cluster is free to put it on another node, and a single machine is free to make it wait
-behind the answer. Which model does the guessing is the project's business, the one named
-for searching or the one already answering. It is on against a backend on this machine or
-this network and off against a hosted one, which would bill for a guess the same as for an
-answer; `speculate = false` turns it off either way.
+A turn ends on a receipt: its time, its steps, what it read and wrote, the files it changed
+and its energy. A quick turn that changed nothing gets none.
 
-A turn closes with what it came to: how long it took, how many steps, what it spent and
-which files it changed. A turn that answered in a moment and changed nothing says nothing,
-because a receipt for that is noise.
+The loop declines three things:
 
-Three things the loop declines to do twice. A read the model already made in this turn,
-with nothing written since, is answered with what it returned and told it is repeating
-itself. A whole-file write over a file that has changed on disk since the model read it is
-refused, because that write would discard whatever you did in your own editor. And a path
-that is not there is answered with where the file actually is, rather than with a refusal
-that costs a search to act on.
+- a read already made this turn, with nothing written since, is answered with its result, and
+  the model is told it repeats itself
+- a whole-file write over a file changed on disk since the model read it is refused
+- a path that does not exist is answered with where the file is
 
-`/retry` asks the last question again from where it was asked: what the agent did after it
-leaves the conversation, so the model is not reading its own failed attempt while it tries
-again. `/retry <model>` asks a different one, which is the cheapest experiment there is when
-a turn goes wrong. The transcript keeps both attempts, because what was tried is part of
-what happened, and `/undo` puts the files back if the first attempt wrote any.
+`/retry` asks the last question again. What the agent did after it leaves the conversation.
+`/retry <model>` asks another model. The transcript keeps both attempts, and `/undo` puts back
+the files of the first.
 
-A turn that is getting nowhere is handed back rather than run to the step limit. Three
-steps in a row where every call either failed or had already been answered, or six failed
-calls in a turn that has changed nothing, and the turn ends saying which tool kept failing.
-A weak model looping on one read cost sixteen steps and twenty thousand tokens before this;
-it now costs six steps and under four thousand.
+A turn that gets nowhere is handed back early. Three steps in a row where every call failed or
+repeated itself end it, and so do six failed calls in a turn that changed nothing. The screen
+names the tool that kept failing.
 
-At an approval prompt: `y` accepts once, `a` accepts everything in the stated scope for this
-session, `n` or `Esc` declines. `Enter` deliberately does nothing there - it is the send key,
-and a prompt appearing mid-sentence should not be able to approve a command you have not read.
+At an approval, a click on a badge answers like its key. `Enter` does nothing there.
+
+## What runs
+
+The rail opens with what is running: each step that has not ended with how long it has run,
+the call a delegated session is on, and the work done outside a turn.
+
+| To | Do |
+|---|---|
+| go to a step that runs | choose it in `/jobs`, or click it in the rail |
+| stop one call while the turn goes on | `Ctrl-C` on its step |
+| stop the whole turn | `Esc` |
+| stop a command of yours | `Ctrl-C` on its step, or `Ctrl-C` or `Esc` on an empty line for the latest |
+| stop work done outside a turn | choose it in `/jobs` |
+
+A stopped call ends in an error that tells the model the person stopped it, and the turn goes
+on. Work outside a turn is the model held ready on the backend and the project being looked
+into. Looking into the project, once stopped, stays stopped for the session.
+
+Commands of your own run side by side, each under its step, with their output as it comes.
 
 ## Planning before acting
 
-`/plan` puts the agent in a mode where every tool that writes, runs a command or reaches
-the network is refused before it runs, and the model is told so: it reads, searches and
-finishes with the plan as numbered steps. `/act` leaves it. `--plan` starts there, and a
-mode key in the configuration makes that the default for a project.
+`/plan` refuses every tool that writes, runs a command or reaches the network, before it runs,
+and tells the model so. The model reads, searches and ends with numbered steps. `/act` leaves
+the mode. `--plan` starts in it, and `mode` in the configuration makes it a project's default.
 
-This is not a stricter set of approvals. Someone who wants to know what would happen should
-not have to decline fifteen prompts to find out, and an agent that must ask before every
-step cannot describe the plan. Planning pairs with the model choice: plan on the model that
-reasons best, switch to a smaller one, then act.
+Nothing has to be declined while planning. A project can plan on its strongest model and act
+on a smaller one, with [roles](#one-model-per-kind-of-work).
 
 ## Changing a file
 
-`write_file` replaces a file, `edit_file` replaces one unique substring, `edit_lines`
-applies several of those to one file in order, all or none, and `apply_patch` takes a
-unified diff across several files. Prefer `edit_lines` over repeated single edits: on a
-local model each round trip is seconds, and an edit that cannot be placed leaves the file
-as it was rather than half of two versions.
+| Tool | |
+|---|---|
+| `write_file` | replace a file |
+| `edit_file` | replace one unique substring |
+| `edit_lines` | apply several such edits to one file in order, all or none |
+| `apply_patch` | apply a unified diff across several files |
 
-After a write the language server is asked about that file, and anything it reports comes
-back in the same tool result: the model corrects its own syntax error on the spot instead
-of learning about it a turn later. Where the project has no language server for that file,
-the compiler answers underneath it, asked to compile and nothing else, once per step and on
-a bounded wait. The suite is the right thing to run when the work is done; after one edit it
-is minutes spent to learn what a type check says in seconds.
+After a write, the language server reports on that file in the same tool result. Without a
+language server for the file, the compiler is asked to compile, once per step and with a
+bounded wait.
 
-What fixed a complaint here is remembered. When a change does not check out, what the check
-said is held; when a later change makes the same complaint go away, what that change did is
-filed against it, and the next occurrence arrives with the note.
+When a change fails its check and a later change clears the same complaint, the fix is filed
+against the complaint. The next occurrence arrives with the note. Line and column numbers and
+paths are left out of the comparison. `/why` lists what has been learned.
 
 ## Taking something back
 
 Every change the agent makes is committed to a git repository kept beside the session, with
-the project as its work tree. Your own repository is not touched: different directory, and
-excluded from this one.
+the project as its work tree. Your own repository is not touched.
 
 ```
 /diff    everything the agent has changed this session
@@ -370,15 +347,14 @@ excluded from this one.
 /help
 ```
 
-`/undo` again goes one turn further back. It never rewinds - the undo is itself a commit
-carrying the older state - so a file you edited by hand between the agent's change and your
-decision to take it back is still in that history rather than discarded. See
-[SECURITY.md](SECURITY.md): the history holds copies of your files and outlives the session.
+`/undo` again goes one turn further back. An undo is itself a commit carrying the older state,
+so an edit you made by hand in between stays in the history. `u` on a receipt puts that turn
+back, after asking. See [SECURITY.md](SECURITY.md): the history holds copies of your files and
+outlives the session.
 
 ## Sessions
 
-Every session is written to `$XDG_DATA_HOME/lokode/sessions/<id>.jsonl` as it happens, which
-is what makes a bad run answerable afterwards.
+Each session is written to `$XDG_DATA_HOME/lokode/sessions/<id>.jsonl` as it runs.
 
 ```sh
 lokode --continue              # the most recent session for this root
@@ -386,17 +362,15 @@ lokode --resume <id>           # a particular one
 lokode --no-transcript         # record nothing
 ```
 
-A resumed session keeps its id and appends to the file it came from. It also remembers the
-model, so `--model` becomes optional.
+A resumed session keeps its id, appends to its file and remembers its model, so `--model`
+becomes optional.
 
-Logs go to `$XDG_STATE_HOME/lokode/lokode.log`, never to the terminal - the interface owns that
-screen. `RUST_LOG=lokode=debug` turns the volume up; `--log-file` puts it somewhere else.
+Logs go to `$XDG_STATE_HOME/lokode/lokode.log`, never to the terminal. `RUST_LOG=lokode=debug`
+raises the level, and `--log-file` moves the file.
 
 ## Settling approvals in advance
 
-An agreement given at the prompt lasts as long as the session, so working the same way
-every day means answering the same questions every day. An `[approve]` section states them
-once, in a file that can be read in review:
+An `[approve]` section states agreements once, in a file that can be reviewed:
 
 ```toml
 [approve]
@@ -411,182 +385,122 @@ egress = ["docs.rs"]
 bash = ["git push*", "*rm -rf*"]
 ```
 
-A refusal wins over an agreement, always: a rule written down so that something never
-happens must not be reachable by an agreement given in a hurry. Patterns take one wildcard,
-`*`, for any run of characters, because a rule language with more in it invites a rule
-nobody can read. Write rules are read relative to the project, so the same file works on
-another machine. The cap is per turn: a standing agreement is for the work a person
-expects, and a loop calling a tool a thousand times is not that work. `/approve` says what
-is in force.
+- A refusal always wins over an agreement.
+- A pattern takes one wildcard, `*`, for any run of characters.
+- Write rules are relative to the project.
+- `max-auto` caps the agreements used in one turn.
+- `/approve` says what is in force.
 
-A run driven by a script does not take the file's word for what may go ahead: the policy on
-its command line is the narrower statement and the one its author made for that run. The
-file's refusals still apply, because nothing may widen one.
+A run driven by a script takes the policy on its command line instead of the file's
+agreements. The file's refusals still apply.
 
 ## One model per kind of work
-
-A turn asks for very different things: a plan, a patch, a search through files, a small
-JSON object to repair a malformed reply. One model for all of them is one compromise for
-each. A project can say which does what:
 
 ```toml
 model = "qwen3:8b"              # everything not named below
 
 [roles]
-plan = "qwen3.5:35b"            # reasoning is worth paying for here
+plan = "qwen3.5:35b"
 edit = "qwen3-coder:30b"
-search = "qwen3:1.7b"           # answered by a delegated session
-repair = "qwen3:0.6b"           # reshaping a reply, nothing to reason about
+search = "qwen3:1.7b"
+repair = "qwen3:0.6b"
+review = "qwen3:4b"
+escalate = "qwen3.5:35b"
 ```
 
-Three of these are in force today. The repair round trip takes the repair model, since a
-malformed reply has to be reshaped rather than thought about. A delegated question takes
-the search model, which is the safest routing decision there is: a wrong choice costs one
-sub-turn, not the conversation. And `/plan` moves to the plan model and `/act` gives it
-back, saying so, because a model that changed without anyone announcing it makes the next
-answer's character unexplainable. The status line shows the model answering now, which is
-not always the one the session started with.
+| Role | When it answers |
+|---|---|
+| `plan` | from `/plan` to `/act`, said on the screen both ways |
+| `edit` | loaded in the background while a plan is written, ready for acting |
+| `search` | a delegated question |
+| `repair` | a malformed reply to reshape |
+| `review` | before anything changes, to say whether it does what was asked |
+| `escalate` | after a change fails its check |
 
-`review` names a second pair of eyes. When it is set, anything about to change something is
-read first by that model, which is asked one question: does this do what was asked. An
-objection stops the call before the file moves and is handed back to the model that
-proposed it; agreement is one word and costs a few tokens on a card that was idle anyway.
-The value is in the disagreement, which is why it is a different model: one checking its
-own work agrees with itself. A reviewer that cannot be reached never blocks anything.
+The band shows the model answering now.
 
-`escalate` is the model to raise to when the cheap path has been shown to be wrong. After a
-write the language server is asked about the file, and, where the project has no language
-server for it, the compiler is asked to compile and nothing else. A step whose change did
-not check out raises the session to that model for the steps that follow, saying so. Two writes that
-do check out bring it back down. A step that only read something moves nothing either way,
-because a search says nothing about whether a model can produce a change that compiles.
+An objection from `review` stops the call and goes back to the model that proposed it. A
+reviewer that cannot be reached never blocks anything.
 
-What fixed a complaint here is remembered too. When a change does not check out, what the
-check said is held; when a later change makes the same complaint go away, what that change
-did is filed against it. The next time the same complaint appears it arrives with the note,
-so the model does not work out from nothing what this project worked out last week. Line
-and column numbers and the path in front of them are dropped from the signature: the same
-mistake made twice is the same mistake at two places. `/why` lists what has been learned.
+A step whose change fails its check raises the session to `escalate` for the steps that follow,
+and says so. Two writes that pass bring it back down. A step that only reads moves nothing.
 
-What each model has managed here is remembered between sessions: how many of its writes
-checked out, per model, per project, kept beside the state on this machine and never in the
-repository. When the cheap model has been failing most of its writes in a project, the next
-turn starts on the stronger one and says so, instead of paying again for the bad step the
-last session already paid for. Four writes before it is allowed to decide anything, and only
-the last fifty are remembered, because a project changes. `/why` says what is in force and
-what the evidence is.
+What each model managed is remembered per project, outside the repository: how many of its
+last fifty writes passed their check. When the cheap model fails most of its writes in a
+project, the next turn starts on the stronger one and says so. It decides only after four
+writes. `/why` says what is in force and on what evidence.
 
-That signal is the difference between this and a router in a chat window. A chat router can
-only ask a model how confident it feels; a coding agent can compile. So the cheap model is
-tried first and the expensive one is paid for where it has been shown to be needed, rather
-than wherever a guess said the task looked hard.
-
-`/model` lists them beside what the backend serves.
-
-While a plan is being written, and while a tool runs during planning, the model that acting
-will use is asked for in the background so the server reads its weights then rather than
-when you type `/act`. A load is seconds of gigabytes onto a card, and those seconds pass
-anyway while you plan. It is fire and forget: it never delays a turn, never fails one, and
-never queues behind itself, and the server decides whether it can hold two models at once.
-Only done against a backend on this machine or this network, since a hosted endpoint has
-nothing to warm and would bill the attempt. `preload = false` turns it off.
+While a plan is written, the `edit` model, or else the default one, is asked for in the
+background, so the server loads it before `/act`. It never delays or fails a turn. It runs against a backend on
+this machine or this network only. `preload = false` turns it off.
 
 ## Choosing a model
 
-The model flag is optional. What is asked for wins, then what a resumed session was last
-using, then what the configuration remembers; failing all that the backend is asked, and
-one that serves a single model leaves nothing to choose. With several and nothing
-remembered the session opens with no model and says so: `/model` lists what the backend
-serves, `/model <name>` switches now and writes the name into your own configuration for
-next time.
+The model comes from, in order: the flag, the model a resumed session last used, the one the
+configuration remembers, and a backend that serves a single model. With several and none
+remembered, the session opens without one and says so. `/model` lists what the backend serves,
+and `/model <name>` switches and remembers the name in your configuration.
 
-A switch mid-session keeps the conversation and takes the new model's window from its own
-table in the configuration when there is one, because a budget inherited from another
-model either wastes the window or overruns it. What the last model taught about its
-tokenizer is forgotten at the same time, and measured again from the first reply.
+A switch keeps the conversation. The new model's window comes from its own table in the
+configuration when there is one. What the previous model taught about its tokenizer is
+measured again.
 
 ## Working it out while you are not waiting
 
-`--discover`, or `discover = true` in the configuration, gives the session a second thread
-of work: while nothing else is running, one question about the project is taken off a
-queue, answered by a read-only session of its own, and what it found is written down. The
-queue and what has been learned both outlive the session, so the finding out is done once
-rather than at the start of every day.
+`--discover`, or `discover = true` in the configuration, adds work done outside turns. While
+nothing else runs, a read-only session answers one question about the project from a queue and
+writes down what it found. The queue and the findings outlive the session.
 
-It is held in place by three rules. It runs only while nothing else does and stops the
-instant you press Enter. It asks the server at a priority that yields, so the answer you
-are waiting for is never behind it. And it plans rather than acts, which means every tool
-that writes, runs a command or reaches the network refuses before it runs.
+- It runs only while nothing else does, and stops when you send a line.
+- It asks the server at a priority that yields.
+- Every tool that writes, runs a command or reaches the network refuses.
+- It shows in the rail while it works, and `/jobs` stops it for the session.
 
-What it learns goes in front of the model next session, as a short paragraph of statements
-rather than the dozen searches that produced them. That is the point: the searching is what
-fills a window, and a window spent on rediscovery is a window not spent on the work.
-`/digest` shows what is known and where each statement came from, `/digest forget` clears
-it, and what is worth keeping belongs in `.lokode.md` where the rest of the team gets it.
+What it learned goes in front of the model next session, as a short paragraph. `/digest` shows
+it with its sources, and `/digest forget` clears it. What is worth keeping belongs in
+`.lokode.md`.
 
 ## What the project tells the agent
 
-`.lokode.md` at the root of a project, and `~/.config/lokode/lokode.md` for yourself, are read
-at the start of every session and appended to the system message: the conventions, the
-command that checks a change, what must not be touched. The user's file comes first and the
-project's second, each named, so the model can tell whose rule it is reading.
+`.lokode.md` at the root of the project and `~/.config/lokode/lokode.md` for yourself are
+appended to the system message of every session. Yours comes first, and each is named.
 
-`/init` writes a first draft from what the repository shows - the language, the test
-command, the layout - for you to edit. Keep it short: this text is in the system message,
-which compaction never drops, so it holds the window for the whole session. What does not
-fit is trimmed at a line boundary and said out loud, because an instruction the agent never
-received would otherwise look like one it ignored.
+`/init` writes a first draft from the repository: the language, the test command, the layout.
+Keep it short, since it holds the window for the whole session. What does not fit is cut at a
+line boundary, and the session says so.
 
 ## Where the window stands
 
-The status line carries how full the history budget is, in per cent, amber past three
-quarters and red at the line where the oldest steps start being elided. `/context` says
-what is holding it - the standing instructions and the tool manifest, what you said, what
-the model said, the tool results - largest first. `/compact` elides now rather than waiting
-for the window to fill, which is what you want before handing the agent a large file.
-
-Compaction announcing itself after the fact was the only signal there had ever been, and by
-then the session had already forgotten something.
+The window is read from the backend's model list (`max_model_len`), and `--context-tokens`
+caps it. The status line shows how full it is: amber past three quarters, red once the oldest
+steps start being elided. `/context` says what holds it, largest first: the instructions and
+the tools, what you said, what the model said, the tool results. `/compact` elides now.
 
 ## What it cost
 
-`/cost` says what the session has spent: steps, tokens in and out, the rate the answers
-arrived at, and how much of the time went to the model rather than to tools, then the last
-few steps one by one. The server was already counting the tokens and nothing showed them,
-so the question "was that worth it" had no answer.
+`/cost` says what the session spent: steps, tokens in and out, the rate, the time in the model
+and in tools, the energy by purpose, then the last steps one by one.
 
-Every step is also written to the transcript with what was knowable before it - the size of
-the history, what the previous step called, whether its write came back clean, the mode -
-and what it cost. Nothing routes on any of it yet. A claim that one arrangement of models
-is faster than another needs both measured, and that needs the measurement to exist first.
+Every step is written to the transcript with what was known before it and what it cost.
 
 ## Handing off a search
 
-`delegate` gives one self-contained question a session of its own, with its own window and
-the same tools, and brings back only what it answered. A search that reads six files to
-settle one question otherwise spends the conversation's budget on text nobody needs
-afterwards, and once compaction drops it what is left is the middle of a hunt with no
-beginning.
+`delegate` gives one self-contained question a session of its own, with its own window and the
+same tools, and returns only its answer. The search does not fill the conversation's window.
 
-The sub-session cannot delegate again, and its step limit is lower than a turn's: work that
-needs more than a few steps was not self-contained, and saying so is more use than waiting
-through it. It runs under the caller's approvals and the caller's cancellation, because it
-is the same person's work.
+Its steps stay under its own step, folded into a count once it ends. `Space` unfolds them, and
+`Enter` opens a page with each step, its evidence and the answer. `Ctrl-C` on its step stops it
+alone.
+
+The sub-session cannot delegate again, and its step limit is lower than a turn's. It runs under
+the caller's approvals.
 
 ## Work of several steps
 
-`update_plan` is a tool the model calls to keep a task list: what is done, what is being
-worked on, what is left. It appears as a pane above the input while there is a list, and
-disappears when there is not. Nothing is written to disk and nothing is approved, since it
-changes nothing outside the session.
-
-It is for the person first: a step counter says how far a turn has gone and nothing about
-what it is doing. It helps a small model too, whose window drops the oldest messages first
-and with them the goal it was given.
+`update_plan` is a tool the model calls to keep a task list: done, in progress, left. The rail
+shows it under PLAN with how far it has got. It writes nothing and needs no approval.
 
 ## Hooks
-
-A project can put its own commands at the edges of the loop:
 
 ```toml
 [hooks]
@@ -595,32 +509,24 @@ post-tool = "cargo fmt"
 turn-end = "cargo test --quiet"
 ```
 
-They run only around a tool that changes something, because a hook on every read would run
-on the searches an agent does by the dozen. A non-zero exit from the pre-tool hook refuses
-the call and what it printed is handed to the model, which is the only form of guidance an
-agent cannot skip. The post-tool hook's output is handed over too, since a formatter that
-rewrote the file has something the model needs to know. The turn-end hook reports to you,
-and runs for an abandoned turn as well, because that is exactly when files have been left
-half-changed.
+| Hook | |
+|---|---|
+| `pre-tool` | runs before a tool that changes something. A non-zero exit refuses the call, and its output goes to the model |
+| `post-tool` | runs after such a tool. Its output goes to the model |
+| `turn-end` | runs when a turn ends, abandoned or not. Its output goes to you |
 
-The hook is given the tool's name, the project root and which edge it is at, in the
-environment. It is bounded in time and its output is bounded in length, since both land
-inside a turn.
+The tool hooks run only around tools that change something. A hook gets the tool's name, the
+project root and its edge in the environment. Its time and its output are bounded.
 
 ## Commands a project ships
 
-A Markdown file under `.lokode/commands` is a command: `review.md` makes `/review`, and what
-it holds becomes that turn's prompt. Anything typed after the name replaces `$ARGS`, or is
-appended when the file does not name it, so one command serves a family of tasks. `/help`
-lists the project's alongside the built-ins.
-
-That is how a team ships its way of working - a review checklist, a release routine -
-without anyone writing Rust, and it is in version control with the code it is about.
+A Markdown file under `.lokode/commands` is a command: `review.md` makes `/review`, and its
+text becomes the prompt. What is typed after the name replaces `$ARGS`, or is appended when the
+file has none. `/help` lists them with the built-ins.
 
 ## Tools from elsewhere
 
-A Model Context Protocol server is a program you configure; whatever it offers becomes tools
-the model can call, named `<server>__<tool>` so nothing can take the name of a built-in.
+A Model Context Protocol server you configure adds its tools, named `<server>__<tool>`.
 
 ```toml
 [mcp.servers.github]
@@ -629,88 +535,69 @@ args = []
 env = { GITHUB_TOKEN = "..." }     # prefer naming a variable your shell already has
 ```
 
-They are not trusted the way the built-in tools are. A built-in is trusted because its
-behaviour is in this repository; one of these is somebody else's program, and the root
-confines it no more than it confines a shell. So every call is approved, every call is
-treated as able to change the project, and the schema a server advertises is checked before
-it is allowed to shape the grammar the model is held to - a schema this code cannot compile
-would not break one tool, it would break the turn. A tool that fails that check is refused by
-name and said so, and a server that will not start takes only itself down.
+- Every call is approved, and treated as able to change the project.
+- The schema a server advertises is checked before it shapes the grammar. A tool that fails the
+  check is refused by name.
+- A server that does not start takes only itself down.
+- Its resources become one tool, `<server>__read_resource`, whose description lists them.
 
-A server's documents are reached the same way: its resources become one tool that reads
-them, `<server>__read_resource`, with what the server listed at startup named in the tool's
-own description so the model can ask for one without a round trip to discover it. Reaching
-them through a tool rather than a surface of their own is what keeps the approval flow, the
-checkpoints and the transcript working on them unchanged.
-
-`/mcp` says which servers are running and which prompts they offer; `/mcp <server>
-<prompt>` fetches one and makes it this turn's prompt.
+`/mcp` lists the running servers and their prompts. `/mcp <server> <prompt>` makes one the
+turn's prompt.
 
 ## Without the interface
 
-`-p` runs one turn and exits, for a git hook, a pipeline, or anything else with nobody sitting
-in front of it.
+`-p` runs one turn and exits.
 
 ```sh
 lokode -p "fix the clippy warnings" --approve edits --output json
 ```
 
-Since there is nobody to answer an approval, the policy is stated up front. `--approve none`
-is the default and declines everything that would change anything - the agent can still read
-and search. `edits` allows writes, edits and patches, and not the shell, the test suite or the
-network. `all` allows everything. Each call is judged on its own; a policy never grants a
-standing agreement.
+| Policy | |
+|---|---|
+| `--approve none` | the default. Anything that would change something is declined, and reading and searching still work |
+| `--approve edits` | writes, edits and patches are allowed. The shell, the test suite and the network stay refused |
+| `--approve all` | everything is allowed |
 
-`--output text` streams the model's prose to stdout and progress to stderr, so a caller can
-take the answer and discard the narration. `--output json` writes one object at the end, with
-the result, every tool call and its output, and whether anything was refused.
+Each call is judged on its own. A policy never grants a standing agreement.
 
-The exit code says what happened without anything having to be parsed: `0` finished, `1`
-something failed - a backend error, or the step limit - and `2` a tool was refused by the
-policy, which is a different thing from the model deciding not to use one.
+`--output text` streams the answer to stdout and the progress to stderr. `--output json` writes
+one object at the end: the result, every tool call with its output, what was refused and the
+energy.
+
+| Exit code | |
+|---|---|
+| `0` | finished |
+| `1` | something failed: a backend error, or the step limit |
+| `2` | a tool was refused by the policy |
 
 ## Which API
 
-`kind = "auto"` reads it off the URL and is right for every ordinary case: `api.anthropic.com`
-is the Messages API, everything else is OpenAI-compatible. Name one explicitly to reach a
-proxy that speaks Anthropic's format on your own host.
+`kind = "auto"` reads it from the URL: `api.anthropic.com` is the Messages API, and anything
+else is OpenAI-compatible. Name a kind to reach a proxy of Anthropic's format on your own host.
 
-The credential is resolved the same way either way: the environment, then a named variable,
-then a file only you can read. Only where it goes on the wire differs: `Authorization: Bearer`
-for the OpenAI family, `x-api-key` for Anthropic. Converting a working configuration between
-them is a header change, not a value change, and lokode makes it for you.
+The credential is found the same way for both: the environment, then a named variable, then a
+file only you can read. It goes in `Authorization: Bearer` for the OpenAI family and in
+`x-api-key` for Anthropic.
 
-What differs beyond that is absorbed at the boundary. Anthropic's system prompt is a top-level
-field rather than a message, its tool results are blocks inside a user turn rather than their
-own role, and its stream speaks a different alphabet. None of that reaches the loop, the
-transcript or the screen. Reasoning is the same story from the other direction: `<think>` tags
-inline, a `reasoning` field, a `reasoning_content` field and Anthropic's thinking blocks are
-four spellings of one thing, and lokode shows all four the same way, set apart and never fed
-back to the model.
+The differences stop at the boundary: the system prompt, the tool results and the stream.
+Reasoning arrives as `<think>` tags, a `reasoning` field, a `reasoning_content` field or
+Anthropic's thinking blocks. All four are shown the same way, set apart, and never sent back to
+the model.
 
 ## How tools are called
 
-Two protocols, and `--tool-protocol auto` picks between them.
+| `--tool-protocol` | |
+|---|---|
+| `native` | the server's `tools` field and the `tool_calls` it returns |
+| `envelope` | one JSON object per turn, held to a grammar built from the tool schemas. It needs only a completion |
+| `auto` | the default. The backend is asked once at startup for a call, and a server that answers with prose or refuses the field gets the envelope |
 
-**Native** uses the server's own `tools` field and the `tool_calls` it returns, so results are
-answered against ids the server actually issued. **Envelope** has the model emit one JSON
-object per turn, constrained by a grammar generated from the tool schemas; it needs nothing
-from the server beyond a completion, which is why it is what a small local model behind a
-plain backend still works against.
-
-`auto` asks the backend once, at startup, for a call it is told to make. A server that
-honours the `tools` field returns one; a server that takes the field and drops it returns
-prose, which is the failure that costs the most and reports nothing - the model is never
-told it has tools and every turn ends in a description of the call it could not make. The
-session drops to the envelope either way, and also the first time a backend refuses the
-field outright, finishing the turn either way. The status line says which protocol is in
-force. Pin `--tool-protocol native` or `envelope` to skip the question.
+The band says which protocol is in force.
 
 ## Configuring it
 
-Settings come from four places. The narrower statement wins, because it is the one made
-knowing more: a flag beats the environment, the environment beats `<root>/.lokode.toml`, that
-beats `~/.config/lokode/config.toml`, and that beats the built-in default.
+Settings come from five places, and the narrower wins: a flag, the environment,
+`<root>/.lokode.toml`, `~/.config/lokode/config.toml`, the built-in default.
 
 ```toml
 # ~/.config/lokode/config.toml, or .lokode.toml in a project
@@ -735,16 +622,15 @@ allow-hosts = ["docs.example.com"]
 transcripts = true
 ```
 
-`lokode --show-config` prints which files were read and what everything resolved to. It names
-headers and never prints their values.
+`lokode --show-config` prints the files read and what everything resolved to. It names the
+headers without their values.
 
-**Credentials.** `LOKODE_API_KEY` is checked first, then the variable named by `api-key-env`,
-then an `api-key` written in the file. The last is accepted only if nobody else can read the
-file - a secret in a world-readable file is not a secret. A key about to cross a network
-unencrypted is warned about.
+**Credentials.** `LOKODE_API_KEY` comes first, then the variable named by `api-key-env`, then
+an `api-key` in the file. The file is accepted only if nobody else can read it. A key about to
+cross a network unencrypted is warned about.
 
-Everything also has an environment variable: `LOKODE_MODEL`, `LOKODE_BACKEND_URL`,
-`LOKODE_LOG_FILE`, `LOKODE_API_KEY`.
+Environment variables: `LOKODE_MODEL`, `LOKODE_BACKEND_URL`, `LOKODE_LOG_FILE`,
+`LOKODE_API_KEY`.
 
 ## Development
 
