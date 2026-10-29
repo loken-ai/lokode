@@ -39,6 +39,8 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui-textarea = "0.9"
 # The markdown a model writes, read for the pane
 pulldown-cmark = { version = "0.13", default-features = false }
+# Code coloured by TextMate grammar, in pure Rust: the bundled grammars only
+syntaxmate = { version = "0.2", default-features = false, features = ["bundled-grammars"] }
 # Asks the terminal what its text and background colours are, for the tints
 terminal-colorsaurus = "1"
 

@@ -1,0 +1,8 @@
+lokode is licensed under MIT OR Apache-2.0, at your option.
+
+Third-party material built into the binary:
+
+- The TextMate grammars that syntaxmate bundles (https://github.com/phongndo/syntaxmate),
+  taken from the language collection of the shiki project. 272 are under the MIT licence,
+  three under Apache-2.0 and one under Apache-2.0 WITH LLVM-exception. syntaxmate's
+  THIRD_PARTY_LICENSES.md names each grammar with its licence and copyright holders.

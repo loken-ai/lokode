@@ -238,6 +238,9 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
     // Asked before the screen is taken: the answer arrives on the input the event loop
     // reads from then on.
     crate::ui::theme::set(crate::ui::theme::Theme::detect());
+    // The grammars are read off the screen's thread, so the first code block does not
+    // wait for them.
+    tokio::task::spawn_blocking(crate::ui::highlight::warm);
     let guard = term::TerminalGuard::new()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
 

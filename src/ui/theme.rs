@@ -58,6 +58,35 @@ pub struct Theme {
     pub found: Style,
     /// The background of a raised surface, when the terminal can show one.
     pub tint: Option<Color>,
+    /// The colours of code, by what each part of it is.
+    pub syntax: Syntax,
+}
+
+/// The colours of code, in the terminal's named colours.
+#[derive(Debug, Clone)]
+pub struct Syntax {
+    pub comment: Style,
+    pub string: Style,
+    pub number: Style,
+    pub keyword: Style,
+    pub function: Style,
+    /// Type and class names.
+    pub kind: Style,
+}
+
+impl Default for Syntax {
+    fn default() -> Self {
+        Self {
+            comment: Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+            string: Style::default().fg(Color::Green),
+            number: Style::default().fg(Color::Yellow),
+            keyword: Style::default().fg(Color::Magenta),
+            function: Style::default().fg(Color::Blue),
+            kind: Style::default().fg(Color::Cyan),
+        }
+    }
 }
 
 impl Default for Theme {
@@ -89,6 +118,7 @@ impl Default for Theme {
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
             tint: None,
+            syntax: Syntax::default(),
         }
     }
 }

@@ -372,10 +372,17 @@ impl Renderer {
             line.push(Span::styled(format!("  {lang}"), theme().dim));
             self.out.push(Line::from(line));
         }
-        for raw in code.trim_end_matches('\n').split('\n') {
+        let code = code.trim_end_matches('\n');
+        let base = theme().code.patch(surface);
+        let rows = crate::ui::highlight::rows(lang, code, base).unwrap_or_else(|| {
+            code.split('\n')
+                .map(|raw| vec![Span::styled(raw.to_string(), base)])
+                .collect()
+        });
+        for row in rows {
             let mut line = gutter.clone();
             line.push(Span::raw("  "));
-            let body = Line::from(Span::styled(raw.to_string(), theme().code.patch(surface)));
+            let body = Line::from(row);
             let pad = match (self.width, theme().tint) {
                 (0, _) | (_, None) => 0,
                 (w, Some(_)) => w.saturating_sub(lead + line_width(&body)),
