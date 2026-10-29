@@ -834,6 +834,7 @@ headers = { "X-Team" = "lokode" }
 what a stopped one said last. It lists the prompts and what each takes.
 `/mcp <server> <prompt> name=value` makes one the turn's prompt. A value in double quotes takes
 spaces, and an argument the prompt needs is asked for before the server is.
+`/mcp restart <server>` starts a server again as it was configured, and takes its tools again.
 
 ## Without the interface
 

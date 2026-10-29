@@ -72,6 +72,7 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         checkpoint_error,
         instruction_notes,
         mcp,
+        mcp_clients,
         steer,
         tools,
         tasks,
@@ -266,7 +267,7 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         discovery,
         lsp.clone(),
         &mut live,
-        mcp.clients.clone(),
+        mcp_clients.clone(),
         session_approvals,
         &mut agent_evt_rx,
         &mut approval_rx,
@@ -284,7 +285,7 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
     // Language servers are killed on drop either way; this gives them the chance to put
     // their own caches down cleanly first.
     let _ = tokio::time::timeout(SHUTDOWN_GRACE, lsp.shutdown()).await;
-    for client in &mcp.clients {
+    for client in crate::mcp::snapshot(&mcp_clients) {
         client.shutdown().await;
     }
     let agent_stopped = tokio::time::timeout(SHUTDOWN_GRACE, agent_task)
@@ -342,7 +343,7 @@ async fn run_ui(
     live: &mut mpsc::Receiver<crate::tools::registry::LiveOutput>,
     // The servers, for the prompts /mcp can take. Cloned handles: the process still owns
     // them and still shuts them down.
-    mcp: Vec<std::sync::Arc<crate::mcp::client::McpClient>>,
+    mcp: crate::mcp::Clients,
     // What has been agreed to for this session, so a standing decision can be taken from
     // the keyboard as well as at the prompt.
     session_approvals: std::sync::Arc<crate::sandbox::approval::SessionApprovals>,
@@ -1175,7 +1176,7 @@ async fn run_ui(
                                             policy: &cfg.policy,
                                             tools: &tools,
                                             digest: &digest,
-                                            mcp: &mcp,
+                                            mcp: &crate::mcp::snapshot(&mcp),
                                             session_id: &session_id,
                                             approvals: &session_approvals,
                                             busy: state.busy,
@@ -1355,7 +1356,7 @@ async fn run_ui(
                                         policy: &cfg.policy,
                                         tools: &tools,
                                         digest: &digest,
-                                        mcp: &mcp,
+                                        mcp: &crate::mcp::snapshot(&mcp),
                                         session_id: &session_id,
                                         approvals: &session_approvals,
                                         busy: state.busy,
@@ -1757,7 +1758,7 @@ async fn run_ui(
                                             policy: &cfg.policy,
                                             tools: &tools,
                                             digest: &digest,
-                                            mcp: &mcp,
+                                            mcp: &crate::mcp::snapshot(&mcp),
                                             session_id: &session_id,
                                             approvals: &session_approvals,
                                             busy: state.busy,
@@ -1963,7 +1964,7 @@ async fn run_ui(
                         &cfg.root,
                         &Known {
                             models: &state.models,
-                            mcp: &mcp,
+                            mcp: &crate::mcp::snapshot(&mcp),
                         },
                     );
                 }

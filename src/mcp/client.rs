@@ -93,6 +93,8 @@ pub struct McpClient {
     pub origin: String,
     /// How many of its tools the session adopted.
     adopted: std::sync::atomic::AtomicUsize,
+    /// The configuration it was started from, to start it again.
+    pub started_from: std::sync::OnceLock<(crate::config::McpServer, std::path::PathBuf)>,
     child: Mutex<Option<Child>>,
     http: Option<Http>,
     shared: Arc<Shared>,
@@ -150,6 +152,7 @@ impl McpClient {
                 .collect::<Vec<_>>()
                 .join(" "),
             adopted: Default::default(),
+            started_from: Default::default(),
             child: Mutex::new(Some(child)),
             http: None,
             shared,
@@ -183,6 +186,7 @@ impl McpClient {
             server: server.to_string(),
             origin: url.to_string(),
             adopted: Default::default(),
+            started_from: Default::default(),
             child: Mutex::new(None),
             http: Some(Http {
                 client: reqwest::Client::builder().build()?,

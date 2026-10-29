@@ -86,6 +86,11 @@ impl Mode {
 /// which model, how full the window is - cannot be answered from the interface's side. It
 /// is asked here and answered on the channel the asker holds.
 pub enum Control {
+    /// Start a tool server again, and take its tools again.
+    RestartMcp {
+        server: String,
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
     /// Switch model, or, with no name, say what could be switched to.
     Model {
         name: Option<String>,
@@ -913,7 +918,7 @@ pub struct Agent {
     /// and an elision.
     pub tasks: Option<Arc<crate::tools::plan::TaskList>>,
     /// The tool servers, so a change to what one offers reaches the next turn.
-    pub mcp: Vec<Arc<crate::mcp::client::McpClient>>,
+    pub mcp: crate::mcp::Clients,
     /// Which turn this is, counted from one. Checkpoints are labelled with it, which is
     /// what lets `/undo` take back a turn rather than a single tool call.
     pub turn: u32,
@@ -1245,6 +1250,26 @@ impl Agent {
                     0 => "nothing had been said yet".to_string(),
                     n => format!("started again; {n} message(s) dropped"),
                 });
+            }
+            Control::RestartMcp { server, reply } => {
+                let old = crate::mcp::snapshot(&self.mcp)
+                    .into_iter()
+                    .find(|c| c.server == server);
+                let said = match old {
+                    None => format!("no server called {server}"),
+                    Some(old) => {
+                        let mut registry = (*self.registry).clone();
+                        match crate::mcp::restart(&old, &self.mcp, &mut registry).await {
+                            Ok(said) => {
+                                self.registry = Arc::new(registry);
+                                self.rebuild_preamble();
+                                said
+                            }
+                            Err(e) => format!("{server} did not start again: {e:#}"),
+                        }
+                    }
+                };
+                let _ = reply.send(said);
             }
             Control::Note(text) => {
                 // As something the person said, because that is what it is: they ran the
@@ -2757,11 +2782,9 @@ impl Agent {
     /// Take again the tools of each server that said they changed, so this turn offers
     /// what the servers offer now.
     async fn take_changed_tools(&mut self, events: &mpsc::Sender<AgentEvent>) {
-        let changed: Vec<_> = self
-            .mcp
-            .iter()
+        let changed: Vec<_> = crate::mcp::snapshot(&self.mcp)
+            .into_iter()
             .filter(|c| c.take_tools_changed())
-            .cloned()
             .collect();
         if changed.is_empty() {
             return;
@@ -3521,7 +3544,7 @@ mod tests {
             ctx: h.ctx.clone(),
             checkpoints: None,
             tasks: None,
-            mcp: Vec::new(),
+            mcp: Default::default(),
             turn: 0,
         };
         (agent, steer_tx)

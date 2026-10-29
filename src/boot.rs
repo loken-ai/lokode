@@ -55,6 +55,8 @@ pub struct Booted {
     pub checkpoint_error: Option<String>,
     /// The tool servers that were started, and anything worth saying about them.
     pub mcp: crate::mcp::Loaded,
+    /// The servers as the session holds them, a server started again included.
+    pub mcp_clients: crate::mcp::Clients,
     /// Hands the agent a line the user typed while a turn was running.
     pub steer: tokio::sync::mpsc::Sender<String>,
     /// Every tool this session can call, named and described, built-ins and the servers'.
@@ -80,6 +82,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // Third-party tools go in after the built-ins, so a server cannot take a name the agent
     // already relies on.
     let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root).await;
+    let mcp_clients: crate::mcp::Clients = Arc::new(std::sync::RwLock::new(mcp.clients.clone()));
     // The skills, offered by name and loaded when the model needs one.
     let (skills, skill_warnings) = crate::tools::skill::load(&crate::tools::skill::dirs(&cfg.root));
     if let Some(tool) = crate::tools::skill::LoadSkill::new(skills) {
@@ -462,7 +465,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         ctx,
         checkpoints: checkpoints.clone(),
         tasks: Some(tasks.clone()),
-        mcp: mcp.clients.clone(),
+        mcp: mcp_clients.clone(),
         turn: 0,
     };
 
@@ -483,6 +486,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         checkpoints,
         checkpoint_error,
         mcp,
+        mcp_clients,
         steer: steer_tx,
         tools,
         tasks,

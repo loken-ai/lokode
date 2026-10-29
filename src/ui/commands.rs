@@ -515,6 +515,21 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
             (!w.is_empty()).then_some(w)
         }
         match (given(&server), given(&prompt)) {
+            // A server stopped or wedged, started again as it was configured.
+            (Some("restart"), Some(name)) if !mcp.iter().any(|c| c.server == "restart") => {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                if control
+                    .send(crate::agent::agent_loop::Control::RestartMcp {
+                        server: name.to_string(),
+                        reply: tx,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return Ran::Said("the agent is not listening".into());
+                }
+                return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
+            }
             (Some(server), Some(prompt)) => {
                 let Some(client) = mcp.iter().find(|c| c.server == server) else {
                     return Ran::Said(format!("no server called {server}"));
@@ -1094,7 +1109,7 @@ pub(crate) const HELP: &str = "\
 /agents the agents a turn can hand work to, and what each may use
 /skills the skills the model can load, and what each is for
 /plugins the plugins installed, what each brings, and which are off
-/mcp    the tool servers, or /mcp <server> <prompt> to take one of their prompts
+/mcp    the tool servers, /mcp <server> <prompt> to take a prompt, /mcp restart <server>
 /clear  start the conversation again, keeping the project and the model
 /resume come back to a session recorded earlier, choosing from what there is
 /help   this, and any command the project defines";

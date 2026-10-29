@@ -18,6 +18,15 @@ use std::sync::Arc;
 use crate::config::McpServer;
 use crate::tools::registry::{Registry, Tool};
 
+/// The servers of a session, shared by the agent and the interface, so a server started
+/// again is the one both speak to.
+pub type Clients = Arc<std::sync::RwLock<Vec<Arc<client::McpClient>>>>;
+
+/// The servers as they stand, without holding the list.
+pub fn snapshot(clients: &Clients) -> Vec<Arc<client::McpClient>> {
+    clients.read().map(|c| c.clone()).unwrap_or_default()
+}
+
 /// Everything that came of starting the configured servers.
 #[derive(Default)]
 pub struct Loaded {
@@ -75,6 +84,42 @@ pub async fn readopt(
     Ok((adopted, notices))
 }
 
+/// Start the server of `old` again, as it was configured, and make it the one `clients`
+/// and `registry` hold: its tools and its documents are taken again. Says what it has.
+pub async fn restart(
+    old: &Arc<client::McpClient>,
+    clients: &Clients,
+    registry: &mut Registry,
+) -> anyhow::Result<String> {
+    let (spec, root) =
+        old.started_from.get().cloned().ok_or_else(|| {
+            anyhow::anyhow!("{} was not started from a configuration", old.server)
+        })?;
+    old.shutdown().await;
+    let new = start(&old.server, &spec, &root).await?;
+    let prefix = format!("{}__", new.server);
+    registry.retain(|name| !name.starts_with(&prefix));
+    let offered = new.list_tools().await?;
+    let (mut adopted, notices) = adopt(&new, &offered, registry);
+    let resources = new.list_resources().await;
+    if !resources.is_empty()
+        && registry.add(Arc::new(tool::McpResources::new(new.clone(), &resources)))
+    {
+        adopted += 1;
+    }
+    new.set_adopted(adopted);
+    if let Ok(mut list) = clients.write() {
+        for slot in list.iter_mut().filter(|c| c.server == new.server) {
+            *slot = new.clone();
+        }
+    }
+    let mut said = format!("{} started again: {adopted} tool(s)", new.server);
+    for notice in notices {
+        said.push_str(&format!("; {notice}"));
+    }
+    Ok(said)
+}
+
 /// Start one server, or reach it over HTTP.
 async fn start(
     name: &str,
@@ -85,7 +130,7 @@ async fn start(
         .timeout
         .map(std::time::Duration::from_secs)
         .unwrap_or(client::TIMEOUT);
-    match (&spec.command, &spec.url) {
+    let client = match (&spec.command, &spec.url) {
         (Some(command), None) => {
             client::McpClient::start(name, command, &spec.args, &spec.env, root, timeout).await
         }
@@ -99,7 +144,9 @@ async fn start(
             client::McpClient::connect(name, url, headers, root, timeout).await
         }
         _ => anyhow::bail!("a server needs either a command or a url"),
-    }
+    }?;
+    let _ = client.started_from.set((spec.clone(), root.to_path_buf()));
+    Ok(client)
 }
 
 /// Start each configured server and register what it offers.
