@@ -92,7 +92,8 @@ or the startup probe. A server that measures nothing shows nothing, never a zero
 
 Read [SECURITY.md](SECURITY.md) first. On Linux, a command the agent runs may write only in the
 project, the temporary directories and the build caches, and cannot read your credentials.
-`--sandbox read-only` lets it write nowhere, and `--sandbox off` leaves it unconfined.
+`--sandbox read-only` lets it write nowhere, and `--sandbox off` leaves it unconfined. A command
+the sandbox stopped can be run outside it, and you are asked first.
 
 ## Install
 

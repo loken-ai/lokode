@@ -80,6 +80,9 @@ Landlock, which the command and everything it starts cannot undo.
 - `rm -rf ~` fails, and so does `cat ~/.ssh/id_rsa`. Everything else may be read.
 - A `~` in `[shell] writable` is your home directory, and a relative name is in the project.
   A name that does not exist is reported at startup.
+- A command that fails tells the model it ran in the sandbox. The model may then ask to run it
+  outside, with `outside_sandbox`. That question always reaches you: no `allow` rule answers
+  it, and a run without a terminal refuses it.
 - A sandbox asked for on a kernel without Landlock refuses the command rather than run it
   unconfined. Without Landlock and with nothing asked, commands run unconfined and the session
   says so.

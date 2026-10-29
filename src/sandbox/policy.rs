@@ -152,6 +152,14 @@ fn matching(rules: &Rules, scope: &ApprovalScope, root: &Path, need: Need) -> Op
             .map(|p| format!("\"{p}\""))
     };
     let (patterns, subject) = match scope {
+        // Outside the sandbox only the person agrees: refusals and questions apply, an
+        // allow rule does not.
+        ApprovalScope::Unconfined(cmd) => {
+            return match need {
+                Need::Any => matching(rules, &ApprovalScope::Command(cmd.clone()), root, need),
+                Need::Every => None,
+            };
+        }
         ApprovalScope::Command(cmd) => {
             let parts = crate::sandbox::shell::parts(cmd);
             return match need {
@@ -288,6 +296,29 @@ mod tests {
         ));
     }
 
+    /// Outside the sandbox, an allow rule agrees to nothing and a refusal still refuses.
+    #[test]
+    fn outside_the_sandbox_only_a_person_agrees() {
+        let p = Policy {
+            allow: Rules {
+                bash: vec!["*".into()],
+                ..Default::default()
+            },
+            deny: Rules {
+                bash: vec!["rm *".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let root = Path::new("/p");
+        let out = |c: &str| ApprovalScope::Unconfined(c.into());
+        assert_eq!(p.verdict(&out("cargo fetch"), root, 0), Verdict::Ask);
+        assert!(matches!(
+            p.verdict(&out("rm -r x"), root, 0),
+            Verdict::Refused(_)
+        ));
+    }
+
     /// What the policy says to ask about is asked about, even when allowed.
     #[test]
     fn an_ask_rule_wins_over_an_agreement() {
@@ -394,6 +425,22 @@ mod through_the_context {
             diff_preview: None,
             scope: ApprovalScope::Command(cmd.into()),
         }
+    }
+
+    /// A run without a terminal never runs a command outside the sandbox, whatever its
+    /// policy says.
+    #[tokio::test]
+    async fn a_script_cannot_leave_the_sandbox() {
+        let h = Harness::new(Answer::Yes);
+        let mut ctx = h.ctx.clone();
+        ctx.honour_allow = false;
+        let mut req = request("cargo fetch");
+        req.scope = ApprovalScope::Unconfined("cargo fetch".into());
+        assert!(matches!(
+            ctx.approve(req).await,
+            Approval::Denied(Denial::Rule(_))
+        ));
+        assert_eq!(h.asked().len(), 0);
     }
 
     /// A run driven by a script does not take the configuration's word for what may go

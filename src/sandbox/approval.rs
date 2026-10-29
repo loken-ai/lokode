@@ -22,6 +22,8 @@ pub enum ApprovalScope {
     /// honest and still spares the user the repeats an agent actually produces, which are
     /// the same command run again.
     Command(String),
+    /// One shell command, matched in full, run outside the sandbox.
+    Unconfined(String),
     /// Writes by one tool anywhere under a directory.
     Path { tool: String, prefix: PathBuf },
     /// Network egress to one host.
@@ -43,6 +45,9 @@ impl ApprovalScope {
     pub fn describe_under(&self, root: &std::path::Path) -> String {
         match self {
             ApprovalScope::Command(cmd) => format!("this exact command ({cmd})"),
+            ApprovalScope::Unconfined(cmd) => {
+                format!("this exact command outside the sandbox ({cmd})")
+            }
             ApprovalScope::Path { tool, prefix } => {
                 let shown = prefix.strip_prefix(root).unwrap_or(prefix).display();
                 let shown = shown.to_string();

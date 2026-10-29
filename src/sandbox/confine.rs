@@ -78,7 +78,10 @@ impl Sandbox {
             true => "",
             false => ", and may not open a network connection",
         };
-        format!("It ran in a sandbox: it {writes}{network}.")
+        format!(
+            "It ran in a sandbox: it {writes}{network}. If the sandbox is what stopped it, the \
+             same call with outside_sandbox set asks the user to run it unconfined."
+        )
     }
 }
 

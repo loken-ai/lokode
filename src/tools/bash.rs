@@ -23,6 +23,8 @@ struct BashArgs {
     cwd: Option<PathBuf>,
     #[serde(default)]
     timeout_s: Option<u64>,
+    #[serde(default)]
+    outside_sandbox: bool,
 }
 
 #[async_trait]
@@ -34,7 +36,9 @@ impl Tool for Bash {
         true
     }
     fn description(&self) -> &str {
-        "Run a shell command. Requires user approval. cwd must be inside project root."
+        "Run a shell command. Requires user approval. cwd must be inside project root. It runs \
+         in a sandbox where there is one; outside_sandbox asks the user to run it unconfined, \
+         for a command the sandbox stopped."
     }
 
     fn args_schema(&self) -> Value {
@@ -43,7 +47,8 @@ impl Tool for Bash {
             "properties": {
                 "cmd":       {"type": "string"},
                 "cwd":       {"type": "string"},
-                "timeout_s": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_S}
+                "timeout_s": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_S},
+                "outside_sandbox": {"type": "boolean"}
             },
             "required": ["cmd"],
             "additionalProperties": false
@@ -68,16 +73,24 @@ impl Tool for Bash {
         let timeout =
             Duration::from_secs(a.timeout_s.unwrap_or(DEFAULT_TIMEOUT_S).min(MAX_TIMEOUT_S));
 
+        let sandbox = ctx.sandbox.as_ref().filter(|_| !a.outside_sandbox);
+        let outside = match a.outside_sandbox && ctx.sandbox.is_some() {
+            true => "  (outside the sandbox)",
+            false => "",
+        };
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),
                 summary: if cwd == ctx.root {
-                    format!("$ {}", a.cmd)
+                    format!("$ {}{outside}", a.cmd)
                 } else {
-                    format!("$ {}  (in {})", a.cmd, ctx.short(&cwd))
+                    format!("$ {}{outside}  (in {})", a.cmd, ctx.short(&cwd))
                 },
                 diff_preview: None,
-                scope: ApprovalScope::Command(a.cmd.clone()),
+                scope: match outside.is_empty() {
+                    true => ApprovalScope::Command(a.cmd.clone()),
+                    false => ApprovalScope::Unconfined(a.cmd.clone()),
+                },
             })
             .await
         {
@@ -96,12 +109,7 @@ impl Tool for Bash {
         cmd.arg("-lc").arg(&a.cmd).current_dir(&cwd);
         // Kept until the spawn is over. A sandbox that cannot be applied refuses the
         // command rather than run it unconfined.
-        let _ruleset = match ctx
-            .sandbox
-            .as_ref()
-            .map(|s| s.confine(&mut cmd))
-            .transpose()
-        {
+        let _ruleset = match sandbox.map(|s| s.confine(&mut cmd)).transpose() {
             Ok(fd) => fd,
             Err(e) => {
                 return Ok(ToolOutput::err(format!(
@@ -152,7 +160,7 @@ impl Tool for Bash {
         report.push_str(&ctx.clamp(out));
         report.push_str("\nstderr:\n");
         report.push_str(&ctx.clamp(err));
-        if let Some(sandbox) = ctx.sandbox.as_ref().filter(|_| code != 0) {
+        if let Some(sandbox) = sandbox.filter(|_| code != 0) {
             report.push_str(&format!("\n{}", sandbox.note()));
         }
 
@@ -344,6 +352,34 @@ mod tests {
             out.content
         );
         let _ = std::fs::remove_file(&outside);
+    }
+
+    /// A command the model asks to run outside the sandbox is put to the user as such, and
+    /// once agreed it runs unconfined.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_command_outside_the_sandbox_is_asked_for_and_unconfined() {
+        if crate::sandbox::confine::abi().is_none() {
+            return;
+        }
+        let h = Harness::confined();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("written");
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": format!("touch {}", target.display()), "outside_sandbox": true}),
+            )
+            .await;
+        succeeded(&out);
+        assert!(target.exists(), "{}", out.content);
+        let asked = h.asked();
+        assert!(
+            matches!(asked[0].scope, ApprovalScope::Unconfined(_)),
+            "{:?}",
+            asked[0].scope
+        );
+        assert!(asked[0].summary.ends_with("(outside the sandbox)"));
     }
 
     /// A confined command may discard its output, and does not see the variables the

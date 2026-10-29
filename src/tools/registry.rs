@@ -206,6 +206,18 @@ impl ToolCtx {
                 tracing::info!(tool = %req.tool, scope = ?req.scope, "allowed by policy");
                 return Approval::Proceed;
             }
+            _ if !self.honour_allow
+                && matches!(
+                    req.scope,
+                    crate::sandbox::approval::ApprovalScope::Unconfined(_)
+                ) =>
+            {
+                return Approval::Denied(Denial::Rule(
+                    "a command runs outside the sandbox only when a person agrees, and this \
+                     run has nobody to ask"
+                        .into(),
+                ));
+            }
             crate::sandbox::policy::Verdict::Insist(why) if !self.honour_allow => {
                 tracing::info!(tool = %req.tool, scope = ?req.scope, %why, "nobody to ask");
                 return Approval::Denied(Denial::Rule(format!(

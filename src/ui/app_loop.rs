@@ -2022,7 +2022,8 @@ fn corrected_command(
     summary: &str,
     scope: &crate::sandbox::approval::ApprovalScope,
 ) -> Option<String> {
-    let crate::sandbox::approval::ApprovalScope::Command(command) = scope else {
+    use crate::sandbox::approval::ApprovalScope;
+    let (ApprovalScope::Command(command) | ApprovalScope::Unconfined(command)) = scope else {
         return None;
     };
     Some(
