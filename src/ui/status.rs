@@ -22,6 +22,8 @@ pub struct Status {
     pub context_percent: u8,
     /// Whether the entry pointed at is a receipt whose turn changed files.
     pub on_receipt: bool,
+    /// What is open over the rest, which owns the keys while it is.
+    pub open: Option<Open>,
     /// The files the line being typed names with `@`, and the characters they hold.
     pub attaching: Option<(usize, u64)>,
     /// The plan's tasks done and in all, said here when the rail is not on screen.
@@ -66,6 +68,17 @@ pub struct Status {
 
 /// The frames of the spinner, one per tick.
 const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
+
+/// What can be open over the conversation and own the keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Open {
+    /// A command's page.
+    Page,
+    /// A list a command opened.
+    Choice,
+    /// The completion list over the input.
+    Completion,
+}
 
 impl Status {
     /// The line under the input: what is in force on the left, what is happening on the
@@ -228,6 +241,31 @@ impl Status {
             ]
         };
         let mut spans = Vec::new();
+        // What is open over the rest owns the keys, so the line says its keys and no others.
+        match self.open {
+            Some(Open::Page) => {
+                spans.extend(key("esc", "close"));
+                spans.extend(key("↑↓", "scroll"));
+                spans.extend(key("pgup pgdn", "page"));
+                spans.extend(key("home end", "ends"));
+                return Line::from(spans);
+            }
+            Some(Open::Choice) => {
+                spans.extend(key("enter", "choose"));
+                spans.extend(key("↑↓", "move"));
+                spans.extend(key("type", "narrow"));
+                spans.extend(key("esc", "cancel"));
+                return Line::from(spans);
+            }
+            Some(Open::Completion) => {
+                spans.extend(key("tab", "take"));
+                spans.extend(key("enter", "take and send"));
+                spans.extend(key("↑↓", "move"));
+                spans.extend(key("esc", "close"));
+                return Line::from(spans);
+            }
+            None => {}
+        }
         // First while it is there: what to do with a selection is the question the person
         // has just now, and the keys behind it are the ones they always have.
         if !self.mouse_ours {
@@ -334,6 +372,7 @@ mod tests {
             rail_offered: false,
             attaching: None,
             on_receipt: false,
+            open: None,
             step: 2,
             max_steps: 16,
             busy,

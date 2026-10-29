@@ -207,6 +207,7 @@ still caps it where it is stated.
 | `Alt-Enter` while it works | ask it once the turn is over |
 | `Up` / `Down` | walk what you cleared, then what you have already sent |
 | `PageUp` / `PageDown`, `Home` / `End`, wheel | scroll |
+| click | unfold a step, answer a question by its badge, take an item of a list |
 | drag with the mouse | select here; dragging past an edge scrolls |
 | `Shift` + drag | select in the terminal itself, for its own copy key |
 | `Ctrl-T` | hand the mouse to the terminal, or take it back |

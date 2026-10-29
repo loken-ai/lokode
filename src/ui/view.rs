@@ -241,6 +241,15 @@ pub(crate) fn draw(
         },
         rail_offered: !wide,
         on_receipt: state.receipt_here().is_some(),
+        open: if state.choosing.is_some() {
+            Some(crate::ui::status::Open::Choice)
+        } else if state.sheet.is_some() {
+            Some(crate::ui::status::Open::Page)
+        } else if state.picker.is_some() {
+            Some(crate::ui::status::Open::Completion)
+        } else {
+            None
+        },
         attaching: {
             let line = input.lines().join("\n");
             match line.contains('@') {
@@ -658,6 +667,64 @@ mod tests {
         state.entries.push(Entry::Notice("one more".into()));
         frame(&mut state, 120, 32);
         assert_eq!(state.drawings.drawn, all + 1);
+    }
+
+    /// A click without a drag on a badge of the question waiting is that badge's key, and
+    /// a click on a step with more to show unfolds it.
+    #[test]
+    fn a_click_answers_a_badge_and_unfolds_a_step() {
+        let mut state = a_session();
+        let (reply, _answer) = tokio::sync::oneshot::channel();
+        state.pending_approval = Some(crate::sandbox::approval::ApprovalPrompt {
+            req: crate::sandbox::approval::ApprovalRequest {
+                tool: "edit_file".into(),
+                summary: "edit src/mcp/client.rs".into(),
+                diff_preview: None,
+                scope: crate::sandbox::approval::ApprovalScope::Command("x".into()),
+            },
+            reply,
+        });
+        let mut long = Step::called("40".into(), "read_file".into(), r#"{"path":"a.rs"}"#);
+        long.outcome = Some(Outcome {
+            is_error: false,
+            body: (0..30)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            took: std::time::Duration::ZERO,
+            origin: Origin::Ran,
+        });
+        state.entries.push(Entry::Step(long));
+        let text = frame(&mut state, 120, 80);
+        let rows: Vec<&str> = text.lines().collect();
+        // The row of badges, found on screen, and the column of its `n`.
+        let (row, line) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, l)| l.contains(" n  no"))
+            .expect("the badges on screen");
+        let column = line
+            .find(" n  no")
+            .map(|at| line[..at].chars().count() + 1)
+            .expect("the n badge");
+        let first = state.first_visible();
+        let spot = |row: usize, column: usize| crate::ui::chat::Spot {
+            line: first + row - 1,
+            column,
+        };
+        assert_eq!(
+            state.clicked(spot(row, column)),
+            Some(crate::ui::state::Click::Key('n'))
+        );
+        let (step_row, _) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, l)| l.contains("read_file  a.rs"))
+            .expect("the step on screen");
+        assert!(matches!(
+            state.clicked(spot(step_row, 4)),
+            Some(crate::ui::state::Click::Unfold(_))
+        ));
     }
 
     /// One scene for the screens: a name, a size, the state and what is typed.

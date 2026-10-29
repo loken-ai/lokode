@@ -795,6 +795,23 @@ async fn run_ui(
                         MouseEventKind::Up(MouseButton::Left) if state.dragging => {
                             state.dragging = false;
                             state.drag_edge = None;
+                            // A click that did not move acts on what it lands on: a badge
+                            // of the question waiting answers it, and a step unfolds.
+                            if let Some((from, to)) = state.selecting {
+                                if from == to {
+                                    state.selecting = None;
+                                    match state.clicked(from) {
+                                        Some(crate::ui::state::Click::Key(c)) => injected.push_back(
+                                            Event::Key(crossterm::event::KeyEvent::new(
+                                                KeyCode::Char(c),
+                                                KeyModifiers::NONE,
+                                            )),
+                                        ),
+                                        Some(crate::ui::state::Click::Unfold(i)) => state.toggle_unfolded(i),
+                                        None => {}
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -996,6 +1013,16 @@ async fn run_ui(
                             KeyCode::Down => chosen_move(&mut state, 1),
                             KeyCode::PageUp => chosen_move(&mut state, -step),
                             KeyCode::PageDown => chosen_move(&mut state, step),
+                            KeyCode::Home => {
+                                if let Some(c) = state.choosing.as_mut() {
+                                    c.set_at(0);
+                                }
+                            }
+                            KeyCode::End => {
+                                if let Some(c) = state.choosing.as_mut() {
+                                    c.set_at(usize::MAX);
+                                }
+                            }
                             KeyCode::Backspace => {
                                 if let Some(c) = state.choosing.as_mut() {
                                     c.pop();
@@ -1090,6 +1117,16 @@ async fn run_ui(
                             KeyCode::PageDown => {
                                 if let Some(s) = state.sheet.as_mut() {
                                     s.scroll(height as isize, height);
+                                }
+                            }
+                            KeyCode::Home => {
+                                if let Some(s) = state.sheet.as_mut() {
+                                    s.scroll(isize::MIN / 2, height);
+                                }
+                            }
+                            KeyCode::End => {
+                                if let Some(s) = state.sheet.as_mut() {
+                                    s.scroll(isize::MAX / 2, height);
                                 }
                             }
                             _ => {}

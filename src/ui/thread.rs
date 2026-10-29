@@ -192,6 +192,14 @@ impl Pane {
         self.blocks[block].get(at - self.starts[block])
     }
 
+    /// The block that row `at` belongs to.
+    pub fn block_at(&self, at: usize) -> Option<usize> {
+        if at >= self.len {
+            return None;
+        }
+        Some(self.starts.partition_point(|&s| s <= at) - 1)
+    }
+
     /// The row at which block `at` begins.
     pub fn start_of(&self, at: usize) -> Option<usize> {
         self.starts.get(at).copied()

@@ -47,6 +47,15 @@ pub(crate) fn show(state: &mut UiState, verb: &str, reply: String) {
     }
 }
 
+/// What a click lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Click {
+    /// A key, as a badge stands for it.
+    Key(char),
+    /// The entry at this index, to unfold or fold.
+    Unfold(usize),
+}
+
 /// How long the status line keeps saying what was just done.
 pub(crate) const SAID_FOR: Duration = Duration::from_secs(4);
 
@@ -445,6 +454,40 @@ impl UiState {
             Some(Entry::Receipt(r)) if !r.files.is_empty() => Some(r.turn),
             _ => None,
         }
+    }
+
+    /// Show the entry at `i` whole if it was counted, or counted if it was whole.
+    pub(crate) fn toggle_unfolded(&mut self, i: usize) {
+        if !self.unfolded.remove(&i) {
+            self.unfolded.insert(i);
+        }
+    }
+
+    /// What a click without a drag at `spot` does: a badge of the question waiting is its
+    /// key, and a row of an entry with more to show unfolds or folds it.
+    pub(crate) fn clicked(&self, spot: crate::ui::chat::Spot) -> Option<Click> {
+        let row = self.wrapped.get(spot.line)?;
+        if self.pending_approval.is_some() {
+            let mut at = 0usize;
+            for span in &row.spans {
+                let wide = span.content.chars().count();
+                let letter = span.content.trim();
+                let badge = span.content.len() == 3
+                    && span.content.starts_with(' ')
+                    && span.content.ends_with(' ')
+                    && matches!(letter, "y" | "a" | "n" | "e" | "x")
+                    && span.style.bg == Some(crate::ui::theme::theme().warn);
+                if badge && spot.column >= at && spot.column < at + wide {
+                    return letter.chars().next().map(Click::Key);
+                }
+                at += wide;
+            }
+        }
+        let entry = self.wrapped.block_at(spot.line)?;
+        self.entries
+            .get(entry)
+            .filter(|e| e.can_unfold())
+            .map(|_| Click::Unfold(entry))
     }
 
     /// Where the running step of the call `id` sits, if one is.
