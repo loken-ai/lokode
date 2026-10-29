@@ -890,7 +890,7 @@ pub struct Agent {
     pub steps: Vec<crate::agent::steps::StepRecord>,
     /// The language servers, for checking a file the agent has just written. `None`
     /// leaves writes unchecked, which is what a test without a server wants.
-    pub lsp: Option<Arc<crate::tools::lsp::LspPool>>,
+    pub lsp: Option<Arc<crate::lsp::LspPool>>,
     /// Lines the user typed while a turn was running. Drained at a step boundary, which
     /// is where the history can take a user message without moving a boundary the
     /// compactor reasons about.
@@ -2466,6 +2466,10 @@ impl Agent {
         // The language server first: it is already running, it knows the file, and it
         // answers in milliseconds.
         if let Some(lsp) = self.lsp.as_ref() {
+            // Every server hears of what was written, created or removed, so what it
+            // knows of the project is the project.
+            let paths: Vec<_> = written.iter().map(|n| self.ctx.root.join(n)).collect();
+            lsp.files_changed(&paths).await;
             for name in &written {
                 let path = self.ctx.root.join(name);
                 if !path.exists() {

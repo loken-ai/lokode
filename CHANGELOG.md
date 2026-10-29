@@ -31,6 +31,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 - Interface: stop redrawing while idle.
 - Interface: keep the last lines of a call that prints fast.
+- Language server: answer the server's own requests, count columns as it does, restart it once.
 
 ### Removed
 

@@ -19,8 +19,8 @@ use crate::agent::transcript::{self, Record, Transcript};
 use crate::app::{AppConfig, ProtocolChoice, Resume};
 use crate::backend::client::BackendClient;
 use crate::checkpoint::Checkpoints;
+use crate::lsp::LspPool;
 use crate::sandbox::approval::{self, ApprovalReceiver, SessionApprovals};
-use crate::tools::lsp::LspPool;
 use crate::tools::registry::{Registry, ToolCtx};
 
 /// An agent and the handles somebody has to hold while it runs.
