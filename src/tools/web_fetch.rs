@@ -489,6 +489,7 @@ mod tests {
             http: crate::tools::registry::tool_http_client().unwrap(),
             allow_hosts: Arc::new(allow.iter().map(|s| s.to_string()).collect()),
             sandbox: None,
+            planning: false,
             known: Default::default(),
             tail: Default::default(),
         }

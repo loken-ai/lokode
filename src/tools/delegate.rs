@@ -24,27 +24,109 @@ use crate::tools::registry::{Registry, Tool, ToolCtx, ToolOutput};
 /// call, and sharing one would share its history, which is the opposite of the point.
 pub struct Delegation {
     pub backend: Arc<dyn crate::backend::provider::Provider>,
+    /// The session's tools, without the delegation. Each agent gets its share of them.
     pub registry: Arc<Registry>,
-    /// The model a delegated turn uses: the search role when the project named one.
-    pub model: String,
+    pub agents: Vec<crate::agent::agents::AgentSpec>,
+    /// The model of an agent that names none and changes nothing: the search role, or the
+    /// session's model.
+    pub search_model: String,
+    /// The model of an agent that names none and may change things: the edit role, or the
+    /// session's model.
+    pub edit_model: String,
     pub roles: crate::agent::roles::Roles,
+    /// What each named model needs, for the window of an agent's model.
+    pub models: std::collections::BTreeMap<String, crate::config::ModelSection>,
+    /// The window of a model the configuration says nothing about.
     pub context_tokens: usize,
     pub max_answer_tokens: usize,
     pub protocol: crate::agent::protocol::SharedProtocol,
     pub grammar_enabled: bool,
-    /// Fewer than a full turn's: a delegated piece of work that needs twenty steps was
-    /// not self-contained, and the caller should have been told rather than waited.
+    /// The session's step limit, which no agent goes past.
     pub max_steps: usize,
     /// How many delegated turns run at once. The others wait for a place.
     pub slots: Arc<tokio::sync::Semaphore>,
+    /// The hooks an agent that may change things runs, as the session does.
+    pub hooks: crate::config::HooksSection,
+    /// The language servers that check what an agent writes.
+    pub lsp: Option<Arc<crate::lsp::LspPool>>,
+}
+
+/// The tools a delegated session never has: the caller's task list, and the delegation.
+const NEVER: &[&str] = &["update_plan", "delegate"];
+
+/// The steps of an agent that changes nothing and names no limit.
+const READING_STEPS: usize = 8;
+
+impl Delegation {
+    /// The tools `spec` may use.
+    fn tools_of(&self, spec: &crate::agent::agents::AgentSpec) -> Registry {
+        match &spec.tools {
+            None => self.registry.read_only(NEVER),
+            Some(names) => {
+                let mut out = Registry::new();
+                for name in names.iter().filter(|n| !NEVER.contains(&n.as_str())) {
+                    if let Some(tool) = self.registry.get(name) {
+                        out.add(tool);
+                    }
+                }
+                out
+            }
+        }
+    }
+
+    /// What the agents name that this session does not have, said once at startup.
+    pub fn unknown(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for spec in &self.agents {
+            for name in spec.tools.iter().flatten() {
+                if self.registry.get(name).is_none() || NEVER.contains(&name.as_str()) {
+                    out.push(format!(
+                        "the agent {} names a tool it cannot have: {name}",
+                        spec.name
+                    ));
+                }
+            }
+        }
+        out
+    }
 }
 
 pub struct Delegate {
     pub what: Arc<Delegation>,
+    /// What the model reads about it, with the agents it can hand work to.
+    description: String,
+}
+
+impl Delegate {
+    pub fn new(what: Arc<Delegation>) -> Self {
+        let agents: Vec<String> = what
+            .agents
+            .iter()
+            .map(|a| format!("{} ({})", a.name, a.description))
+            .collect();
+        let description = format!(
+            "Hand one self-contained task to an agent, in a session with its own context \
+             window, and get back only its answer. Use it for a search that would read many \
+             files, or for work an agent is named for. agent is one of: {}. Without agent, {}.",
+            agents.join("; "),
+            crate::agent::agents::DEFAULT
+        );
+        Self { what, description }
+    }
+
+    /// Whether any of its agents may change something.
+    fn any_writes(&self) -> bool {
+        self.what
+            .agents
+            .iter()
+            .any(|a| self.what.tools_of(a).iter().any(|(_, t)| t.mutates()))
+    }
 }
 
 #[derive(Deserialize)]
 struct Args {
+    #[serde(default)]
+    agent: Option<String>,
     task: String,
 }
 
@@ -60,16 +142,23 @@ impl Tool for Delegate {
         false
     }
 
+    /// What an agent wrote is recorded once the call ends, under the caller's turn.
+    fn may_change(&self) -> bool {
+        self.any_writes()
+    }
+
     fn description(&self) -> &str {
-        "Hand one self-contained question to a fresh session with its own context window, \
-         and get back only its answer. Use it for a search that would read many files to \
-         answer one question. The session reads and searches and changes nothing."
+        &self.description
     }
 
     fn args_schema(&self) -> Value {
+        let names: Vec<&str> = self.what.agents.iter().map(|a| a.name.as_str()).collect();
         json!({
             "type": "object",
-            "properties": {"task": {"type": "string"}},
+            "properties": {
+                "agent": {"type": "string", "enum": names},
+                "task": {"type": "string"}
+            },
             "required": ["task"],
             "additionalProperties": false
         })
@@ -81,23 +170,45 @@ impl Tool for Delegate {
             return Ok(ToolOutput::err("say what to delegate"));
         }
         let w = &self.what;
+        let name = a.agent.as_deref().unwrap_or(crate::agent::agents::DEFAULT);
+        let Some(spec) = w.agents.iter().find(|s| s.name == name) else {
+            let names: Vec<&str> = w.agents.iter().map(|s| s.name.as_str()).collect();
+            return Ok(ToolOutput::err(format!(
+                "there is no agent {name}; there is {}",
+                names.join(", ")
+            )));
+        };
+        let registry = Arc::new(w.tools_of(spec));
+        let writes = registry.iter().any(|(_, t)| t.mutates());
         // A place among those that run at once, given up if the call is stopped first.
         let _slot = tokio::select! {
             biased;
             _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
             slot = w.slots.acquire() => slot?,
         };
-        // Its own history, its own budget, and the tools that read: a sub-session that
-        // could not read the project could not answer anything about it.
+        let model = spec.model.clone().unwrap_or_else(|| match writes {
+            true => w.edit_model.clone(),
+            false => w.search_model.clone(),
+        });
+        let window = w
+            .models
+            .get(&model)
+            .and_then(|m| m.context_tokens)
+            .unwrap_or(w.context_tokens);
+        let max_steps = spec
+            .max_steps
+            .unwrap_or(if writes { w.max_steps } else { READING_STEPS })
+            .min(w.max_steps);
+        // An agent that may change things changes nothing while its caller plans.
+        let mode = match writes && !ctx.planning {
+            true => crate::agent::agent_loop::Mode::Act,
+            false => crate::agent::agent_loop::Mode::Plan,
+        };
         let system = crate::agent::agent_loop::Agent::build_system_prompt(
-            &w.registry,
+            &registry,
             w.protocol.get(),
             crate::agent::agent_loop::Mode::Act,
-            Some(
-                "You are answering one question for another agent. Use the tools to find \
-                 out, then answer in a few lines. Nothing you read is returned, only what \
-                 you say, so state the answer rather than pointing at where it is.",
-            ),
+            Some(&spec.prompt),
         );
         let mut sub = crate::agent::agent_loop::Agent {
             this_turn: Default::default(),
@@ -117,32 +228,29 @@ impl Tool for Delegate {
             warming: Default::default(),
             spend: Default::default(),
             steps: Vec::new(),
-            lsp: None,
+            lsp: w.lsp.clone().filter(|_| writes),
             steer: tokio::sync::mpsc::channel(1).1,
             backend: w.backend.clone(),
-            registry: w.registry.clone(),
-            session: crate::agent::session::Session::new(
-                system,
-                w.context_tokens,
-                w.max_answer_tokens,
-            ),
+            registry,
+            session: crate::agent::session::Session::new(system, window, w.max_answer_tokens),
             cfg: crate::agent::agent_loop::AgentConfig {
-                model: w.model.clone(),
+                model,
                 // The sub-session is short and its model is already chosen; nothing after
                 // it is known, so there is nothing to hold ready.
                 preload: false,
                 guess_with: None,
                 roles: w.roles.clone(),
-                // Its registry holds no tool that changes anything, and the mode refuses
-                // one should it be asked for all the same.
-                mode: crate::agent::agent_loop::Mode::Plan,
-                hooks: Default::default(),
+                mode,
+                hooks: match writes {
+                    true => w.hooks.clone(),
+                    false => Default::default(),
+                },
                 instructions: None,
                 remember_model_in: None,
-                context_tokens: w.context_tokens,
+                context_tokens: window,
                 models: Default::default(),
                 grammar_enabled: w.grammar_enabled,
-                max_steps: w.max_steps,
+                max_steps,
                 max_answer_tokens: w.max_answer_tokens,
                 protocol: w.protocol.get(),
                 allow_fallback: false,
@@ -243,6 +351,17 @@ impl Tool for Delegate {
             answer_chars = answer.len(),
             "delegated turn finished"
         );
+        // What it changed, in the words a write reports, so the caller counts the files
+        // as its own turn's.
+        if !sub.this_turn.files.is_empty() {
+            let changed: Vec<String> = sub
+                .this_turn
+                .files
+                .iter()
+                .map(|f| format!("edited {f}"))
+                .collect();
+            answer = format!("{answer}\n\nIt changed:\n{}", changed.join("\n"));
+        }
         if called_after {
             return Ok(ToolOutput::ok(ctx.clamp(format!(
                 "It did not finish{}. What it said last, which may be partial:\n{answer}",

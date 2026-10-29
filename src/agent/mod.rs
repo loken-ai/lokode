@@ -1,4 +1,5 @@
 pub mod agent_loop;
+pub mod agents;
 pub mod background;
 pub mod check;
 pub mod digest;

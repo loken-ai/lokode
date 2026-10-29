@@ -586,6 +586,32 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         }
         return Ran::Said(out);
     }
+    if verb == "agents" {
+        let (agents, warnings) = crate::agent::agents::load(&crate::agent::agents::dirs(root));
+        let mut out = String::from(
+            "## Agents\n\n| Agent | What it is for | Tools | Model | From |\n|---|---|---|---|---|\n",
+        );
+        for a in &agents {
+            out.push_str(&format!(
+                "| `{}` | {} | {} | {} | {} |\n",
+                a.name,
+                a.description.replace('|', "/"),
+                a.tools
+                    .as_ref()
+                    .map(|t| t.join(", "))
+                    .unwrap_or_else(|| "those that change nothing".into()),
+                a.model.as_deref().unwrap_or("its role's"),
+                a.from,
+            ));
+        }
+        for w in warnings {
+            out.push_str(&format!("\n{w}\n"));
+        }
+        out.push_str(
+            "\nAn agent is a Markdown file in `.lokode/agents/` or `~/.config/lokode/agents/`.\n",
+        );
+        return Ran::Said(out);
+    }
     if verb == "approve" {
         // What is in force, which is two things: what the configuration settles without
         // asking, and what was agreed to here. The second used to be invisible - a
@@ -804,7 +830,7 @@ const GROUPS: [(&str, &[&str]); 4] = [
     (
         "Where things stand",
         &[
-            "why", "cost", "context", "jobs", "lsp", "digest", "tools", "mcp", "help",
+            "why", "cost", "context", "jobs", "lsp", "digest", "tools", "agents", "mcp", "help",
         ],
     ),
 ];
@@ -894,6 +920,7 @@ pub(crate) const HELP: &str = "\
 /digest what has been worked out about this project, or /digest forget
 /init   write a first draft of this project's instructions
 /tools  the tools this session can call, and where they came from
+/agents the agents a turn can hand work to, and what each may use
 /mcp    the tool servers, or /mcp <server> <prompt> to take one of their prompts
 /clear  start the conversation again, keeping the project and the model
 /resume come back to a session recorded earlier, choosing from what there is

@@ -1014,6 +1014,7 @@ impl Agent {
             return format!("already in {} mode", mode.label());
         }
         self.cfg.mode = mode;
+        self.ctx.planning = mode == Mode::Plan;
         self.rebuild_preamble();
         // Planning is where reasoning is worth paying for and acting is where being over
         // quickly is, so the mode carries its model with it when the project named one.
@@ -2156,6 +2157,19 @@ impl Agent {
                         self.repeats.insert(key, result.clone());
                     } else if !result.is_error {
                         self.repeats.clear();
+                    }
+                    let handed_on = !mutating
+                        && !result.is_error
+                        && self
+                            .registry
+                            .get(&call.name)
+                            .is_some_and(|t| t.may_change());
+                    if handed_on {
+                        for path in changed_paths(&result.content) {
+                            self.this_turn.touched(&path);
+                        }
+                        self.repeats.clear();
+                        self.record_change(&call.name, &events).await;
                     }
                     if mutating && !result.is_error {
                         for path in changed_paths(&result.content) {
@@ -3403,22 +3417,7 @@ mod tests {
 
         let mut reg = crate::boot::build_registry(h.root.clone()).0;
         let sub = Arc::new(reg.clone());
-        reg.register(crate::tools::delegate::Delegate {
-            what: Arc::new(crate::tools::delegate::Delegation {
-                backend: Arc::new(crate::backend::client::BackendClient::new(
-                    backend.url.clone(),
-                )),
-                registry: sub,
-                model: "test".into(),
-                roles: Default::default(),
-                context_tokens: 8192,
-                max_answer_tokens: 4096,
-                protocol: Default::default(),
-                grammar_enabled: false,
-                max_steps: 4,
-                slots: Arc::new(tokio::sync::Semaphore::new(2)),
-            }),
-        });
+        reg.register(delegation(&backend.url, (*sub).clone(), 4));
         let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
         let events = drive(&mut agent, "what does a.txt say").await;
 
@@ -3450,22 +3449,27 @@ mod tests {
         registry: crate::tools::registry::Registry,
         max_steps: usize,
     ) -> crate::tools::delegate::Delegate {
-        crate::tools::delegate::Delegate {
-            what: Arc::new(crate::tools::delegate::Delegation {
-                backend: Arc::new(crate::backend::client::BackendClient::new(
-                    backend.to_string(),
-                )),
-                registry: Arc::new(registry),
-                model: "test".into(),
-                roles: Default::default(),
-                context_tokens: 8192,
-                max_answer_tokens: 4096,
-                protocol: Default::default(),
-                grammar_enabled: false,
-                max_steps,
-                slots: Arc::new(tokio::sync::Semaphore::new(2)),
-            }),
-        }
+        let mut explore = crate::agent::agents::AgentSpec::explore();
+        explore.max_steps = Some(max_steps);
+        crate::tools::delegate::Delegate::new(Arc::new(crate::tools::delegate::Delegation {
+            backend: Arc::new(crate::backend::client::BackendClient::new(
+                backend.to_string(),
+            )),
+            registry: Arc::new(registry),
+            agents: vec![explore],
+            search_model: "test".into(),
+            edit_model: "test".into(),
+            roles: Default::default(),
+            models: Default::default(),
+            context_tokens: 8192,
+            max_answer_tokens: 4096,
+            protocol: Default::default(),
+            grammar_enabled: false,
+            max_steps: 16,
+            slots: Arc::new(tokio::sync::Semaphore::new(2)),
+            hooks: Default::default(),
+            lsp: None,
+        }))
     }
 
     /// A delegated session changes nothing, even when it asks to and is given the tool.
@@ -3499,6 +3503,66 @@ mod tests {
             !h.path("b.txt").exists(),
             "a delegated session wrote a file"
         );
+    }
+
+    /// An agent named with a tool that writes writes, under the caller's approvals, and
+    /// writes nothing while the caller plans.
+    #[tokio::test]
+    async fn an_agent_with_a_writing_tool_writes_unless_the_caller_plans() {
+        for planning in [false, true] {
+            let h = Harness::new(Answer::Yes);
+            let backend = fake_backend(vec![
+                sse(&[
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"delegate","arguments":"{\"agent\": \"scribe\", \"task\": \"make b.txt\"}"}}]}}]}"#,
+                    r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+                ]),
+                sse(&[
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"s1","function":{"name":"write_file","arguments":"{\"path\": \"b.txt\", \"content\": \"x\"}"}}]}}]}"#,
+                    r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+                ]),
+                sse(&[
+                    r#"{"choices":[{"delta":{"content":"made it"}}]}"#,
+                    r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+                ]),
+                sse(&[
+                    r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                    r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+                ]),
+            ])
+            .await;
+            let mut reg = crate::boot::build_registry(h.root.clone()).0;
+            let scribe = crate::agent::agents::parse(
+                "scribe",
+                "---\ntools: write_file\n---\nWrite what you are asked to.",
+                "test",
+            )
+            .unwrap();
+            reg.register(crate::tools::delegate::Delegate::new(Arc::new(
+                crate::tools::delegate::Delegation {
+                    backend: Arc::new(crate::backend::client::BackendClient::new(
+                        backend.url.clone(),
+                    )),
+                    registry: Arc::new(reg.clone()),
+                    agents: vec![crate::agent::agents::AgentSpec::explore(), scribe],
+                    search_model: "test".into(),
+                    edit_model: "test".into(),
+                    roles: Default::default(),
+                    models: Default::default(),
+                    context_tokens: 8192,
+                    max_answer_tokens: 4096,
+                    protocol: Default::default(),
+                    grammar_enabled: false,
+                    max_steps: 4,
+                    slots: Arc::new(tokio::sync::Semaphore::new(2)),
+                    hooks: Default::default(),
+                    lsp: None,
+                },
+            )));
+            let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+            agent.ctx.planning = planning;
+            drive(&mut agent, "go").await;
+            assert_eq!(h.path("b.txt").exists(), !planning, "planning: {planning}");
+        }
     }
 
     /// A delegated session that runs out of steps says so, rather than handing back what
@@ -4107,22 +4171,7 @@ mod tests {
 
         let mut reg = crate::boot::build_registry(h.root.clone()).0;
         let sub = Arc::new(reg.clone());
-        reg.register(crate::tools::delegate::Delegate {
-            what: Arc::new(crate::tools::delegate::Delegation {
-                backend: Arc::new(crate::backend::client::BackendClient::new(
-                    backend.url.clone(),
-                )),
-                registry: sub,
-                model: "test".into(),
-                roles: Default::default(),
-                context_tokens: 8192,
-                max_answer_tokens: 4096,
-                protocol: Default::default(),
-                grammar_enabled: false,
-                max_steps: 4,
-                slots: Arc::new(tokio::sync::Semaphore::new(2)),
-            }),
-        });
+        reg.register(delegation(&backend.url, (*sub).clone(), 4));
         let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
         let events = tokio::time::timeout(
             std::time::Duration::from_secs(20),

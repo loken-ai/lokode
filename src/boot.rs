@@ -80,10 +80,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // Third-party tools go in after the built-ins, so a server cannot take a name the agent
     // already relies on.
     let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root).await;
-    // What a delegated turn gets: the tools that change nothing, without the task list,
-    // which is the caller's. The delegation itself is registered later, so it is not
-    // among them and a delegated turn cannot delegate again.
-    let registry_for_delegation = Arc::new(registry.read_only(&["update_plan"]));
+    // What the agents a turn hands work to choose their tools from. The delegation itself
+    // is registered later, so it is not among them and an agent cannot delegate again.
+    let registry_for_delegation = Arc::new(registry.clone());
     let registry = Arc::new(registry);
     // Registered last, because it hands work to a session built like this one. The
     // delegation is added to the shared registry below, once the backend is known.
@@ -124,6 +123,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         known: Default::default(),
         tail: Default::default(),
         sandbox: cfg.sandbox.clone().map(Arc::new),
+        planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
     };
 
     let earlier = open_session(cfg)?;
@@ -322,37 +322,34 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         rows.sort();
         rows
     };
-    // A turn of its own, with its own window, for a question whose search would
-    // otherwise fill this one. The sub-session reads and changes nothing.
+    // A turn of its own, with its own window, for work whose search would otherwise fill
+    // this one.
     let mut registry = Arc::try_unwrap(registry).unwrap_or_else(|shared| (*shared).clone());
-    // A delegated question is a search: its own model when the project names one, and
-    // the session's otherwise, with the window that model takes.
-    let search_model = cfg
-        .roles
-        .get(crate::agent::roles::Role::Search)
-        .map(str::to_string)
-        .unwrap_or_else(|| model.clone());
-    let search_window = cfg
-        .models
-        .get(&search_model)
-        .and_then(|m| m.context_tokens)
-        .unwrap_or(context_tokens);
-    registry.register(crate::tools::delegate::Delegate {
-        what: Arc::new(crate::tools::delegate::Delegation {
-            backend: backend.clone(),
-            registry: registry_for_delegation.clone(),
-            model: search_model,
-            roles: cfg.roles.clone(),
-            context_tokens: search_window,
-            max_answer_tokens,
-            slots: Arc::new(tokio::sync::Semaphore::new(cfg.parallel_delegates.max(1))),
-            protocol: protocol_cell.clone(),
-            grammar_enabled: cfg.grammar_enabled,
-            // More than this and the work was not self-contained, which is worth saying
-            // rather than waiting through.
-            max_steps: cfg.max_steps.min(8),
-        }),
+    let role_or_session = |role| {
+        cfg.roles
+            .get(role)
+            .map(str::to_string)
+            .unwrap_or_else(|| model.clone())
+    };
+    let delegation = Arc::new(crate::tools::delegate::Delegation {
+        backend: backend.clone(),
+        registry: registry_for_delegation.clone(),
+        agents: cfg.agents.clone(),
+        search_model: role_or_session(crate::agent::roles::Role::Search),
+        edit_model: role_or_session(crate::agent::roles::Role::Edit),
+        roles: cfg.roles.clone(),
+        models: cfg.models.clone(),
+        context_tokens,
+        max_answer_tokens,
+        protocol: protocol_cell.clone(),
+        grammar_enabled: cfg.grammar_enabled,
+        max_steps: cfg.max_steps,
+        slots: Arc::new(tokio::sync::Semaphore::new(cfg.parallel_delegates.max(1))),
+        hooks: cfg.hooks.clone(),
+        lsp: Some(lsp.clone()),
     });
+    model_notes.extend(delegation.unknown());
+    registry.register(crate::tools::delegate::Delegate::new(delegation));
     let registry = Arc::new(registry);
 
     let digest = Arc::new(tokio::sync::Mutex::new(digest));

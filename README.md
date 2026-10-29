@@ -38,7 +38,7 @@ The sections of this page. Those marked local rely on the model running on your 
 | [Background discovery](#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody waits, kept between sessions |
 | [Speculation](#using-it) *(local)* | the next read guessed while the model is still writing |
 | [The engine](#what-the-engine-measures) *(local)* | what loken measured of each request, its energy and the power of the machine |
-| [Delegation](#handing-off-a-search) | a search answered in a window of its own |
+| [Agents](#handing-work-to-an-agent) | a search or a task handed to a named agent, in a window of its own |
 | [Plans](#work-of-several-steps) | work of several steps kept as a list |
 | [Hooks](#hooks) | commands around a tool call and at the end of a turn |
 | [MCP](#tools-from-elsewhere) | tools, documents and prompts from another server |
@@ -237,7 +237,7 @@ list with `no` selected.
 | `/jobs` | what is running now, to point at its step or stop work done outside a turn |
 | `/lsp` | the language servers: where each stands, the files it reports, why one is down |
 | `/approve`, `/approve forget` | what is in force here and in the configuration, or take it back |
-| `/why`, `/digest`, `/tools`, `/mcp` | what is in force, what is known, what can be called |
+| `/why`, `/digest`, `/tools`, `/agents`, `/mcp` | what is in force, what is known, what can be called |
 
 A command that takes a name offers the names. `/model`, `/undo`, `/resume` and `/mcp` open a
 list that narrows as you type. `/help` lists every command, with those the project ships.
@@ -584,26 +584,48 @@ and in tools, the energy by purpose, then the last steps one by one.
 
 Every step is written to the transcript with what was known before it and what it cost.
 
-## Handing off a search
+## Handing work to an agent
 
-`delegate` gives one self-contained question a session of its own, with its own window and the
-tools that read, and returns only its answer. The search does not fill the conversation's
-window.
+`delegate` gives one self-contained task to an agent, in a session of its own with its own
+window, and returns only its answer. The work does not fill the conversation's window.
 
 Its steps stay under its own step, folded into a count once it ends. `Space` unfolds them, and
 `Enter` opens a page with each step, its evidence and the answer. `Ctrl-C` on its step stops it
 alone.
 
-| | |
-|---|---|
-| Tools | those that change nothing, without the task list and without `delegate` |
-| Model | the `search` role, with the window `[models]` gives it |
-| Steps | at most 8 |
-| At once | `[limits] delegates`, 2 by default. The others wait |
-| Out of steps | says it did not finish, with what it said last |
+`explore` is built in. It searches the project to answer one question and changes nothing.
+Other agents are Markdown files, named by their file:
 
-The question is taken as written: no file is attached for it and the project is not searched
-for it.
+```text
+.lokode/agents/reviewer.md   (or ~/.config/lokode/agents/reviewer.md)
+
+---
+description: reviews the changes for bugs
+tools: read_file, search, lsp_at, bash
+model: qwen3:4b
+max-steps: 12
+---
+Read the changes since the last commit and say what is wrong with them.
+```
+
+| Setting | Without it |
+|---|---|
+| `description` | the first line of the prompt. The model reads it to choose |
+| `tools` | the tools that change nothing |
+| `model` | the `search` role for an agent that changes nothing, the `edit` role otherwise, else the session's model |
+| `max-steps` | 8 for an agent that changes nothing, the session's limit otherwise |
+
+- The project's agent takes the place of the user's of the same name.
+- An agent never has the task list or `delegate`.
+- What an agent changes is asked about like the session's own changes, checked by the language
+  servers and run through the hooks. It is put back with the caller's turn by `/undo`.
+- While the session plans, an agent changes nothing.
+- At most `[limits] delegates` agents run at once, 2 by default. The others wait.
+- An agent out of steps says it did not finish, with what it said last.
+- The task is taken as written: no file is attached for it and the project is not searched
+  for it.
+
+`/agents` lists the agents, what each may use and where it was read from.
 
 ## Work of several steps
 

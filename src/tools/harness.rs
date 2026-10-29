@@ -75,6 +75,7 @@ impl Harness {
             http: crate::tools::registry::tool_http_client().expect("http client"),
             allow_hosts: Arc::new(Default::default()),
             sandbox: None,
+            planning: false,
             known: Default::default(),
             tail: Default::default(),
         };

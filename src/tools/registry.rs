@@ -20,6 +20,8 @@ pub struct ToolCtx {
     /// Requests the policy has granted this turn. Reset when a turn starts, because a cap
     /// is about one piece of work rather than about a session.
     pub auto_used: Arc<AtomicUsize>,
+    /// Whether the session calling is planning, so that work it hands on changes nothing.
+    pub planning: bool,
     /// Where a tool sends what it is printing, while it prints it.
     ///
     /// A build takes minutes and says nothing until it is over, which is indistinguishable
@@ -402,6 +404,13 @@ pub trait Tool: Send + Sync {
     /// mutating even when it usually changes nothing: `bash` and the test runner both
     /// execute code that is free to write.
     fn mutates(&self) -> bool {
+        false
+    }
+
+    /// Whether a call can leave files changed without being gated as a change itself, as
+    /// one that hands work to a session whose own tools ask. Such a call is recorded for
+    /// `/undo` once it ends.
+    fn may_change(&self) -> bool {
         false
     }
 

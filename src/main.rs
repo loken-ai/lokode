@@ -312,6 +312,8 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
         (level != Level::Off).then(|| config::resolve_sandbox(&file, &root, level, &mut warnings));
     let (lsp, lsp_warnings) = lokode::lsp::Languages::from_config(&file.lsp);
     warnings.extend(lsp_warnings);
+    let (agents, agent_warnings) = lokode::agent::agents::load(&lokode::agent::agents::dirs(&root));
+    warnings.extend(agent_warnings);
     if sandbox.is_some() && lokode::sandbox::confine::abi().is_none() {
         warnings.push(
             "a sandbox was asked for and this system has no Landlock: commands will be \
@@ -380,6 +382,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
                 lokode::agent::agent_loop::Mode::Act
             },
             parallel_delegates: file.limits.delegates.unwrap_or(default::DELEGATES),
+            agents,
             accept_writes: cli.accept_edits || (starting_mode == "edits" && !cli.plan),
             sandbox,
         },
