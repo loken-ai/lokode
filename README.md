@@ -31,6 +31,7 @@ reason for building another one of these.
 
 | | |
 |---|---|
+| [The screen](#the-screen) | the thread, a rail with the plan, the changes, the window and the engine, the status line |
 | [The pane](#using-it) | one line per step, completion on `/` and `@`, steps you can move between and unfold |
 | [Approvals](#where-it-is-careful) | a change is a diff to accept or decline, asked in the thread, remembered against what you were shown |
 | [Plan and act](#planning-before-acting) | read without changing anything, then carry it out, on `shift-tab` |
@@ -41,6 +42,7 @@ reason for building another one of these.
 | [Checks](#changing-a-file) | the language server after every write, and the compiler underneath it where there is none |
 | [Background discovery](#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody is waiting, kept between sessions |
 | [Speculation](#using-it) *(local)* | the next read guessed while the model is still writing |
+| [The engine](#what-the-engine-measures) *(local)* | what loken measured of each request, its energy and the power of the machine |
 | [Delegation](#handing-off-a-search) | a search answered in a window of its own, so its results do not fill yours |
 | [Plans](#work-of-several-steps) | work of several steps stated as a list and kept up to date |
 | [Hooks](#hooks) | commands at the edges of a tool call and a turn |
@@ -113,6 +115,55 @@ One thing it uses if it is there, and one it needs:
   usual name but does not work - a `rustup` shim for a component that was never installed
   answers to `rust-analyzer` and fails - point at a working one with `LOKODE_LSP_RUST`,
   `LOKODE_LSP_PYTHON`, `LOKODE_LSP_TYPESCRIPT` or `LOKODE_LSP_JAVASCRIPT`.
+
+## The screen
+
+A session in the middle of a turn, at 120 columns:
+
+<!-- screen:120x32 -->
+```text
+> add a configurable timeout to the MCP calls                                      ▐
+                                                                                   ▐ PLAN                           1/3
+  the client awaits its reply without a bound                                      ▐ ● read the MCP client
+ ● read_file  src/mcp/client.rs                                  guessed  212 lines▐ ◉ a timeout for every server
+ ▏     1 use std::time::Duration;                                                  ▐ ○ test a silent server
+ ▏     2 use tokio::sync::oneshot;                                                 ▐
+                                                                                   ▐ CHANGES                      +5 -1
+ ● bash  cargo test mcp                                             14 passed  9.8s▐ src/mcp/client.rs            +3 -1
+ ▏   test mcp::client::a_silent_server_times_out ... ok                            ▐ src/config.rs                +2 -0
+                                                                                   ▐
+The client waits on rx.await forever. I add timeout-secs:                          ▐ CONTEXT                        23%
+                                                                                   ▐ ████████··························
+• one setting per server, thirty seconds unless it says otherwise                  ▐ █ instructions 10%  █ you 3%
+• a test against a server that never answers                                       ▐ █ model 4%  █ tools 6%
+                                                                                   ▐
+  rust                                                                             ▐ ENGINE
+  let reply = timeout(self.timeout, rx).await??;                                   ▐ qwen3-coder
+                                                                                   ▐ ▄▆████ 93 tok/s
+? edit src/mcp/client.rs                                                           ▐ power   ▄▇██ 312 W  87% busy
+    src/mcp/client.rs                                                              ▐ time    read 0.7s · write 3.1s
+    @@ -212 +212 @@                                                                ▐ prompt  6.1k, 4.2k held
+    212 -     let reply = rx.await?;                                               ▐ cache   ▰▰▱▱▱▱▱▱▱▱ 15%
+    212 +     let reply = timeout(self.timeout, rx).await??;                       ▐ drafts  82% kept
+  y once   a always (src/mcp/)   n or esc no   e no, and say why                   ▐ energy  ≈0.31 Wh  session ≈0.42 Wh
+                                                                                   ▐
+ ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files · 0.42 Wh         ▐ TURNS TO PUT BACK
+                                                                                   ▐   1  src/config.rs
+! backend error: gave up after 3 attempts                                          ▐ /undo <turn> puts one back
+
+❯
+    ACT    qwen3-coder  demo  ctx 23%
+  shift-tab write  enter send  alt-↑ steps  ctrl-f find  /help more  ctrl-c leave
+```
+<!-- /screen -->
+
+| Part | What it holds |
+|---|---|
+| the thread | your questions, the model's answers, one row per step with what it came to, and a receipt per turn |
+| the rail | the plan, the files changed, what fills the window, the engine and the turns to put back, from 120 columns or with `Ctrl-B` |
+| the input | what you are typing, with completion on `/` and `@` |
+| the status line | the mode, the model, the project, how full the window is, and what the turn is doing |
+| the line of keys | the keys in force now |
 
 ## Using it
 

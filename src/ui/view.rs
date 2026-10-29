@@ -501,6 +501,34 @@ mod tests {
                 path.display()
             );
         }
+        readme_shows_the_screen(&frame(&mut a_session(), 120, 32), bless);
+    }
+
+    /// The README shows the 120-column screen as it is drawn, between its markers. Recording
+    /// the screens again writes it there too.
+    fn readme_shows_the_screen(drawn: &str, bless: bool) {
+        const OPEN: &str = "<!-- screen:120x32 -->\n```text\n";
+        const CLOSE: &str = "```\n<!-- /screen -->";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
+        let readme = std::fs::read_to_string(&path).expect("the README");
+        let from = readme
+            .find(OPEN)
+            .expect("the README marks where the screen goes")
+            + OPEN.len();
+        let to = from
+            + readme[from..]
+                .find(CLOSE)
+                .expect("the screen's closing mark");
+        if bless {
+            let updated = format!("{}{drawn}{}", &readme[..from], &readme[to..]);
+            std::fs::write(&path, updated).expect("the README written");
+            return;
+        }
+        assert_eq!(
+            &readme[from..to],
+            drawn,
+            "the README shows an older screen: run LOKODE_BLESS=1 cargo test"
+        );
     }
 
     /// A frame that follows one with nothing changed draws no entry again, however long
