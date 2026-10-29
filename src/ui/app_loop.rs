@@ -208,6 +208,7 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         });
     }
 
+    let stop_all = shutdown.clone();
     let agent_task = tokio::spawn(async move {
         loop {
             // A control request is answered between turns: the turn channel is read
@@ -229,6 +230,22 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
                 request = control_rx.recv() => {
                     let Some(request) = request else { break };
                     agent.control(request, &agent_evt_tx_for_loop).await;
+                }
+                // What an agent working in the background answered while no turn ran:
+                // the session takes it up, as the answer was meant for it.
+                said = agent.steer.recv() => {
+                    let Some(said) = said else { continue };
+                    let cancel = stop_all.child_token();
+                    let _ = agent_evt_tx_for_loop.send(AgentEvent::Begun(cancel.clone())).await;
+                    if let Err(e) = agent
+                        .run_user_turn(said, cancel, agent_evt_tx_for_loop.clone())
+                        .await
+                    {
+                        let _ = agent_evt_tx_for_loop
+                            .send(AgentEvent::Notice(format!("agent error: {e:#}")))
+                            .await;
+                        let _ = agent_evt_tx_for_loop.send(AgentEvent::TurnDone).await;
+                    }
                 }
             }
         }
@@ -789,6 +806,13 @@ async fn run_ui(
                         );
                     }
                     AgentEvent::Asked(s) => state.entries.push(Entry::User(s)),
+                    AgentEvent::Begun(cancel) => {
+                        state.busy = true;
+                        state.step = 0;
+                        state.phase = Some(crate::agent::agent_loop::Phase::Preparing);
+                        state.phase_since = Some(Instant::now());
+                        state.turn_cancel = Some(cancel);
+                    }
                     AgentEvent::Steered(s) => state.entries.push(Entry::Notice(format!(
                         "handed to the model at step {}: {}",
                         state.step + 1,

@@ -207,6 +207,9 @@ pub enum AgentEvent {
     Steered(String),
     /// A question asked from another screen of the same session.
     Asked(String),
+    /// A turn the session began by itself, on what an agent working in the background
+    /// answered while nothing else ran. The token stops it.
+    Begun(CancellationToken),
     /// How tool calls travel, once something has found out what the backend does.
     Protocol(ToolProtocol),
     /// How full the window is, and with what, as of this step.

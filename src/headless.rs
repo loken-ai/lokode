@@ -255,7 +255,7 @@ pub async fn run(
             }
             // A headless run has nobody typing, so this can only arrive from a caller
             // that steered on purpose; narrated like the rest.
-            AgentEvent::Asked(_) => {}
+            AgentEvent::Asked(_) | AgentEvent::Begun(_) => {}
             AgentEvent::Steered(s) => {
                 if text_output {
                     eprintln!("» {}", one_line(&s));

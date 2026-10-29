@@ -589,6 +589,17 @@ async fn open(
                         let Some(request) = request else { break };
                         agent.control(request, &evt_tx).await;
                     }
+                    // What an agent working in the background answered while no prompt
+                    // ran: the session takes it up, its updates reaching the client.
+                    said = agent.steer.recv() => {
+                        let Some(said) = said else { continue };
+                        if let Err(e) = agent
+                            .run_user_turn(said, stop.child_token(), evt_tx.clone())
+                            .await
+                        {
+                            let _ = evt_tx.send(AgentEvent::Notice(format!("agent error: {e:#}"))).await;
+                        }
+                    }
                 }
             }
         }));

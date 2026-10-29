@@ -674,9 +674,13 @@ api-key-env = "ANTHROPIC_API_KEY"
 - An agent stopped by the user is not brought in. Its copy stays, its path said.
 - A proof refused twice in a turn counts as a check that failed: with an `escalate` model named
   in `[roles]`, the session carries on with it to do the reconciling.
-- Outside git, or in a project its repository does not track, such an agent writes in the
-  project. A file it writes is its own until it answers: the session and the other agents are
-  refused it, before anyone is asked.
+- A project outside git is copied through a private repository kept beside the copy, which holds
+  where the agent started. The project is never made a repository. Files `.gitignore` names are
+  left out, and a project over 256 MB is not copied.
+- When there is no copy, because the project is too large or its repository does not track it,
+  the agent writes in the project. A file it writes is its own until it answers: the session
+  and the other agents are refused it, before anyone is asked.
+- An answer that arrives while no turn runs starts a turn, so the work is taken up at once.
 - The task is taken as written: no file is attached for it and the project is not searched
   for it.
 
