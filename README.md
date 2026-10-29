@@ -238,6 +238,7 @@ project, appended to `.lokode.md` and told to the model at once.
 | `/copy`, `/copy last` | the conversation to the clipboard and to a file |
 | `/undo`, `/diff` | put the project back to before a turn, or see everything changed |
 | `/context`, `/compact`, `/cost` | where the window stands, elide now, what it spent |
+| `/jobs` | what is running now, to point at its step |
 | `/approve`, `/approve forget` | what is in force here and in the configuration; take it back |
 | `/why`, `/digest`, `/tools`, `/mcp` | what is in force, what is known, what can be called |
 | `@path` in a prompt | send that file, or that directory's listing, with the question |

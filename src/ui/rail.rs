@@ -28,6 +28,9 @@ pub const WIDTH: u16 = 36;
 pub const RATES_KEPT: usize = 24;
 
 /// How many turns that can be put back are listed.
+/// How many running things the rail lists before it counts the rest.
+const JOBS_SHOWN: usize = 5;
+
 const TURNS_SHOWN: usize = 5;
 
 /// How many changed files are listed before the rest are counted.
@@ -55,6 +58,8 @@ pub struct Rail<'a> {
     pub engine: &'a Engine,
     pub power: Option<&'a crate::backend::devices::Power>,
     pub watts: &'a VecDeque<f64>,
+    /// What is running now.
+    pub jobs: &'a [crate::ui::state::Job],
 }
 
 /// The colours of the window's parts, in the order the session measures them.
@@ -84,6 +89,41 @@ impl Rail<'_> {
                 Span::styled(right, t.dim),
             ]));
         };
+
+        // First while there is any: what is running is what can still change, or be stopped.
+        if !self.jobs.is_empty() {
+            heading(&mut out, "RUNNING", self.jobs.len().to_string());
+            for job in self.jobs.iter().take(JOBS_SHOWN) {
+                let took = match job.took >= crate::ui::chat::SHOWN_FROM {
+                    true => crate::ui::chat::how_long(job.took),
+                    false => String::new(),
+                };
+                let room = inner.saturating_sub(3 + took.chars().count() + 1);
+                let what = clip(&job.what, room);
+                let gap = room.saturating_sub(what.chars().count()) + 1;
+                out.push(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("◌", Style::default().fg(t.accent)),
+                    Span::raw(" "),
+                    Span::styled(what, Style::default().fg(t.tool)),
+                    Span::raw(" ".repeat(gap)),
+                    Span::styled(took, t.dim),
+                ]));
+                if let Some(doing) = &job.doing {
+                    out.push(Line::from(Span::styled(
+                        format!("   › {}", clip(doing, inner.saturating_sub(5))),
+                        t.dim,
+                    )));
+                }
+            }
+            if self.jobs.len() > JOBS_SHOWN {
+                out.push(Line::from(Span::styled(
+                    format!(" and {} more, /jobs", self.jobs.len() - JOBS_SHOWN),
+                    t.dim,
+                )));
+            }
+            out.push(Line::from(""));
+        }
 
         if !self.tasks.is_empty() {
             let done = self.tasks.iter().filter(|x| x.state == State::Done).count();
@@ -401,6 +441,48 @@ mod tests {
     }
 
     /// A section with nothing in it is left out, and the engine is always there.
+    /// What runs heads the rail, each with how long it has run and, for a delegated
+    /// session, the call it is on.
+    #[test]
+    fn what_runs_heads_the_rail() {
+        let rates = VecDeque::new();
+        let jobs = [
+            crate::ui::state::Job {
+                what: "delegate  find every timeout".into(),
+                took: std::time::Duration::from_secs(12),
+                entry: Some(3),
+                doing: Some("read_file  src/config.rs".into()),
+            },
+            crate::ui::state::Job {
+                what: "$  cargo build".into(),
+                took: std::time::Duration::from_secs(75),
+                entry: Some(5),
+                doing: None,
+            },
+        ];
+        let rail = Rail {
+            model: "qwen3-coder",
+            tasks: &[],
+            changes: &[],
+            window: &Occupancy::default(),
+            rates: &rates,
+            turns: &[],
+            engine: &Engine::default(),
+            power: None,
+            watts: &VecDeque::new(),
+            jobs: &jobs,
+        };
+        let text = rail_text(&rail);
+        assert!(
+            text[1].starts_with(" RUNNING") && text[1].trim_end().ends_with('2'),
+            "{text:?}"
+        );
+        assert!(text[2].starts_with(" ◌ delegate  find every"), "{text:?}");
+        assert!(text[2].trim_end().ends_with("12.0s"), "{text:?}");
+        assert_eq!(text[3].trim_end(), "   › read_file  src/config.rs");
+        assert!(text[4].trim_end().ends_with("1m15s"), "{text:?}");
+    }
+
     #[test]
     fn an_empty_session_shows_only_the_engine() {
         let rates = VecDeque::new();
@@ -414,6 +496,7 @@ mod tests {
             engine: &Engine::default(),
             power: None,
             watts: &VecDeque::new(),
+            jobs: &[],
         };
         let text = rail_text(&rail);
         assert!(text.iter().any(|l| l.starts_with(" ENGINE")));
@@ -461,6 +544,7 @@ mod tests {
             engine: &Engine::default(),
             power: None,
             watts: &VecDeque::new(),
+            jobs: &[],
         };
         let text = rail_text(&rail);
         assert!(
@@ -500,6 +584,7 @@ mod tests {
             engine: &Engine::default(),
             power: None,
             watts: &VecDeque::new(),
+            jobs: &[],
         };
         let bar = line_text(&rail.window_bar(20));
         assert_eq!(bar.chars().filter(|&c| c == '█').count(), 5);

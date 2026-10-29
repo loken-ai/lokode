@@ -47,6 +47,17 @@ pub(crate) fn show(state: &mut UiState, verb: &str, reply: String) {
     }
 }
 
+/// Something running: what it is, for how long, its step and what it is on inside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Job {
+    pub what: String,
+    pub took: Duration,
+    /// The entry of its step, when it has one.
+    pub entry: Option<usize>,
+    /// The call a delegated session is on.
+    pub doing: Option<String>,
+}
+
 /// What a click lands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Click {
@@ -455,6 +466,42 @@ impl UiState {
             Some(Entry::Receipt(r)) if !r.files.is_empty() => Some(r.turn),
             _ => None,
         }
+    }
+
+    /// What is running now, oldest first: every step without an outcome, a delegated
+    /// session with the call it is on, then the background work.
+    pub(crate) fn jobs(&self) -> Vec<Job> {
+        let mut out: Vec<Job> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match e {
+                Entry::Step(step) if step.outcome.is_none() => Some(Job {
+                    what: match step.subject.is_empty() {
+                        true => step.name.clone(),
+                        false => format!("{}  {}", step.name, step.subject),
+                    },
+                    took: step.started.map(|at| at.elapsed()).unwrap_or_default(),
+                    entry: Some(i),
+                    doing: step
+                        .children
+                        .iter()
+                        .rev()
+                        .find(|c| c.outcome.is_none())
+                        .map(|c| format!("{}  {}", c.name, c.subject)),
+                }),
+                _ => None,
+            })
+            .collect();
+        if let Some((what, since)) = &self.background {
+            out.push(Job {
+                what: what.clone(),
+                took: since.elapsed(),
+                entry: None,
+                doing: None,
+            });
+        }
+        out
     }
 
     /// Show the entry at `i` whole if it was counted, or counted if it was whole.

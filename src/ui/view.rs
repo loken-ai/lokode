@@ -205,6 +205,7 @@ pub(crate) fn draw(
             engine: &state.engine,
             power: state.power.as_ref(),
             watts: &state.watts,
+            jobs: &state.jobs(),
         }
         .render(f, area);
     }

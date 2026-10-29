@@ -876,7 +876,7 @@ const SAID_AT_LEAST: usize = 12;
 const PAGE_EVIDENCE: usize = 40;
 
 /// How long a step has to take before its duration is worth showing.
-const SHOWN_FROM: Duration = Duration::from_millis(100);
+pub(crate) const SHOWN_FROM: Duration = Duration::from_millis(100);
 
 /// How much evidence is shown under an answer before it is counted instead.
 const BODY_LINES: usize = 8;

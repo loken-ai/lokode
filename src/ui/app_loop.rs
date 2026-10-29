@@ -1061,6 +1061,19 @@ async fn run_ui(
                                 // The answer that declines a question asked before something
                                 // is done does nothing.
                                 let taken = taken.filter(|(_, value)| value != "no");
+                                // A job chosen: its step pointed at, where enter opens it and
+                                // ctrl-c stops a command of the person's own.
+                                if let Some(("jobs", at)) =
+                                    taken.as_ref().map(|(v, a)| (v.as_str(), a.as_str()))
+                                {
+                                    if let Ok(at) = at.parse::<usize>() {
+                                        if at < state.entries.len() {
+                                            state.at_entry = Some(at);
+                                            state.show_entry(at);
+                                        }
+                                    }
+                                    continue;
+                                }
                                 // Taking an earlier question back, agreed to.
                                 if let Some(("take back", at)) =
                                     taken.as_ref().map(|(v, a)| (v.as_str(), a.as_str()))
@@ -1636,6 +1649,41 @@ async fn run_ui(
                                 let mut text = text;
                                 if let Some(command) = text.clone().strip_prefix('/') {
                                     let verb = command.trim_start_matches('/').trim();
+                                    // What runs is the screen's to know, so its list is made here.
+                                    if verb == "jobs" {
+                                        let jobs = state.jobs();
+                                        let choices: Vec<_> = jobs
+                                            .iter()
+                                            .filter_map(|job| {
+                                                let at = job.entry?;
+                                                let took = match job.took >= crate::ui::chat::SHOWN_FROM {
+                                                    true => format!("  {}", crate::ui::chat::how_long(job.took)),
+                                                    false => String::new(),
+                                                };
+                                                Some(crate::ui::chooser::Choice::new(
+                                                    at.to_string(),
+                                                    format!("{}{took}", job.what),
+                                                ))
+                                            })
+                                            .collect();
+                                        match (choices.is_empty(), jobs.first()) {
+                                            (true, None) => {
+                                                state.said = Some(("nothing is running".into(), Instant::now()))
+                                            }
+                                            (true, Some(job)) => {
+                                                state.said = Some((job.what.clone(), Instant::now()))
+                                            }
+                                            (false, _) => {
+                                                state.choosing = Some(crate::ui::chooser::Chooser::new(
+                                                    "jobs",
+                                                    "go to what runs",
+                                                    choices,
+                                                    None,
+                                                ))
+                                            }
+                                        }
+                                        continue;
+                                    }
                                     let ran = run_command(
                                         command.trim(),
                                         CommandCtx {
