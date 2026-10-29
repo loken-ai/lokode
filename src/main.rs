@@ -104,11 +104,13 @@ struct Cli {
     #[arg(long, value_enum)]
     tool_protocol: Option<app::ProtocolChoice>,
 
-    /// Make everything outside the project read-only for an approved shell command.
-    ///
-    /// Linux only. It can make a build fail where a cache lives outside the project, so
-    /// name those directories with `[shell] writable` in the configuration.
-    #[arg(long)]
+    /// How far the commands the agent runs are confined. Linux only. `workspace` when not
+    /// given: writes in the project, the temporary directories and the build caches.
+    #[arg(long, value_enum)]
+    sandbox: Option<lokode::sandbox::confine::Level>,
+
+    /// The earlier form of `--sandbox workspace`.
+    #[arg(long, hide = true)]
     confine_shell: bool,
 
     /// Which API the backend speaks. Read off the URL when not given.
@@ -287,14 +289,30 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
 
     // Resolved before the rest so that asking for a confinement this machine cannot give
     // is news at startup, rather than the first command of the session failing.
-    let shell_writable = (cli.confine_shell || file.shell.confine_writes.unwrap_or(false))
-        .then(|| config::resolve_shell_writable(&file, &root, &mut warnings));
+    use lokode::sandbox::confine::Level;
+    let asked = cli
+        .sandbox
+        .or(cli.confine_shell.then_some(Level::Workspace))
+        .or(file.shell.level());
+    let level = match asked {
+        Some(level) => level,
+        None if lokode::sandbox::confine::abi().is_some() => Level::Workspace,
+        None => {
+            warnings.push(
+                "this system has no Landlock, so the commands the agent runs are not confined"
+                    .into(),
+            );
+            Level::Off
+        }
+    };
+    let sandbox =
+        (level != Level::Off).then(|| config::resolve_sandbox(&file, &root, level, &mut warnings));
     let (lsp, lsp_warnings) = lokode::lsp::Languages::from_config(&file.lsp);
     warnings.extend(lsp_warnings);
-    if shell_writable.is_some() && lokode::sandbox::confine::abi().is_none() {
+    if sandbox.is_some() && lokode::sandbox::confine::abi().is_none() {
         warnings.push(
-            "shell confinement was asked for and this system has no Landlock: bash will \
-             refuse to run rather than run unconfined"
+            "a sandbox was asked for and this system has no Landlock: commands will be \
+             refused rather than run unconfined"
                 .into(),
         );
     }
@@ -359,7 +377,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
                 lokode::agent::agent_loop::Mode::Act
             },
             accept_writes: cli.accept_edits || (starting_mode == "edits" && !cli.plan),
-            shell_writable,
+            sandbox,
         },
     })
 }
@@ -432,12 +450,15 @@ fn print_config(cfg: &Resolved) {
     println!("  max-answer-tokens  {}", a.max_answer_tokens);
     println!("  transcripts        {}", a.transcripts);
     println!(
-        "  shell writes       {}",
-        match &a.shell_writable {
-            None => "unconfined".to_string(),
-            Some(dirs) => format!(
-                "confined to {}",
-                dirs.iter()
+        "  sandbox            {}",
+        match &a.sandbox {
+            None => "off".to_string(),
+            Some(s) if s.writable.is_empty() => s.level.label().to_string(),
+            Some(s) => format!(
+                "{}, writes in {}",
+                s.level.label(),
+                s.writable
+                    .iter()
                     .map(|d| d.display().to_string())
                     .collect::<Vec<_>>()
                     .join(", ")

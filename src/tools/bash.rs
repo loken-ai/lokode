@@ -88,39 +88,27 @@ impl Tool for Bash {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        // Built before the fork: creating the ruleset allocates and opens files, and doing
-        // that between fork and exec can deadlock. What the child runs is two syscalls.
-        let ruleset = match &ctx.shell_writable {
-            None => None,
-            Some(writable) => match crate::sandbox::confine::ruleset(writable) {
-                Ok(fd) => Some(fd),
-                Err(e) => {
-                    // Confinement was asked for and cannot be given. Running the command
-                    // anyway would be doing the opposite of what was asked.
-                    return Ok(ToolOutput::err(format!(
-                        "shell confinement was requested and could not be applied: {e}"
-                    )));
-                }
-            },
-        };
-
         let mut cmd = Command::new("/bin/sh");
         // Without this, abandoning the turn leaves the command running: the future is
         // dropped, nobody is left to read its output, and a build carries on burning the
         // machine the user just told us to stop using.
         cmd.kill_on_drop(true);
         cmd.arg("-lc").arg(&a.cmd).current_dir(&cwd);
-
-        if let Some(fd) = &ruleset {
-            use std::os::fd::AsRawFd;
-            let raw = fd.as_raw_fd();
-            // SAFETY: `restrict_after_fork` makes two syscalls and nothing else - no
-            // allocation, no locks - which is what a post-fork hook may do. `raw` stays
-            // open because `ruleset` outlives the spawn below.
-            unsafe {
-                cmd.pre_exec(move || crate::sandbox::confine::restrict_after_fork(raw));
+        // Kept until the spawn is over. A sandbox that cannot be applied refuses the
+        // command rather than run it unconfined.
+        let _ruleset = match ctx
+            .sandbox
+            .as_ref()
+            .map(|s| s.confine(&mut cmd))
+            .transpose()
+        {
+            Ok(fd) => fd,
+            Err(e) => {
+                return Ok(ToolOutput::err(format!(
+                    "the sandbox could not be applied, so the command did not run: {e}"
+                )))
             }
-        }
+        };
 
         // Read as it comes rather than at the end: a build that says nothing for two
         // minutes cannot be told from one that has hung, and the line that says which
@@ -164,6 +152,9 @@ impl Tool for Bash {
         report.push_str(&ctx.clamp(out));
         report.push_str("\nstderr:\n");
         report.push_str(&ctx.clamp(err));
+        if let Some(sandbox) = ctx.sandbox.as_ref().filter(|_| code != 0) {
+            report.push_str(&format!("\n{}", sandbox.note()));
+        }
 
         Ok(ToolOutput::ok(report))
     }
@@ -353,6 +344,36 @@ mod tests {
             out.content
         );
         let _ = std::fs::remove_file(&outside);
+    }
+
+    /// A confined command may discard its output, and does not see the variables the
+    /// sandbox takes out.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_confined_command_writes_to_devices_and_misses_the_key() {
+        if crate::sandbox::confine::abi().is_none() {
+            return;
+        }
+        std::env::set_var("LOKODE_TEST_SECRET", "hunter2");
+        let h = Harness::confined();
+        let mut ctx = h.ctx.clone();
+        ctx.sandbox = Some(std::sync::Arc::new(crate::sandbox::confine::Sandbox {
+            unset: vec!["LOKODE_TEST_SECRET".into()],
+            ..(**h.ctx.sandbox.as_ref().unwrap()).clone()
+        }));
+        let out = Bash
+            .run(
+                &ctx,
+                serde_json::json!({"cmd": "echo gone > /dev/null && echo \"[$LOKODE_TEST_SECRET]\""}),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{out:?}");
+        assert!(
+            out.content.contains("exit: 0") && out.content.contains("[]"),
+            "{}",
+            out.content
+        );
     }
 
     /// The control for the test above. Without it, that one would keep passing if the

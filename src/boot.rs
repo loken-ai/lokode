@@ -123,7 +123,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         allow_hosts: Arc::new(cfg.allow_hosts.clone()),
         known: Default::default(),
         tail: Default::default(),
-        shell_writable: cfg.shell_writable.clone().map(Arc::new),
+        sandbox: cfg.sandbox.clone().map(Arc::new),
     };
 
     let earlier = open_session(cfg)?;

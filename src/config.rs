@@ -295,22 +295,45 @@ pub struct ModelSection {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ShellSection {
-    /// Make everything outside the project read-only for an approved command.
-    ///
-    /// Off by default: it can make a build fail in a way that looks like a bug in the
-    /// build, and breaking someone's work to add a protection they did not ask for is the
-    /// wrong trade. On, it is the difference between `rm -rf ~` working and not.
+    /// How far the commands the agent runs are confined. `workspace` when not given.
+    pub sandbox: Option<crate::sandbox::confine::Level>,
+    /// The earlier form of `sandbox`: true is `workspace`, false is `off`.
     pub confine_writes: Option<bool>,
-    /// Directories a confined command may still write to, on top of the project.
-    ///
-    /// A build wants its caches - `~/.cargo`, `~/.npm`, a temporary directory - and without
-    /// them confinement is strict enough that nobody leaves it on.
+    /// Directories a confined command may still write to, on top of those of its level.
     ///
     /// A `~` is expanded against the home directory and a relative name against the
-    /// project; see `resolve_shell_writable`, which is where that has to happen.
+    /// project; see `resolve_sandbox`, which is where that has to happen.
     #[serde(default)]
     pub writable: Vec<PathBuf>,
 }
+
+impl ShellSection {
+    /// The level the file asks for, if it asks.
+    pub fn level(&self) -> Option<crate::sandbox::confine::Level> {
+        use crate::sandbox::confine::Level;
+        self.sandbox.or(match self.confine_writes {
+            Some(true) => Some(Level::Workspace),
+            Some(false) => Some(Level::Off),
+            None => None,
+        })
+    }
+}
+
+/// The build caches below the home directory that a command confined to the workspace may
+/// write to, when they are there.
+const CACHES: &[&str] = &[
+    ".cache",
+    ".cargo/registry",
+    ".cargo/git",
+    ".cargo/.package-cache",
+    ".cargo/.package-cache-mutate",
+    ".cargo/.global-cache",
+    ".npm",
+    ".pnpm-store",
+    "go/pkg/mod",
+    ".m2/repository",
+    ".gradle/caches",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -494,6 +517,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
             log_file: over.session.log_file.or(base.session.log_file),
         },
         shell: ShellSection {
+            sandbox: over.shell.sandbox.or(base.shell.sandbox),
             confine_writes: over.shell.confine_writes.or(base.shell.confine_writes),
             writable: {
                 let mut w = base.shell.writable;
@@ -791,12 +815,42 @@ fn sends_secret_in_clear(url: &str) -> bool {
 /// What cannot be resolved is reported rather than dropped, because the difference between
 /// a directory that is writable and one that is silently not is a build that works and one
 /// that does not.
+pub fn resolve_sandbox(
+    cfg: &FileConfig,
+    root: &Path,
+    level: crate::sandbox::confine::Level,
+    warnings: &mut Vec<String>,
+) -> crate::sandbox::confine::Sandbox {
+    use crate::sandbox::confine::{Level, Sandbox};
+    let mut unset = vec!["LOKODE_API_KEY".to_string()];
+    unset.extend(cfg.backend.api_key_env.clone());
+    let writable = match level {
+        Level::Workspace => resolve_shell_writable(cfg, root, warnings),
+        Level::ReadOnly | Level::Off => Vec::new(),
+    };
+    Sandbox {
+        level,
+        writable,
+        unset,
+    }
+}
+
+/// What a command confined to the workspace may write to: the project, the temporary
+/// directories, the build caches that are there, and what the file names.
 pub fn resolve_shell_writable(
     cfg: &FileConfig,
     root: &Path,
     warnings: &mut Vec<String>,
 ) -> Vec<PathBuf> {
-    let mut dirs = vec![root.to_path_buf()];
+    let mut dirs = vec![root.to_path_buf(), PathBuf::from("/tmp")];
+    if let Some(tmp) = std::env::var_os("TMPDIR").map(PathBuf::from) {
+        if tmp.is_absolute() && !dirs.contains(&tmp) {
+            dirs.push(tmp);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        dirs.extend(CACHES.iter().map(|c| home.join(c)).filter(|p| p.exists()));
+    }
     for named in &cfg.shell.writable {
         match expand_writable(named, root) {
             Ok(dir) => {
@@ -888,16 +942,42 @@ mod tests {
         let home = tempdir().unwrap();
         let root = tempdir().unwrap();
         std::fs::create_dir(home.path().join(".cargo")).unwrap();
-        crate::paths::with_env(&[("HOME", home.path().to_str())], || {
+        crate::paths::with_env(&[("HOME", home.path().to_str()), ("TMPDIR", None)], || {
             let cfg = parse("[shell]\nwritable = [\"~/.cargo\"]\n");
             let mut warnings = Vec::new();
             let dirs = resolve_shell_writable(&cfg, root.path(), &mut warnings);
             assert_eq!(
                 dirs,
-                vec![root.path().to_path_buf(), home.path().join(".cargo")]
+                vec![
+                    root.path().to_path_buf(),
+                    PathBuf::from("/tmp"),
+                    home.path().join(".cargo")
+                ]
             );
             assert!(warnings.is_empty(), "{warnings:?}");
         });
+    }
+
+    /// The caches that are there are writable in the workspace, nothing is in read-only,
+    /// and the key is taken out of what a command inherits.
+    #[test]
+    fn the_level_decides_what_may_be_written() {
+        use crate::sandbox::confine::Level;
+        let home = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".cargo/registry")).unwrap();
+        crate::paths::with_env(&[("HOME", home.path().to_str()), ("TMPDIR", None)], || {
+            let cfg = parse("[backend]\napi-key-env = \"MY_KEY\"\n");
+            let mut warnings = Vec::new();
+            let s = resolve_sandbox(&cfg, root.path(), Level::Workspace, &mut warnings);
+            assert!(s.writable.contains(&home.path().join(".cargo/registry")));
+            assert!(!s.writable.contains(&home.path().join(".npm")));
+            assert_eq!(s.unset, ["LOKODE_API_KEY", "MY_KEY"]);
+            let s = resolve_sandbox(&cfg, root.path(), Level::ReadOnly, &mut warnings);
+            assert!(s.writable.is_empty());
+        });
+        let old = parse("[shell]\nconfine-writes = false\n");
+        assert_eq!(old.shell.level(), Some(Level::Off));
     }
 
     /// The project is writable whether or not anything was named.
@@ -906,7 +986,8 @@ mod tests {
         let root = tempdir().unwrap();
         let mut warnings = Vec::new();
         let dirs = resolve_shell_writable(&parse(""), root.path(), &mut warnings);
-        assert_eq!(dirs, vec![root.path().to_path_buf()]);
+        assert_eq!(dirs[0], root.path().to_path_buf());
+        assert!(dirs.contains(&PathBuf::from("/tmp")));
     }
 
     /// A relative name means somewhere in the project, not somewhere in the process's
@@ -918,7 +999,7 @@ mod tests {
         let cfg = parse("[shell]\nwritable = [\"build-cache\"]\n");
         let mut warnings = Vec::new();
         let dirs = resolve_shell_writable(&cfg, root.path(), &mut warnings);
-        assert_eq!(dirs[1], root.path().join("build-cache"));
+        assert_eq!(dirs.last(), Some(&root.path().join("build-cache")));
         assert!(warnings.is_empty(), "{warnings:?}");
     }
 

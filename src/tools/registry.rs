@@ -57,9 +57,8 @@ pub struct ToolCtx {
     /// Without this the address guard would make a locally-served doc site unreachable,
     /// which is a normal thing to want from a tool that runs on your own machine.
     pub allow_hosts: Arc<HashSet<String>>,
-    /// Directories an approved shell command may write to, or `None` to leave it
-    /// unconfined - which is what it has always been.
-    pub shell_writable: Option<Arc<Vec<PathBuf>>>,
+    /// What confines the commands the agent runs, or `None` to leave them unconfined.
+    pub sandbox: Option<Arc<crate::sandbox::confine::Sandbox>>,
     /// What each file held the last time a tool read or wrote it.
     ///
     /// A whole-file write is written against what the model believes the file says. If

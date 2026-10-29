@@ -74,10 +74,26 @@ impl Tool for RunTests {
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+        // The suite runs the project's own code, so it runs in the same sandbox as the
+        // shell.
+        let ruleset = match ctx
+            .sandbox
+            .as_ref()
+            .map(|s| s.confine(&mut cmd))
+            .transpose()
+        {
+            Ok(fd) => fd,
+            Err(e) => {
+                return Ok(ToolOutput::err(format!(
+                    "the sandbox could not be applied, so the tests did not run: {e}"
+                )))
+            }
+        };
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
         };
+        drop(ruleset);
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let collect = async {
@@ -104,6 +120,9 @@ impl Tool for RunTests {
         report.push_str(&ctx.clamp(out));
         report.push('\n');
         report.push_str(&ctx.clamp(err));
+        if let Some(sandbox) = ctx.sandbox.as_ref().filter(|_| code != 0) {
+            report.push_str(&format!("\n{}", sandbox.note()));
+        }
         Ok(ToolOutput::ok(report))
     }
 }

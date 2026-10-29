@@ -90,8 +90,9 @@ or the startup probe. A server that measures nothing shows nothing, never a zero
 - **Egress goes to public addresses only.** `web_fetch` resolves the host, follows redirects
   itself and checks every hop. `--allow-host` names an exception on your own network.
 
-Read [SECURITY.md](SECURITY.md) first. An approved `bash` command is not confined to the root
-by default. On Linux, `--confine-shell` makes everything outside the project read-only for it.
+Read [SECURITY.md](SECURITY.md) first. On Linux, a command the agent runs may write only in the
+project, the temporary directories and the build caches. `--sandbox read-only` lets it write
+nowhere, and `--sandbox off` leaves it unconfined.
 
 ## Install
 
@@ -716,6 +717,10 @@ max-answer-tokens = 4096
 
 [web]
 allow-hosts = ["docs.example.com"]
+
+[shell]
+sandbox = "workspace"           # workspace | read-only | off
+writable = ["~/.local/share/pnpm"]
 
 [session]
 transcripts = true

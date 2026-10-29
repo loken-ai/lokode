@@ -28,6 +28,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Language server: show where each server stands in /lsp and the rail.
 - Configuration: ask before a project's hooks, servers, allow rules or shell settings apply.
 - Approvals: keep agreements across sessions and write without asking with --accept-edits.
+- Shell: run commands in a sandbox by default, and let the model ask to leave it.
 
 ### Changed
 

@@ -57,23 +57,27 @@ leaves the old contents or the new ones. A multi-file patch is applied wholly or
 
 ## What is not enforced
 
-**`bash` is not confined by the root, unless you ask.** An approved command runs
-`/bin/sh -lc <string>` with your privileges and your environment. Only its working directory
-is checked. `cd ~ && cat .ssh/id_rsa` is one tool call, and `-l` sources your login profile.
-The path sandbox describes the tools that take paths; it says nothing about a shell.
-Approving a command is approving everything that command can do.
+**A command runs in a sandbox, on Linux.** `bash` and `run_tests` run their command under
+Landlock, which the command and everything it starts cannot undo. Reading is left as it is.
 
-On Linux, `--confine-shell` (or `[shell] confine-writes`) uses Landlock to make everything
-outside the project read-only for the command and for everything it starts, which a child
-cannot undo. Read what this does and does not do: `rm -rf ~` stops working and
-`cat ~/.ssh/id_rsa` does not. Reading is deliberately left alone, because confining it too
-would stop every build tool from reaching a toolchain or a cache, and a protection that makes
-the shell useless is one nobody leaves on. It is off by default for the same reason - a build
-whose cache lives outside the project will fail with it on, so name those directories under
-`[shell] writable`. A `~` there means your home directory and a relative name means somewhere
-in the project; anything named that does not exist is reported at startup rather than
-quietly left unwritable. If confinement is asked for and the kernel has no Landlock, `bash`
-refuses to run rather than run unconfined.
+| `[shell] sandbox` | What a command may write |
+|---|---|
+| `workspace` (default) | the project, `/tmp`, `$TMPDIR`, the build caches below your home directory that exist, and `[shell] writable` |
+| `read-only` | nothing but the devices under `/dev` |
+| `off` | anything you may write |
+
+- `LOKODE_API_KEY` and the variable named by `api-key-env` are taken out of the command's
+  environment.
+- `rm -rf ~` fails. `cat ~/.ssh/id_rsa` still works.
+- A `~` in `[shell] writable` is your home directory, and a relative name is in the project.
+  A name that does not exist is reported at startup.
+- A sandbox asked for on a kernel without Landlock refuses the command rather than run it
+  unconfined. Without Landlock and with nothing asked, commands run unconfined and the session
+  says so.
+
+**Outside the sandbox, a command is not confined.** It runs `/bin/sh -lc <string>` with your
+privileges and your environment. `-l` sources your login profile. Approving a command is
+approving everything that command can do.
 
 **`run_tests` runs the project's own code.** `cargo test` builds `build.rs`, `npm test` runs
 lifecycle scripts, `pytest` imports `conftest.py`. Approving it on a repository you have not
@@ -111,8 +115,7 @@ them.
 
 - Point `--root` at one project, not at your home directory.
 - Decline `[A]lways` for `bash` unless you know what the project's sessions are going to do.
-- On Linux, turn on `--confine-shell`, and add the caches your builds need to
-  `[shell] writable`.
+- On Linux, keep the sandbox on, and add the caches your builds need to `[shell] writable`.
 - Prefer a container or a VM for a repository you have not read.
 - Keep an API key in the environment rather than in a config file. If you do put one in a
   file, lokode refuses to use it unless the file is private to you.

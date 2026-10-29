@@ -74,7 +74,7 @@ impl Harness {
             cancel: CancellationToken::new(),
             http: crate::tools::registry::tool_http_client().expect("http client"),
             allow_hosts: Arc::new(Default::default()),
-            shell_writable: None,
+            sandbox: None,
             known: Default::default(),
             tail: Default::default(),
         };
@@ -97,7 +97,11 @@ impl Harness {
     /// A harness whose shell may write to the project and nowhere else.
     pub fn confined() -> Self {
         let mut h = Self::new(Answer::Yes);
-        h.ctx.shell_writable = Some(Arc::new(vec![h.root.clone()]));
+        h.ctx.sandbox = Some(Arc::new(crate::sandbox::confine::Sandbox {
+            level: crate::sandbox::confine::Level::Workspace,
+            writable: vec![h.root.clone()],
+            unset: vec!["LOKODE_API_KEY".into()],
+        }));
         h
     }
 

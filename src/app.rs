@@ -62,9 +62,8 @@ pub struct AppConfig {
     pub discover: bool,
     /// Whether this run is driven by a script rather than by a person at a screen.
     pub headless: bool,
-    /// Directories an approved shell command may write to, or `None` to leave it
-    /// unconfined.
-    pub shell_writable: Option<Vec<PathBuf>>,
+    /// What confines the commands the agent runs, or `None` to leave them unconfined.
+    pub sandbox: Option<crate::sandbox::confine::Sandbox>,
 }
 
 /// How tools should be asked for.

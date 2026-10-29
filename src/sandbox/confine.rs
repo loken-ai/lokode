@@ -1,19 +1,78 @@
-//! Making the root a boundary for `bash` too.
+//! Making the root a boundary for the commands the agent runs.
 //!
-//! The path sandbox governs the tools that take paths. A shell takes a string, and once a
-//! command is approved it runs with your privileges and your whole filesystem - which is
-//! the largest gap between what lokode enforces and what someone might assume it enforces.
-//!
-//! Linux can close part of it. Landlock lets a process give up access it will never need
-//! again, and a child cannot get it back. What is given up here is *writing*: everything
-//! outside the project, plus whatever the configuration names, becomes read-only for the
-//! command and everything it starts. Reading is left alone on purpose - confining it too
-//! would stop `cargo`, `npm` and every other tool from reaching a toolchain or a cache, and
-//! a protection that makes the shell useless is one nobody will leave on.
-//!
-//! So this narrows the blast radius rather than sealing it: `rm -rf ~` stops working,
-//! `cat ~/.ssh/id_rsa` does not. It is off unless asked for, because turning it on can make
-//! a build fail in a way that looks like a bug in the build.
+//! The path sandbox governs the tools that take paths. A shell takes a string, and an
+//! approved command runs with the user's privileges. On Linux, Landlock lets a process give
+//! up access it will never need again, and a child cannot get it back. A confined command
+//! and everything it starts may write only beneath the directories its [`Sandbox`] names,
+//! and to the devices under `/dev`. Reading is left as it is.
+
+use std::path::PathBuf;
+
+/// How far the commands the agent runs are confined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum Level {
+    /// Writes nowhere but the devices.
+    ReadOnly,
+    /// Writes in the project, the temporary directories and the build caches.
+    Workspace,
+    /// Unconfined.
+    Off,
+}
+
+impl Level {
+    pub fn label(self) -> &'static str {
+        match self {
+            Level::ReadOnly => "read-only",
+            Level::Workspace => "workspace",
+            Level::Off => "off",
+        }
+    }
+}
+
+/// What a confined command may do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sandbox {
+    pub level: Level,
+    /// The directories and files it may write beneath, besides the devices.
+    pub writable: Vec<PathBuf>,
+    /// The environment variables taken out of what it inherits.
+    pub unset: Vec<String>,
+}
+
+impl Sandbox {
+    /// Confine `cmd`: take out the variables it must not see, and have it give up what the
+    /// sandbox does not allow before it runs. The descriptor returned must outlive the
+    /// spawn.
+    pub fn confine(
+        &self,
+        cmd: &mut tokio::process::Command,
+    ) -> std::io::Result<std::os::fd::OwnedFd> {
+        for var in &self.unset {
+            cmd.env_remove(var);
+        }
+        let fd = ruleset(&self.writable)?;
+        use std::os::fd::AsRawFd;
+        let raw = fd.as_raw_fd();
+        // SAFETY: `restrict_after_fork` makes two syscalls and nothing else, no allocation
+        // and no locks, which is what a post-fork hook may do. `raw` stays open because
+        // the caller keeps `fd` until the spawn is over.
+        unsafe {
+            cmd.pre_exec(move || restrict_after_fork(raw));
+        }
+        Ok(fd)
+    }
+
+    /// What a command that failed in it is told about it.
+    pub fn note(&self) -> String {
+        match self.level {
+            Level::ReadOnly => "It ran in a read-only sandbox: it may not write any file.".into(),
+            _ => "It ran in a sandbox: it may write only in the project, the temporary \
+                  directory and the build caches."
+                .into(),
+        }
+    }
+}
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -119,9 +178,21 @@ mod linux {
         // SAFETY: a fresh descriptor the kernel just handed us, owned from here.
         let ruleset = unsafe { OwnedFd::from_raw_fd(fd as RawFd) };
 
-        for dir in writable {
-            allow_beneath(&ruleset, dir, writes_for(abi))?;
+        for path in writable {
+            // A rule on a file takes only the accesses a file has.
+            let access = match path.is_dir() {
+                true => writes_for(abi),
+                false => writes_for(abi) & (WRITE_FILE | TRUNCATE),
+            };
+            allow_beneath(&ruleset, path, access)?;
         }
+        // Writing to a device is how a command discards output or talks to a terminal, and
+        // a device cannot be made or removed under this rule.
+        let devices = match abi {
+            1 | 2 => WRITE_FILE,
+            _ => WRITE_FILE | TRUNCATE,
+        };
+        allow_beneath(&ruleset, Path::new("/dev"), devices)?;
         Ok(ruleset)
     }
 
