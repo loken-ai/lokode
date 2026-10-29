@@ -348,6 +348,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             .map(str::to_string)
             .unwrap_or_else(|| model.clone())
     };
+    // What the person types while a turn runs, and what agents working in the background
+    // answer: both reach the session at its next step.
+    let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let mut backends = std::collections::HashMap::new();
     for (name, b) in &cfg.backends {
         match provider(b.kind, &b.url, &b.headers) {
@@ -374,6 +377,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         slots: Arc::new(tokio::sync::Semaphore::new(cfg.parallel_delegates.max(1))),
         hooks: cfg.hooks.clone(),
         lsp: Some(lsp.clone()),
+        answers: Some(steer_tx.clone()),
     });
     model_notes.extend(delegation.unknown());
     model_notes.extend(skill_warnings);
@@ -407,7 +411,6 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         })
         .transpose()?;
 
-    let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let agent = Agent {
         this_turn: Default::default(),
         repairs: crate::agent::repairs::Repairs::open(crate::paths::state_dir(), &cfg.root),

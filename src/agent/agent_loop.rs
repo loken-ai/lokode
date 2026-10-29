@@ -3741,6 +3741,7 @@ mod tests {
             slots: Arc::new(tokio::sync::Semaphore::new(2)),
             hooks: Default::default(),
             lsp: None,
+            answers: None,
         }))
     }
 
@@ -3829,6 +3830,7 @@ mod tests {
                     slots: Arc::new(tokio::sync::Semaphore::new(2)),
                     hooks: Default::default(),
                     lsp: None,
+                    answers: None,
                 },
             )));
             let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
@@ -3894,6 +3896,7 @@ mod tests {
                 slots: Arc::new(tokio::sync::Semaphore::new(2)),
                 hooks: Default::default(),
                 lsp: None,
+                answers: None,
             },
         )));
         let mut agent = agent_with(&h, &here, ToolProtocol::Native, reg);
@@ -4002,6 +4005,74 @@ mod tests {
             .history
             .iter()
             .any(|m| m.content.contains("the tests fail")));
+    }
+
+    /// An agent sent to work in the background lets the turn go on at once, and its
+    /// answer is handed to the session when it comes. One that may change things is not
+    /// sent.
+    #[tokio::test]
+    async fn an_agent_in_the_background_answers_later() {
+        let h = Harness::new(Answer::Yes);
+        let here = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"delegate","arguments":"{\"task\": \"find main\", \"background\": true}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"started it"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let there = fake_backend(vec![sse(&[
+            r#"{"choices":[{"delta":{"content":"main is in src/main.rs"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ])])
+        .await;
+        let (answers, mut answered) = tokio::sync::mpsc::channel(4);
+        let mut reg = crate::boot::build_registry(h.root.clone()).0;
+        reg.register(crate::tools::delegate::Delegate::new(Arc::new(
+            crate::tools::delegate::Delegation {
+                backend: Arc::new(crate::backend::client::BackendClient::new(
+                    there.url.clone(),
+                )),
+                backends: Default::default(),
+                registry: Arc::new(reg.clone()),
+                agents: vec![crate::agent::agents::AgentSpec::explore()],
+                search_model: "test".into(),
+                edit_model: "test".into(),
+                roles: Default::default(),
+                models: Default::default(),
+                context_tokens: 8192,
+                max_answer_tokens: 4096,
+                protocol: Default::default(),
+                grammar_enabled: false,
+                max_steps: 4,
+                slots: Arc::new(tokio::sync::Semaphore::new(2)),
+                hooks: Default::default(),
+                lsp: None,
+                answers: Some(answers),
+            },
+        )));
+        let mut agent = agent_with(&h, &here, ToolProtocol::Native, reg);
+        let events = drive(&mut agent, "go").await;
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output, .. } if name == "delegate" => Some(output),
+                _ => None,
+            })
+            .expect("the delegation was never answered");
+        assert!(
+            result.content.contains("in the background"),
+            "{}",
+            result.content
+        );
+        let later = tokio::time::timeout(std::time::Duration::from_secs(10), answered.recv())
+            .await
+            .expect("no answer came")
+            .unwrap();
+        assert!(later.contains("main is in src/main.rs"), "{later}");
     }
 
     /// A delegated session that runs out of steps says so, rather than handing back what

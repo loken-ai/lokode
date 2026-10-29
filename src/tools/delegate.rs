@@ -51,6 +51,8 @@ pub struct Delegation {
     pub hooks: crate::config::HooksSection,
     /// The language servers that check what an agent writes.
     pub lsp: Option<Arc<crate::lsp::LspPool>>,
+    /// Where the answer of an agent working in the background is handed to the session.
+    pub answers: Option<tokio::sync::mpsc::Sender<String>>,
 }
 
 /// The tools a delegated session never has: the caller's task list and plan, and the
@@ -121,7 +123,9 @@ impl Delegate {
         let description = format!(
             "Hand one self-contained task to an agent, in a session with its own context \
              window, and get back only its answer. Use it for a search that would read many \
-             files, or for work an agent is named for. agent is one of: {}. Without agent, {}.",
+             files, or for work an agent is named for. agent is one of: {}. Without agent, {}. \
+             With background, an agent that changes nothing works while the turn goes on, and \
+             its answer comes later.",
             agents.join("; "),
             crate::agent::agents::DEFAULT
         );
@@ -142,6 +146,8 @@ struct Args {
     #[serde(default)]
     agent: Option<String>,
     task: String,
+    #[serde(default)]
+    background: bool,
 }
 
 #[async_trait]
@@ -171,7 +177,8 @@ impl Tool for Delegate {
             "type": "object",
             "properties": {
                 "agent": {"type": "string", "enum": names},
-                "task": {"type": "string"}
+                "task": {"type": "string"},
+                "background": {"type": "boolean"}
             },
             "required": ["task"],
             "additionalProperties": false
@@ -216,11 +223,17 @@ impl Tool for Delegate {
         };
         let registry = Arc::new(w.tools_of(spec));
         let writes = registry.iter().any(|(_, t)| t.mutates());
+        if a.background && writes {
+            return Ok(ToolOutput::err(format!(
+                "only an agent that changes nothing works in the background, and {name} may \
+                 change things: hand it the task without background"
+            )));
+        }
         // A place among those that run at once, given up if the call is stopped first.
-        let _slot = tokio::select! {
+        let slot = tokio::select! {
             biased;
             _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
-            slot = w.slots.acquire() => slot?,
+            slot = w.slots.clone().acquire_owned() => slot?,
         };
         let model = spec.model.clone().unwrap_or_else(|| match writes {
             true => w.edit_model.clone(),
@@ -246,7 +259,7 @@ impl Tool for Delegate {
             crate::agent::agent_loop::Mode::Act,
             Some(&spec.prompt),
         );
-        let mut sub = crate::agent::agent_loop::Agent {
+        let sub = crate::agent::agent_loop::Agent {
             this_turn: Default::default(),
             repairs: Default::default(),
             background: None,
@@ -305,129 +318,166 @@ impl Tool for Delegate {
             turn: 0,
         };
 
-        // Each call the sub-session makes is shown as it is made, under this call's step,
-        // so delegated work running side by side is seen as lanes rather than as silence.
-        let cancel = ctx.cancel.clone();
-        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-        let shown = ctx.clone();
-        let drain = tokio::spawn(async move {
-            let mut events = Vec::new();
-            while let Some(event) = rx.recv().await {
-                use crate::agent::agent_loop::AgentEvent;
-                use crate::tools::registry::SubEvent;
-                let sub = match &event {
-                    AgentEvent::ToolCall {
-                        id,
-                        name,
-                        args_pretty,
-                    } => Some(SubEvent::Called {
-                        id: id.clone(),
-                        name: name.clone(),
-                        args: args_pretty.clone(),
-                    }),
-                    AgentEvent::ToolResult {
-                        id,
-                        output,
-                        took,
-                        origin,
-                        ..
-                    } => Some(SubEvent::Settled {
-                        id: id.clone(),
-                        is_error: output.is_error,
-                        body: output.content.clone(),
-                        took: *took,
-                        origin: *origin,
-                    }),
-                    AgentEvent::AssistantText(s) if !s.trim().is_empty() => {
-                        Some(SubEvent::Answer(s.clone()))
-                    }
-                    _ => None,
-                };
-                if let Some(sub) = sub {
-                    shown.report("delegate", sub).await;
-                }
-                events.push(event);
-            }
-            events
-        });
         let task = a.task.clone();
-        let outcome = sub.run_user_turn(a.task, cancel, tx).await;
-        let events = drain.await.unwrap_or_default();
-        if let Err(e) = outcome {
-            return Ok(ToolOutput::err(format!("the delegated turn failed: {e:#}")));
-        }
-        // The answer is what it said last with nothing called after it. What it said
-        // before a call is narration, and is returned as such when nothing came after.
-        let mut answer = String::new();
-        let mut called_after = false;
-        let mut notices = Vec::new();
-        for event in events {
-            match event {
-                crate::agent::agent_loop::AgentEvent::AssistantText(s) => {
-                    if !s.trim().is_empty() {
-                        answer = s;
-                        called_after = false;
-                    }
+        if a.background {
+            // A job of its own: the turn does not wait for it and stopping the turn does
+            // not stop it. Its answer is handed to the session when it comes.
+            let ctx = crate::tools::registry::ToolCtx {
+                cancel: tokio_util::sync::CancellationToken::new(),
+                ..ctx.clone()
+            };
+            let (answers, hooks, agent) = (w.answers.clone(), w.hooks.clone(), name.to_string());
+            tokio::spawn(async move {
+                let _slot = slot;
+                let out = finish(sub, task.clone(), agent.clone(), ctx, hooks).await;
+                if let Some(tx) = answers {
+                    let _ = tx
+                        .send(format!(
+                            "The agent {agent}, started in the background on \"{task}\", answered:\n{}",
+                            out.content
+                        ))
+                        .await;
                 }
-                crate::agent::agent_loop::AgentEvent::ToolCall { .. } => called_after = true,
-                crate::agent::agent_loop::AgentEvent::Notice(s) => notices.push(s),
-                _ => {}
-            }
-        }
-        if answer.trim().is_empty() {
-            return Ok(ToolOutput::err(format!(
-                "the delegated turn answered nothing{}",
-                if notices.is_empty() {
-                    String::new()
-                } else {
-                    format!(": {}", notices.join("; "))
-                }
+            });
+            return Ok(ToolOutput::ok(format!(
+                "The agent {name} works on it in the background. Its answer is handed to you \
+                 when it is ready: go on with something else meanwhile."
             )));
         }
-        tracing::info!(
-            steps = sub.spend.steps,
-            answer_chars = answer.len(),
-            "delegated turn finished"
-        );
-        // What it changed, in the words a write reports, so the caller counts the files
-        // as its own turn's.
-        if !sub.this_turn.files.is_empty() {
-            let changed: Vec<String> = sub
-                .this_turn
-                .files
-                .iter()
-                .map(|f| format!("edited {f}"))
-                .collect();
-            answer = format!("{answer}\n\nIt changed:\n{}", changed.join("\n"));
-        }
-        // What the agent-end hooks make of the answer goes with it.
-        let rans = crate::agent::hooks::run_all(
-            &w.hooks.agent_end,
-            crate::agent::hooks::Event::AgentEnd,
-            &ctx.root,
-            None,
-            json!({
-                "event": "agent-end",
-                "root": ctx.root,
-                "agent": name,
-                "task": task,
-                "answer": answer,
-            }),
-        )
-        .await;
-        if let Some(text) = crate::agent::hooks::said(crate::agent::hooks::Event::AgentEnd, &rans) {
-            answer = format!("{answer}\n\n{text}");
-        }
-        if called_after {
-            return Ok(ToolOutput::ok(ctx.clamp(format!(
-                "It did not finish{}. What it said last, which may be partial:\n{answer}",
-                if notices.is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({})", notices.join("; "))
-                }
-            ))));
-        }
-        Ok(ToolOutput::ok(ctx.clamp(answer)))
+        Ok(finish(sub, task, name.to_string(), ctx.clone(), w.hooks.clone()).await)
     }
+}
+
+/// Run a delegated session on `task` and bring back its answer, with the files it changed,
+/// what the agent-end hooks said, and a word when it did not finish.
+async fn finish(
+    mut sub: crate::agent::agent_loop::Agent,
+    task: String,
+    name: String,
+    ctx: ToolCtx,
+    hooks: crate::config::HooksSection,
+) -> ToolOutput {
+    // Each call the sub-session makes is shown as it is made, under this call's step,
+    // so delegated work running side by side is seen as lanes rather than as silence.
+    let cancel = ctx.cancel.clone();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let shown = ctx.clone();
+    let drain = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            use crate::agent::agent_loop::AgentEvent;
+            use crate::tools::registry::SubEvent;
+            let sub = match &event {
+                AgentEvent::ToolCall {
+                    id,
+                    name,
+                    args_pretty,
+                } => Some(SubEvent::Called {
+                    id: id.clone(),
+                    name: name.clone(),
+                    args: args_pretty.clone(),
+                }),
+                AgentEvent::ToolResult {
+                    id,
+                    output,
+                    took,
+                    origin,
+                    ..
+                } => Some(SubEvent::Settled {
+                    id: id.clone(),
+                    is_error: output.is_error,
+                    body: output.content.clone(),
+                    took: *took,
+                    origin: *origin,
+                }),
+                AgentEvent::AssistantText(s) if !s.trim().is_empty() => {
+                    Some(SubEvent::Answer(s.clone()))
+                }
+                _ => None,
+            };
+            if let Some(sub) = sub {
+                shown.report("delegate", sub).await;
+            }
+            events.push(event);
+        }
+        events
+    });
+    let outcome = sub.run_user_turn(task.clone(), cancel, tx).await;
+    let events = drain.await.unwrap_or_default();
+    if let Err(e) = outcome {
+        return ToolOutput::err(format!("the delegated turn failed: {e:#}"));
+    }
+    // The answer is what it said last with nothing called after it. What it said
+    // before a call is narration, and is returned as such when nothing came after.
+    let mut answer = String::new();
+    let mut called_after = false;
+    let mut notices = Vec::new();
+    for event in events {
+        match event {
+            crate::agent::agent_loop::AgentEvent::AssistantText(s) => {
+                if !s.trim().is_empty() {
+                    answer = s;
+                    called_after = false;
+                }
+            }
+            crate::agent::agent_loop::AgentEvent::ToolCall { .. } => called_after = true,
+            crate::agent::agent_loop::AgentEvent::Notice(s) => notices.push(s),
+            _ => {}
+        }
+    }
+    if answer.trim().is_empty() {
+        return ToolOutput::err(format!(
+            "the delegated turn answered nothing{}",
+            if notices.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", notices.join("; "))
+            }
+        ));
+    }
+    tracing::info!(
+        steps = sub.spend.steps,
+        answer_chars = answer.len(),
+        "delegated turn finished"
+    );
+    // What it changed, in the words a write reports, so the caller counts the files
+    // as its own turn's.
+    if !sub.this_turn.files.is_empty() {
+        let changed: Vec<String> = sub
+            .this_turn
+            .files
+            .iter()
+            .map(|f| format!("edited {f}"))
+            .collect();
+        answer = format!("{answer}\n\nIt changed:\n{}", changed.join("\n"));
+    }
+    // What the agent-end hooks make of the answer goes with it.
+    let rans = crate::agent::hooks::run_all(
+        &hooks.agent_end,
+        crate::agent::hooks::Event::AgentEnd,
+        &ctx.root,
+        None,
+        json!({
+            "event": "agent-end",
+            "root": ctx.root,
+            "agent": name,
+            "task": task,
+            "answer": answer,
+        }),
+    )
+    .await;
+    if let Some(text) = crate::agent::hooks::said(crate::agent::hooks::Event::AgentEnd, &rans) {
+        answer = format!("{answer}\n\n{text}");
+    }
+    if called_after {
+        return ToolOutput::ok(ctx.clamp(format!(
+            "It did not finish{}. What it said last, which may be partial:\n{answer}",
+            if notices.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", notices.join("; "))
+            }
+        )));
+    }
+    ToolOutput::ok(ctx.clamp(answer))
 }

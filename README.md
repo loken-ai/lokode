@@ -644,6 +644,9 @@ api-key-env = "ANTHROPIC_API_KEY"
 - While the session plans, an agent changes nothing.
 - At most `[limits] delegates` agents run at once, 2 by default. The others wait.
 - An agent out of steps says it did not finish, with what it said last.
+- With `background`, an agent that changes nothing works while the turn goes on. Its answer is
+  handed to the session at its next step, in this turn or the next. Stopping the turn does not
+  stop it.
 - The task is taken as written: no file is attached for it and the project is not searched
   for it.
 
