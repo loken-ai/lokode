@@ -70,6 +70,9 @@ struct Report {
     /// from "it was not allowed to".
     blocked: bool,
     ok: bool,
+    /// The energy the backend measured for the turn, when it measured any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    energy: Option<crate::backend::meter::Spent>,
 }
 
 #[derive(Debug, Serialize)]
@@ -174,6 +177,7 @@ pub async fn run(
         notices: Vec::new(),
         blocked: false,
         ok: true,
+        energy: None,
     };
     let text_output = format == OutputFormat::Text;
 
@@ -272,7 +276,9 @@ pub async fn run(
                 }
                 report.notices.push(s);
             }
+            AgentEvent::Prefill { .. } | AgentEvent::Engine(_) => {}
             AgentEvent::Receipt(receipt) => {
+                report.energy = receipt.energy;
                 let line = receipt.describe();
                 if text_output {
                     eprintln!("· {line}");

@@ -16,15 +16,15 @@ The client waits on rx.await forever. I add timeout-secs:                       
                                                                                                                              ENGINE
   rust                                                                                                                       qwen3-coder
   let reply = timeout(self.timeout, rx).await??;                                                                             ▄▆████ 93 tok/s
-
-? edit src/mcp/client.rs                                                                                                     TURNS TO PUT BACK
-    src/mcp/client.rs                                                                                                          1  src/config.rs
-    @@ -212 +212 @@                                                                                                          /undo <turn> puts one back
-    212 -     let reply = rx.await?;
+                                                                                                                             time    read 0.7s · write 3.1s
+? edit src/mcp/client.rs                                                                                                     prompt  6.1k, 4.2k held
+    src/mcp/client.rs                                                                                                        cache   ▰▰▱▱▱▱▱▱▱▱ 15%
+    @@ -212 +212 @@                                                                                                          drafts  82% kept
+    212 -     let reply = rx.await?;                                                                                         energy  ≈0.31 Wh  session ≈0.42 Wh
     212 +     let reply = timeout(self.timeout, rx).await??;
-  y once   a always (src/mcp/)   n or esc no   e no, and say why
-
- ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files                               /undo put back  /diff see it
+  y once   a always (src/mcp/)   n or esc no   e no, and say why                                                             TURNS TO PUT BACK
+                                                                                                                               1  src/config.rs
+ ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files · 0.42 Wh                     /undo put back  /diff see it  /undo <turn> puts one back
 
 ! backend error: gave up after 3 attempts
 

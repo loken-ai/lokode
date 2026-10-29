@@ -16,15 +16,15 @@ The client waits on rx.await forever. I add timeout-secs:                       
   rust                                                                             ▐ ENGINE
   let reply = timeout(self.timeout, rx).await??;                                   ▐ qwen3-coder
                                                                                    ▐ ▄▆████ 93 tok/s
-? edit src/mcp/client.rs                                                           ▐
-    src/mcp/client.rs                                                              ▐ TURNS TO PUT BACK
-    @@ -212 +212 @@                                                                ▐   1  src/config.rs
-    212 -     let reply = rx.await?;                                               ▐ /undo <turn> puts one back
-    212 +     let reply = timeout(self.timeout, rx).await??;                       ▐
+? edit src/mcp/client.rs                                                           ▐ time    read 0.7s · write 3.1s
+    src/mcp/client.rs                                                              ▐ prompt  6.1k, 4.2k held
+    @@ -212 +212 @@                                                                ▐ cache   ▰▰▱▱▱▱▱▱▱▱ 15%
+    212 -     let reply = rx.await?;                                               ▐ drafts  82% kept
+    212 +     let reply = timeout(self.timeout, rx).await??;                       ▐ energy  ≈0.31 Wh  session ≈0.42 Wh
   y once   a always (src/mcp/)   n or esc no   e no, and say why                   ▐
-                                                                                   ▐
- ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files                   ▐
-                                                                                   ▐
+                                                                                   ▐ TURNS TO PUT BACK
+ ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files · 0.42 Wh         ▐   1  src/config.rs
+                                                                                   ▐ /undo <turn> puts one back
 ! backend error: gave up after 3 attempts                                          ▐
 
 ❯

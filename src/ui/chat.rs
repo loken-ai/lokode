@@ -565,6 +565,9 @@ fn receipt_lines(r: &Receipt, width: usize) -> Vec<Line<'static>> {
         1 => format!("changed {}", r.files[0]),
         n => format!("changed {n} files"),
     });
+    if let Some(e) = &r.energy {
+        said.push(e.describe());
+    }
     let left = vec![
         Span::raw(" "),
         Span::styled("✓", Style::default().fg(t.good)),
@@ -591,7 +594,7 @@ fn receipt_lines(r: &Receipt, width: usize) -> Vec<Line<'static>> {
 }
 
 /// A count of tokens in a few characters: 940, 8.4k, 1.2M.
-fn tokens(n: u64) -> String {
+pub(crate) fn tokens(n: u64) -> String {
     match n {
         0..=999 => n.to_string(),
         1_000..=999_999 => format!("{:.1}k", n as f64 / 1e3),
@@ -942,6 +945,7 @@ mod tests {
             tokens_in: 8400,
             tokens_out: 940,
             files: vec!["src/a.rs".into()],
+            energy: None,
         };
         let head = line_text(&receipt_lines(&r, 110)[0]);
         assert!(

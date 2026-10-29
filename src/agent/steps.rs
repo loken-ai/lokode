@@ -53,6 +53,9 @@ pub struct After {
     pub check_passed: Option<bool>,
     /// Whether any tool of the step changed something.
     pub wrote: bool,
+    /// What a loken server measured of the step's request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loken: Option<crate::backend::wire::LokenUsage>,
 }
 
 /// One step, both sides.

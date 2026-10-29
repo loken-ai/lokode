@@ -200,6 +200,81 @@ pub struct Usage {
     pub prompt_tokens: u32,
     #[serde(default)]
     pub completion_tokens: u32,
+    #[serde(default)]
+    pub prompt_tokens_details: Option<PromptDetails>,
+    #[serde(default)]
+    pub completion_tokens_details: Option<CompletionDetails>,
+    /// What a loken server measured of the request. Absent from any other server.
+    #[serde(default)]
+    pub loken: Option<LokenUsage>,
+}
+
+/// The part of the prompt the server already held.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptDetails {
+    #[serde(default)]
+    pub cached_tokens: u32,
+}
+
+/// What speculative decoding kept and threw away.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionDetails {
+    #[serde(default)]
+    pub accepted_prediction_tokens: u32,
+    #[serde(default)]
+    pub rejected_prediction_tokens: u32,
+}
+
+/// What a loken server measured of one request. A field it could not measure is absent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct LokenUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefill_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy: Option<Energy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kv: Option<Kv>,
+}
+
+/// The energy one request drew, in joules.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Energy {
+    pub joules: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_joules: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_joules: Option<f64>,
+    /// The processor's part was estimated, its counters being unreadable.
+    #[serde(default)]
+    pub estimated: bool,
+    #[serde(default)]
+    pub share: Share,
+}
+
+/// How a request's energy was told apart from that of requests running beside it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Share {
+    /// It ran alone, so the energy is its own.
+    #[default]
+    Alone,
+    /// Others ran at the same time, and each sample was split by the tokens each request
+    /// computed over it, or evenly where none computed any.
+    Work,
+    /// A way of sharing this client does not know.
+    #[serde(other)]
+    Unknown,
+}
+
+/// The request's sequence in the key-value cache, against the cache's capacity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Kv {
+    pub used_tokens: u64,
+    pub capacity_tokens: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

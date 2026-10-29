@@ -47,6 +47,23 @@ reason for building another one of these.
 | [MCP](#tools-from-elsewhere) | tools, documents and prompts from another server |
 | [Headless](#without-the-interface) | one prompt, a JSON report, an exit code |
 
+## What the engine measures
+
+Against a loken server, lokode reads what the server measured of each request and shows it.
+
+| Reading | Where |
+|---|---|
+| how long the request waited, read the prompt and wrote the answer | the rail |
+| how far the server has read a long prompt | the status line, while it reads |
+| how full the key-value cache is | the rail |
+| how much of a speculative draft the server kept | the rail |
+| the energy each request drew | the rail, the receipt, `/cost`, the session file and `-p --output json` |
+
+Energy is counted against what a request was for: a step, a read guessed ahead, a second
+opinion, a repaired reply or the probe at startup. It is marked `≈` when other requests
+shared the server and `~` when part of it was estimated. A server that measures nothing
+shows nothing, never a zero.
+
 ## Where it is careful
 
 - **One root, and it is enforced.** Every path-taking tool is confined under `--root`. A tool

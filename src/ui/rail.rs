@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::agent::agent_loop::Engine;
 use crate::agent::session::Occupancy;
 use crate::checkpoint::Turn;
 use crate::tools::plan::{State, Task};
@@ -51,6 +52,7 @@ pub struct Rail<'a> {
     pub window: &'a Occupancy,
     pub rates: &'a VecDeque<f64>,
     pub turns: &'a [Turn],
+    pub engine: &'a Engine,
 }
 
 /// The colours of the window's parts, in the order the session measures them.
@@ -177,6 +179,7 @@ impl Rail<'_> {
                 Span::styled(" tok/s", t.dim),
             ]));
         }
+        out.extend(self.engine_lines(inner));
         out.push(Line::from(""));
 
         if !self.turns.is_empty() {
@@ -196,6 +199,81 @@ impl Rail<'_> {
                 " /undo <turn> puts one back",
                 t.dim,
             )));
+        }
+        out
+    }
+
+    /// What the backend measured: how long the latest request waited, read and wrote, how
+    /// full its cache is, how much of a draft it kept, and the energy of the turn and the
+    /// session. Each line only when the backend said what it needs.
+    fn engine_lines(&self, inner: usize) -> Vec<Line<'static>> {
+        let t = theme();
+        let mut out = Vec::new();
+        let label = |s: &str| Span::styled(format!(" {s:<8}"), t.dim);
+        if let Some(latest) = &self.engine.latest {
+            let l = &latest.loken;
+            let ms = |v: u64| crate::ui::chat::how_long(std::time::Duration::from_millis(v));
+            let mut times = Vec::new();
+            if let Some(q) = l.queue_ms.filter(|q| *q > 0) {
+                times.push(format!("wait {}", ms(q)));
+            }
+            if let Some(p) = l.prefill_ms {
+                times.push(format!("read {}", ms(p)));
+            }
+            if let Some(d) = l.decode_ms {
+                times.push(format!("write {}", ms(d)));
+            }
+            if !times.is_empty() {
+                out.push(Line::from(vec![
+                    label("time"),
+                    Span::raw(clip(&times.join(" · "), inner.saturating_sub(9))),
+                ]));
+            }
+            if latest.prompt_tokens > 0 {
+                let cached = match latest.cached_tokens {
+                    0 => String::new(),
+                    c => format!(", {} held", crate::ui::chat::tokens(c as u64)),
+                };
+                out.push(Line::from(vec![
+                    label("prompt"),
+                    Span::raw(format!(
+                        "{}{cached}",
+                        crate::ui::chat::tokens(latest.prompt_tokens as u64)
+                    )),
+                ]));
+            }
+            if let Some(kv) = l.kv.filter(|kv| kv.capacity_tokens > 0) {
+                let cells = 10usize;
+                let full = ((kv.used_tokens * cells as u64 + kv.capacity_tokens / 2)
+                    / kv.capacity_tokens)
+                    .min(cells as u64) as usize;
+                out.push(Line::from(vec![
+                    label("cache"),
+                    Span::styled("▰".repeat(full), Style::default().fg(t.accent)),
+                    Span::styled("▱".repeat(cells - full), t.dim),
+                    Span::raw(format!(" {}%", kv.used_tokens * 100 / kv.capacity_tokens)),
+                ]));
+            }
+            let drafted = latest.accepted_tokens + latest.rejected_tokens;
+            if let Some(kept) = (latest.accepted_tokens * 100).checked_div(drafted) {
+                out.push(Line::from(vec![
+                    label("drafts"),
+                    Span::raw(format!("{kept}% kept")),
+                ]));
+            }
+        }
+        if self.engine.session.is_measured() {
+            out.push(Line::from(vec![
+                label("energy"),
+                Span::styled(
+                    self.engine.turn.describe(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  session {}", self.engine.session.describe()),
+                    t.dim,
+                ),
+            ]));
         }
         out
     }
@@ -307,6 +385,7 @@ mod tests {
             window: &Occupancy::default(),
             rates: &rates,
             turns: &[],
+            engine: &Engine::default(),
         };
         let text = rail_text(&rail);
         assert!(text.iter().any(|l| l.starts_with(" ENGINE")));
@@ -351,6 +430,7 @@ mod tests {
             window: &window,
             rates: &rates,
             turns: &turns,
+            engine: &Engine::default(),
         };
         let text = rail_text(&rail);
         assert!(
@@ -387,6 +467,7 @@ mod tests {
             window: &window,
             rates: &rates,
             turns: &[],
+            engine: &Engine::default(),
         };
         let bar = line_text(&rail.window_bar(20));
         assert_eq!(bar.chars().filter(|&c| c == '█').count(), 5);

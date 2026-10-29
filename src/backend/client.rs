@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use eventsource_stream::Eventsource;
 use futures::stream::{Stream, StreamExt};
 
+use crate::backend::meter::{ledger, Purpose};
 use crate::backend::wire::{
     ChatChunk, ChatCompletionRequest, ResponseFormat, StreamOptions, ToolCallDelta, Usage,
 };
@@ -23,6 +24,11 @@ pub enum StreamEvent {
     Call(ToolCallDelta),
     /// The server said it is still at work and has nothing to send yet: a keep-alive.
     Alive,
+    /// The server is reading the prompt, and says how far it has got, in tokens.
+    Prefill {
+        done: u64,
+        total: u64,
+    },
     /// The end of generation, carrying what the server was willing to say about it.
     End {
         finish_reason: Option<String>,
@@ -144,7 +150,11 @@ impl BackendClient {
 
     /// Non-streaming chat completion: returns the assistant content as
     /// a single string. Convenience for repair round-trips.
-    async fn complete_request(&self, mut req: ChatCompletionRequest) -> Result<String> {
+    async fn complete_request(
+        &self,
+        mut req: ChatCompletionRequest,
+        purpose: Purpose,
+    ) -> Result<String> {
         req.stream = Some(false);
         req.stream_options = None;
         let url = self.url();
@@ -188,6 +198,9 @@ impl BackendClient {
 
         let body: serde_json::Value =
             serde_json::from_str(&text).with_context(|| "decoding chat completion response")?;
+        if let Ok(usage) = serde_json::from_value::<Usage>(body["usage"].clone()) {
+            ledger().record(purpose, &usage);
+        }
         Ok(body["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or_default()
@@ -199,7 +212,11 @@ impl BackendClient {
     /// Retries cover establishing the response only. Once bytes are flowing the answer is
     /// partly on screen and partly in the transcript, and starting again would duplicate
     /// what the user has already read.
-    async fn stream_request(&self, mut req: ChatCompletionRequest) -> Result<ChunkStream> {
+    async fn stream_request(
+        &self,
+        mut req: ChatCompletionRequest,
+        purpose: Purpose,
+    ) -> Result<ChunkStream> {
         req.stream = Some(true);
         let url = self.url();
 
@@ -265,12 +282,9 @@ impl BackendClient {
         let sse = resp
             .bytes_stream()
             .map(|chunk| {
-                chunk.map(|b| {
-                    if is_keep_alive(&b) {
-                        b"event: alive\ndata: {}\n\n"[..].into()
-                    } else {
-                        b
-                    }
+                chunk.map(|b| match comment_event(&b) {
+                    Some(event) => event.into(),
+                    None => b,
                 })
             })
             .eventsource();
@@ -285,12 +299,21 @@ impl BackendClient {
             let events: Vec<Result<StreamEvent>> = match ev {
                 Err(e) => vec![Err(anyhow!("sse: {e}"))],
                 Ok(event) if event.event == "alive" => vec![Ok(StreamEvent::Alive)],
+                Ok(event) if event.event == "prefill" => vec![Ok(prefill_of(&event.data))],
                 Ok(event) if event.data.trim() == "[DONE]" => {
                     let _ = event;
                     Vec::new()
                 }
                 Ok(event) => match serde_json::from_str::<ChatChunk>(&event.data) {
-                    Ok(c) => events_of(c, &mut think).into_iter().map(Ok).collect(),
+                    Ok(c) => {
+                        let events = events_of(c, &mut think);
+                        for e in &events {
+                            if let StreamEvent::End { usage: Some(u), .. } = e {
+                                ledger().record(purpose, u);
+                            }
+                        }
+                        events.into_iter().map(Ok).collect()
+                    }
                     Err(e) => vec![Err(anyhow!("decode chunk: {e}: raw={}", event.data))],
                 },
             };
@@ -336,6 +359,45 @@ fn is_keep_alive(chunk: &[u8]) -> bool {
     let text = String::from_utf8_lossy(chunk);
     let mut lines = text.lines().filter(|l| !l.is_empty()).peekable();
     lines.peek().is_some() && lines.all(|l| l.starts_with(':'))
+}
+
+/// The marker a loken server puts on the comment that says how far it has read a prompt.
+const PREFILL_COMMENT: &str = "loken-prefill";
+
+/// A chunk of comments alone, as the event it stands for, which an event parser would
+/// otherwise drop: the last progress of a prompt being read when one is there, a
+/// keep-alive when not. `None` for a chunk that carries anything else.
+pub(crate) fn comment_event(chunk: &[u8]) -> Option<Vec<u8>> {
+    if !is_keep_alive(chunk) {
+        return None;
+    }
+    let text = String::from_utf8_lossy(chunk);
+    let progress = text.lines().rev().find_map(|l| {
+        l.strip_prefix(':')?
+            .trim_start()
+            .strip_prefix(PREFILL_COMMENT)
+            .map(str::trim)
+    });
+    Some(match progress {
+        Some(json) => format!("event: prefill\ndata: {json}\n\n").into_bytes(),
+        None => b"event: alive\ndata: {}\n\n".to_vec(),
+    })
+}
+
+/// The progress a prefill event reports, or a keep-alive when it does not parse.
+pub(crate) fn prefill_of(data: &str) -> StreamEvent {
+    #[derive(serde::Deserialize)]
+    struct Progress {
+        done: u64,
+        total: u64,
+    }
+    match serde_json::from_str::<Progress>(data) {
+        Ok(p) => StreamEvent::Prefill {
+            done: p.done,
+            total: p.total,
+        },
+        Err(_) => StreamEvent::Alive,
+    }
 }
 
 /// Everything one chunk has to say.
@@ -470,11 +532,13 @@ impl crate::backend::provider::Provider for BackendClient {
     }
 
     async fn complete(&self, req: crate::backend::provider::TurnRequest) -> Result<String> {
-        self.complete_request(self.render(req)).await
+        let purpose = req.purpose;
+        self.complete_request(self.render(req), purpose).await
     }
 
     async fn stream(&self, req: crate::backend::provider::TurnRequest) -> Result<ChunkStream> {
-        self.stream_request(self.render(req)).await
+        let purpose = req.purpose;
+        self.stream_request(self.render(req), purpose).await
     }
 
     /// One token, which is what makes the server read the weights.
@@ -490,7 +554,7 @@ impl crate::backend::provider::Provider for BackendClient {
             stream: Some(false),
             ..Default::default()
         };
-        self.complete_request(req).await.map(|_| ())
+        self.complete_request(req, Purpose::Probe).await.map(|_| ())
     }
 
     async fn models(&self) -> Result<Vec<String>> {
@@ -594,6 +658,7 @@ mod tests {
             temperature: 0.0,
             user: None,
             reason,
+            purpose: crate::backend::meter::Purpose::Step,
         };
         assert_eq!(
             c.render(req(false)).reasoning_effort.as_deref(),
@@ -661,5 +726,68 @@ mod tests {
 
         let unrelated = anyhow!("backend 400 Bad Request: model not found");
         assert!(!mentions(&unrelated, &["stream_options", "include_usage"]));
+    }
+
+    /// The measurements a loken server adds to the closing usage are read, each one
+    /// optional, and the standard speculation counts with them.
+    #[test]
+    fn a_loken_usage_is_read_off_the_last_chunk() {
+        let raw = r#"{"choices":[],"usage":{"prompt_tokens":20431,"completion_tokens":120,
+            "prompt_tokens_details":{"cached_tokens":8000},
+            "completion_tokens_details":{"accepted_prediction_tokens":82,"rejected_prediction_tokens":18},
+            "loken":{"queue_ms":12,"prefill_ms":840,"decode_ms":3120,
+            "energy":{"joules":41.2,"gpu_joules":33.0,"cpu_joules":null,"estimated":false,"share":"work"},
+            "kv":{"used_tokens":20431,"capacity_tokens":131072}}}}"#;
+        let chunk: ChatChunk = serde_json::from_str(raw).expect("a chunk");
+        let usage = chunk.usage.expect("a usage");
+        let loken = usage.loken.expect("loken measurements");
+        assert_eq!(loken.prefill_ms, Some(840));
+        let energy = loken.energy.expect("an energy");
+        assert_eq!(energy.share, crate::backend::wire::Share::Work);
+        assert_eq!(energy.cpu_joules, None);
+        assert_eq!(loken.kv.map(|k| k.capacity_tokens), Some(131_072));
+        assert_eq!(
+            usage.prompt_tokens_details.map(|d| d.cached_tokens),
+            Some(8000)
+        );
+        assert_eq!(
+            usage
+                .completion_tokens_details
+                .map(|d| d.accepted_prediction_tokens),
+            Some(82)
+        );
+        // Any other server says none of it, and the usage still reads.
+        let plain: ChatChunk = serde_json::from_str(
+            r#"{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1}}"#,
+        )
+        .expect("a chunk");
+        assert!(plain.usage.expect("a usage").loken.is_none());
+    }
+
+    /// The comment that says how far a prompt has been read becomes an event of its own;
+    /// any other comment is a keep-alive, and a chunk with data is left alone.
+    #[test]
+    fn a_prefill_comment_is_an_event_of_its_own() {
+        let event = comment_event(b": loken-prefill {\"done\": 8192, \"total\": 20431}\n\n")
+            .expect("a comment chunk");
+        let text = String::from_utf8(event).expect("text");
+        assert!(text.starts_with("event: prefill\n"), "{text}");
+        let data = text
+            .lines()
+            .nth(1)
+            .and_then(|l| l.strip_prefix("data: "))
+            .expect("data");
+        assert!(matches!(
+            prefill_of(data),
+            StreamEvent::Prefill {
+                done: 8192,
+                total: 20431
+            }
+        ));
+        let alive = String::from_utf8(comment_event(b": keep-alive\n\n").expect("a comment"))
+            .expect("text");
+        assert!(alive.starts_with("event: alive\n"), "{alive}");
+        assert!(comment_event(b"data: {}\n\n").is_none());
+        assert!(matches!(prefill_of("not json"), StreamEvent::Alive));
     }
 }

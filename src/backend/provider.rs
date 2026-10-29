@@ -38,6 +38,8 @@ pub struct TurnRequest {
     /// Whether the model may reason before it answers. A short question beside the turn, a
     /// guess or a review, asks for no reasoning, so its whole budget goes to the answer.
     pub reason: bool,
+    /// What the request is for, which is what its measured cost is counted against.
+    pub purpose: crate::backend::meter::Purpose,
 }
 
 /// What a provider can actually do, so the agent asks for nothing it cannot deliver.

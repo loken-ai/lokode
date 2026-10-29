@@ -189,6 +189,13 @@ pub enum AgentEvent {
     Notice(String),
     /// What the turn came to, sent as it closes.
     Receipt(Receipt),
+    /// The server is reading the prompt, and has got this far, in tokens.
+    Prefill {
+        done: u64,
+        total: u64,
+    },
+    /// What the backend measured, as of the step just taken.
+    Engine(Engine),
     /// A line the user typed while the turn was running, now in the conversation.
     Steered(String),
     /// How tool calls travel, once something has found out what the backend does.
@@ -384,6 +391,7 @@ impl Guess {
             temperature: 0.0,
             user: Some(format!("{}-guess", self.session)),
             reason: false,
+            purpose: crate::backend::meter::Purpose::Guess,
         };
         let answer = tokio::select! {
             biased;
@@ -661,12 +669,15 @@ pub struct TurnTally {
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub started: Option<std::time::Instant>,
+    /// What the backend's measurements stood at when the turn began.
+    pub energy_from: crate::backend::meter::Totals,
 }
 
 impl TurnTally {
     fn begin() -> Self {
         Self {
             started: Some(std::time::Instant::now()),
+            energy_from: crate::backend::meter::ledger().totals(),
             ..Default::default()
         }
     }
@@ -685,19 +696,36 @@ impl TurnTally {
         if self.steps <= 1 && self.files.is_empty() && took.as_secs_f64() < 10.0 {
             return None;
         }
+        let energy = self.energy().sum();
         Some(Receipt {
             took,
             steps: self.steps,
             tokens_in: self.tokens_in,
             tokens_out: self.tokens_out,
             files: self.files.clone(),
+            energy: energy.is_measured().then_some(energy),
         })
+    }
+
+    /// What the backend measured since the turn began, by purpose.
+    pub fn energy(&self) -> crate::backend::meter::Totals {
+        crate::backend::meter::ledger()
+            .totals()
+            .since(&self.energy_from)
     }
 
     /// The closing line, or nothing when there is nothing worth saying.
     pub fn describe(&self) -> Option<String> {
         self.receipt().map(|r| r.describe())
     }
+}
+
+/// What the backend measured: the latest request, this turn and the session so far.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Engine {
+    pub latest: Option<crate::backend::meter::Latest>,
+    pub turn: crate::backend::meter::Spent,
+    pub session: crate::backend::meter::Spent,
 }
 
 /// What a turn came to: how long, how many steps, what it read and wrote, what it changed.
@@ -708,6 +736,8 @@ pub struct Receipt {
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub files: Vec<String>,
+    /// The energy the backend measured for the turn, when it measured any.
+    pub energy: Option<crate::backend::meter::Spent>,
 }
 
 impl Receipt {
@@ -728,6 +758,9 @@ impl Receipt {
                 n,
                 self.files[..2].join(", ")
             )),
+        }
+        if let Some(e) = &self.energy {
+            parts.push(e.describe());
         }
         parts.join("  ·  ")
     }
@@ -1251,6 +1284,19 @@ impl Agent {
                 // The totals, then the last few steps: a session's cost is a sum, and
                 // where it went is a list.
                 let mut out = vec![self.spend.describe()];
+                // What the backend measured, by what it was for, when it measures anything.
+                let by = crate::backend::meter::ledger().totals();
+                if by.sum().is_measured() {
+                    out.push(format!("energy {}", by.sum().describe()));
+                    for (purpose, spent) in by.by_purpose() {
+                        out.push(format!(
+                            "  {:<16} {}  over {} request(s)",
+                            purpose.label(),
+                            spent.describe(),
+                            spent.requests
+                        ));
+                    }
+                }
                 let recent: Vec<String> = self
                     .steps
                     .iter()
@@ -1675,6 +1721,18 @@ impl Agent {
             if let Some(rate) = step_rate(&attempt, record.after.model_ms) {
                 let _ = events.send(AgentEvent::Rate(rate)).await;
             }
+            // What the backend measured, when it measures anything: the request just made,
+            // this turn and the session.
+            let ledger = crate::backend::meter::ledger();
+            if let Some(latest) = ledger.latest() {
+                let _ = events
+                    .send(AgentEvent::Engine(Engine {
+                        latest: Some(latest),
+                        turn: self.this_turn.energy().sum(),
+                        session: ledger.totals().sum(),
+                    }))
+                    .await;
+            }
 
             // A backend that will not take native tool calls says so by refusing the
             // request. Nothing has been said to the user yet, so the same step can be run
@@ -1749,6 +1807,7 @@ impl Agent {
             if let Some(usage) = completion.usage {
                 record.after.prompt_tokens = usage.prompt_tokens;
                 record.after.completion_tokens = usage.completion_tokens;
+                record.after.loken = usage.loken;
                 self.this_turn.tokens_in += usage.prompt_tokens as u64;
                 self.this_turn.tokens_out += usage.completion_tokens as u64;
                 self.spend.prompt_tokens += usage.prompt_tokens as u64;
@@ -2320,6 +2379,7 @@ impl Agent {
             temperature: 0.0,
             user: Some(format!("{}-review", self.session.id)),
             reason: false,
+            purpose: crate::backend::meter::Purpose::Review,
         };
         let answer = tokio::select! {
             biased;
@@ -2395,6 +2455,14 @@ impl Agent {
         // what it changed. All four were known and thrown away.
         if let Some(receipt) = self.this_turn.receipt() {
             let _ = events.send(AgentEvent::Receipt(receipt)).await;
+        }
+        // What the turn's requests drew, by purpose, kept with the conversation so the
+        // cost of a session can be read back from its file.
+        let energy = self.this_turn.energy().by_purpose();
+        if !energy.is_empty() {
+            if let Some(t) = self.session.transcript() {
+                t.append(crate::agent::transcript::Record::Energy(energy));
+            }
         }
         // Written at the end of a turn rather than after every step: losing it costs a
         // memory, not a session, and a turn is the unit a person would call a piece of
@@ -2576,6 +2644,7 @@ impl Agent {
             temperature: 0.2,
             user: Some(self.session.id.clone()),
             reason: true,
+            purpose: crate::backend::meter::Purpose::Step,
         };
 
         let mut stream: ChunkStream = tokio::select! {
@@ -2614,6 +2683,9 @@ impl Agent {
             patience = STREAM_IDLE_TIMEOUT;
             match next? {
                 StreamEvent::Alive => {}
+                StreamEvent::Prefill { done, total } => {
+                    let _ = events.send(AgentEvent::Prefill { done, total }).await;
+                }
                 StreamEvent::Delta(p) => {
                     if !answering {
                         answering = true;
@@ -2708,6 +2780,7 @@ impl Agent {
                 temperature: 0.0,
                 user: Some(format!("{}-repair", self.session.id)),
                 reason: true,
+                purpose: crate::backend::meter::Purpose::Repair,
             };
             current = tokio::select! {
                 biased;

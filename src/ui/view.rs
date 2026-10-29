@@ -183,6 +183,7 @@ pub(crate) fn draw(
             window: &state.window,
             rates: &state.rates,
             turns: &state.turns,
+            engine: &state.engine,
         }
         .render(f, area);
     }
@@ -241,7 +242,16 @@ pub(crate) fn draw(
         phase: if waiting {
             Some("waiting for your answer".to_string())
         } else {
-            state.phase.as_ref().map(|p| p.label())
+            match (&state.phase, state.prefill) {
+                (Some(crate::agent::agent_loop::Phase::Waiting), Some((done, total))) => {
+                    Some(format!(
+                        "reading the prompt, {} of {}",
+                        crate::ui::chat::tokens(done),
+                        crate::ui::chat::tokens(total)
+                    ))
+                }
+                (phase, _) => phase.as_ref().map(|p| p.label()),
+            }
         },
         in_phase: if waiting {
             state.waiting_since.map(|t| t.elapsed()).unwrap_or_default()
@@ -332,6 +342,37 @@ mod tests {
         for rate in [38.0, 61.0, 88.0, 94.0, 90.0, 93.0] {
             state.note_rate(rate);
         }
+        state.engine = crate::agent::agent_loop::Engine {
+            latest: Some(crate::backend::meter::Latest {
+                purpose: crate::backend::meter::Purpose::Step,
+                prompt_tokens: 6100,
+                cached_tokens: 4200,
+                accepted_tokens: 82,
+                rejected_tokens: 18,
+                loken: crate::backend::wire::LokenUsage {
+                    queue_ms: Some(0),
+                    prefill_ms: Some(700),
+                    decode_ms: Some(3100),
+                    energy: None,
+                    kv: Some(crate::backend::wire::Kv {
+                        used_tokens: 20_431,
+                        capacity_tokens: 131_072,
+                    }),
+                },
+            }),
+            turn: crate::backend::meter::Spent {
+                joules: 1116.0,
+                requests: 5,
+                shared: 1,
+                estimated: 0,
+            },
+            session: crate::backend::meter::Spent {
+                joules: 1512.0,
+                requests: 7,
+                shared: 1,
+                estimated: 0,
+            },
+        };
         state.entries.extend([
             Entry::Notice("backend http://127.0.0.1:11435".into()),
             Entry::User("add a configurable timeout to the MCP calls".into()),
@@ -383,6 +424,12 @@ mod tests {
                 tokens_in: 8400,
                 tokens_out: 1100,
                 files: vec!["src/mcp/client.rs".into(), "src/config.rs".into()],
+                energy: Some(crate::backend::meter::Spent {
+                    joules: 1512.0,
+                    requests: 7,
+                    shared: 0,
+                    estimated: 0,
+                }),
             }),
             Entry::Notice("backend error: gave up after 3 attempts".into()),
         ]);

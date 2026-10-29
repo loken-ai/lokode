@@ -486,7 +486,10 @@ async fn run_ui(
                     AgentEvent::Phase(phase) => {
                         state.phase = Some(phase);
                         state.phase_since = Some(Instant::now());
+                        state.prefill = None;
                     }
+                    AgentEvent::Prefill { done, total } => state.prefill = Some((done, total)),
+                    AgentEvent::Engine(engine) => state.engine = engine,
                     AgentEvent::Reasoning(p) => state.push_reasoning(&p),
                     AgentEvent::AssistantDelta(chunk) => state.write_answer(chunk),
                     AgentEvent::AssistantText(s) => state.finish_answer(s),
@@ -541,6 +544,7 @@ async fn run_ui(
                         state.busy = false;
                         state.step = 0;
                         state.phase = None;
+                        state.prefill = None;
                         state.turn_cancel = None;
                         // A turn only ends while a prompt is up if it was abandoned: the
                         // tool that asked has already given up waiting, so the modal is

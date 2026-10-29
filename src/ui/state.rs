@@ -141,6 +141,10 @@ pub(crate) struct UiState {
     /// Whether the rail is shown: `None` follows the width of the screen, and a key sets
     /// it either way.
     pub(crate) rail: Option<bool>,
+    /// How far the server has read the prompt, in tokens, while it says.
+    pub(crate) prefill: Option<(u64, u64)>,
+    /// What the backend measured, as of the latest step.
+    pub(crate) engine: crate::agent::agent_loop::Engine,
     /// Whether the rail was on screen in the last frame, for the key that flips it.
     pub(crate) rail_now: bool,
     /// How tool calls travel, as the agent has it: settled by asking the backend, so the

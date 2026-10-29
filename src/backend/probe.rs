@@ -53,6 +53,7 @@ pub async fn ignores_native_tools(
         user: None,
         // A readiness check answers in a few tokens; a reasoning model would spend them thinking.
         reason: false,
+        purpose: crate::backend::meter::Purpose::Probe,
     };
     let mut stream = match backend.stream(req).await {
         Ok(s) => s,

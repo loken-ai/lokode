@@ -223,6 +223,9 @@ struct AnthropicUsage {
     input_tokens: u32,
     #[serde(default)]
     output_tokens: u32,
+    /// What a loken server measured, on the usage that closes the message.
+    #[serde(default)]
+    loken: Option<crate::backend::wire::LokenUsage>,
 }
 
 /// Translate one Anthropic event into the events the loop reads.
@@ -280,6 +283,8 @@ fn events_of(e: Event) -> Vec<StreamEvent> {
                 usage: e.usage.map(|u| Usage {
                     prompt_tokens: u.input_tokens,
                     completion_tokens: u.output_tokens,
+                    loken: u.loken,
+                    ..Default::default()
                 }),
             }]
         }
@@ -289,7 +294,7 @@ fn events_of(e: Event) -> Vec<StreamEvent> {
                 finish_reason: None,
                 usage: Some(Usage {
                     prompt_tokens: u.input_tokens,
-                    completion_tokens: 0,
+                    ..Default::default()
                 }),
             }],
             _ => Vec::new(),
@@ -350,11 +355,33 @@ impl Provider for AnthropicProvider {
             return Err(anyhow!("anthropic {status}: {body}"));
         }
 
-        let mapped = resp.bytes_stream().eventsource().flat_map(|ev| {
+        let purpose = req.purpose;
+        let sse = resp
+            .bytes_stream()
+            .map(|chunk| {
+                chunk.map(|b| match crate::backend::client::comment_event(&b) {
+                    Some(event) => event.into(),
+                    None => b,
+                })
+            })
+            .eventsource();
+        let mapped = sse.flat_map(move |ev| {
             let events: Vec<Result<StreamEvent>> = match ev {
                 Err(e) => vec![Err(anyhow!("sse: {e}"))],
+                Ok(event) if event.event == "alive" => vec![Ok(StreamEvent::Alive)],
+                Ok(event) if event.event == "prefill" => {
+                    vec![Ok(crate::backend::client::prefill_of(&event.data))]
+                }
                 Ok(event) => match serde_json::from_str::<Event>(&event.data) {
-                    Ok(parsed) => events_of(parsed).into_iter().map(Ok).collect(),
+                    Ok(parsed) => {
+                        let events = events_of(parsed);
+                        for e in &events {
+                            if let StreamEvent::End { usage: Some(u), .. } = e {
+                                crate::backend::meter::ledger().record(purpose, u);
+                            }
+                        }
+                        events.into_iter().map(Ok).collect()
+                    }
                     Err(e) => vec![Err(anyhow!("decode event: {e}: raw={}", event.data))],
                 },
             };
@@ -377,6 +404,15 @@ impl Provider for AnthropicProvider {
             return Err(anyhow!("anthropic {status}: {body}"));
         }
         let body: Value = resp.json().await.context("decoding response")?;
+        if let Ok(u) = serde_json::from_value::<AnthropicUsage>(body["usage"].clone()) {
+            let usage = Usage {
+                prompt_tokens: u.input_tokens,
+                completion_tokens: u.output_tokens,
+                loken: u.loken,
+                ..Default::default()
+            };
+            crate::backend::meter::ledger().record(req.purpose, &usage);
+        }
         Ok(body["content"]
             .as_array()
             .map(|blocks| {
@@ -405,6 +441,7 @@ mod tests {
             temperature: 0.2,
             user: None,
             reason: true,
+            purpose: crate::backend::meter::Purpose::Step,
         }
     }
 

@@ -45,6 +45,8 @@ pub enum Record {
     Notice {
         text: String,
     },
+    /// What a turn's requests drew, by what they were for, as the backend measured it.
+    Energy(Vec<(crate::backend::meter::Purpose, crate::backend::meter::Spent)>),
     /// The conversation was started again from nothing.
     ///
     /// Recorded rather than erased: what was said was said, and a session is a record of
