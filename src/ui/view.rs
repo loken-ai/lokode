@@ -241,6 +241,7 @@ pub(crate) fn draw(
         },
         rail_offered: !wide,
         on_receipt: state.receipt_here().is_some(),
+        hand_running: !state.hand.is_empty(),
         enter_does: match state.at_entry.and_then(|i| state.entries.get(i)) {
             Some(crate::ui::chat::Entry::Step(_)) => Some("open"),
             Some(crate::ui::chat::Entry::User(_)) => Some("take back"),

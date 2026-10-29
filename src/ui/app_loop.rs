@@ -416,7 +416,9 @@ async fn run_ui(
     let mut events = EventStream::new();
     let mut injected: std::collections::VecDeque<Event> = Default::default();
     // What a command of the person's own came to, when it ends.
-    let (hand_tx, mut hand_rx) = mpsc::channel::<(String, String, bool, String, Duration)>(4);
+    // Lines a command prints are dropped when the screen is behind, and its end is waited
+    // for, so a command that prints without pause cannot fill memory.
+    let (hand_tx, mut hand_rx) = mpsc::channel::<Hand>(HAND_LINES_HELD);
     let mut hand_runs = 0usize;
 
     loop {
@@ -516,27 +518,30 @@ async fn run_ui(
 
             Some(power) = power_rx.recv() => state.note_power(power),
 
-            Some((id, command, is_error, body, took)) = hand_rx.recv() => {
-                state.hand = None;
-                state.background = None;
-                // Handed to the conversation as well: running a test and then asking about
-                // the failure only works if the failure is something the model has seen.
-                let _ = control_tx
-                    .send(crate::agent::agent_loop::Control::Note(format!(
-                        "I ran `{command}` myself. It said:\n{body}"
-                    )))
-                    .await;
-                state.settle_step(
-                    &id,
-                    "$".into(),
-                    Outcome {
-                        is_error,
-                        body,
-                        took,
-                        origin: crate::agent::agent_loop::Origin::Ran,
-                    },
-                );
-            }
+            Some(news) = hand_rx.recv() => match news {
+                Hand::Line(id, line) => state.print_line(Some(&id), "$", &line),
+                Hand::Done { id, command, is_error, body, took } => {
+                    state.hand.retain(|(running, _)| *running != id);
+                    // Handed to the conversation as well: running a test and then asking
+                    // about the failure only works if the failure is something the model
+                    // has seen.
+                    let _ = control_tx
+                        .send(crate::agent::agent_loop::Control::Note(format!(
+                            "I ran `{command}` myself. It said:\n{body}"
+                        )))
+                        .await;
+                    state.settle_step(
+                        &id,
+                        "$".into(),
+                        Outcome {
+                            is_error,
+                            body,
+                            took,
+                            origin: crate::agent::agent_loop::Origin::Ran,
+                        },
+                    );
+                }
+            },
 
             Some(printed) = live.recv() => {
                 // Kept as one entry that grows rather than a line each: a build's output
@@ -839,8 +844,20 @@ async fn run_ui(
                             && state.picker.is_none()
                             && state.choosing.is_none()
                             && state.sheet.is_none());
-                    if stops && !state.busy {
-                        if let Some((_, stop)) = state.hand.as_ref() {
+                    // The one pointed at, or else the latest, and only on an empty line:
+                    // a typed line is cleared first.
+                    if stops && !state.busy && input.is_empty() {
+                        let pointed = state.at_entry.and_then(|i| match state.entries.get(i) {
+                            Some(Entry::Step(step)) => Some(step.id.clone()),
+                            _ => None,
+                        });
+                        let stop = state
+                            .hand
+                            .iter()
+                            .find(|(id, _)| Some(id) == pointed.as_ref())
+                            .or(state.hand.last())
+                            .map(|(_, stop)| stop.clone());
+                        if let Some(stop) = stop {
                             stop.cancel();
                             continue;
                         }
@@ -1576,16 +1593,9 @@ async fn run_ui(
                                     if command.is_empty() {
                                         continue;
                                     }
-                                    // Run beside the interface, under a step of its own, so a
-                                    // long build neither freezes the screen nor can only be
-                                    // waited out: ctrl-c or esc stops it.
-                                    if state.hand.is_some() {
-                                        state.said = Some((
-                                            "a command of yours is still running".into(),
-                                            Instant::now(),
-                                        ));
-                                        continue;
-                                    }
+                                    // Run beside the interface, under a step of its own that
+                                    // shows what it prints, so a long build neither freezes the
+                                    // screen nor can only be waited out.
                                     hand_runs += 1;
                                     let id = format!("hand-{hand_runs}");
                                     state.entries.push(Entry::Step(Step {
@@ -1596,8 +1606,7 @@ async fn run_ui(
                                         ..Default::default()
                                     }));
                                     let stop = shutdown.child_token();
-                                    state.hand = Some((id.clone(), stop.clone()));
-                                    state.background = Some((format!("running {command}"), Instant::now()));
+                                    state.hand.push((id.clone(), stop.clone()));
                                     let root = cfg.root.clone();
                                     let cap = crate::agent::session::tool_output_chars(
                                         cfg.context_tokens,
@@ -1606,9 +1615,20 @@ async fn run_ui(
                                     let done = hand_tx.clone();
                                     tokio::spawn(async move {
                                         let started = Instant::now();
-                                        let (is_error, body) = run_shell(&command, &root, cap, stop).await;
+                                        let printed = done.clone();
+                                        let line_id = id.clone();
+                                        let (is_error, body) = run_shell(&command, &root, cap, stop, |line| {
+                                            let _ = printed.try_send(Hand::Line(line_id.clone(), line));
+                                        })
+                                        .await;
                                         let _ = done
-                                            .send((id, command, is_error, body, started.elapsed()))
+                                            .send(Hand::Done {
+                                                id,
+                                                command,
+                                                is_error,
+                                                body,
+                                                took: started.elapsed(),
+                                            })
                                             .await;
                                     });
                                     continue;
@@ -1837,6 +1857,23 @@ async fn run_ui(
             }
         }
     }
+}
+
+/// How many lines of the person's own commands wait for the screen before more are dropped.
+const HAND_LINES_HELD: usize = 256;
+
+/// What a command of the person's own sends while it runs.
+enum Hand {
+    /// A line it printed, by the id of its step.
+    Line(String, String),
+    /// What it came to.
+    Done {
+        id: String,
+        command: String,
+        is_error: bool,
+        body: String,
+        took: Duration,
+    },
 }
 
 /// Take the question at entry `at` back, with every turn after it, and give its text back.

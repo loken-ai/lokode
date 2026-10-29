@@ -22,6 +22,8 @@ pub struct Status {
     pub context_percent: u8,
     /// Whether the entry pointed at is a receipt whose turn changed files.
     pub on_receipt: bool,
+    /// Whether a command of the person's own is running.
+    pub hand_running: bool,
     /// What enter does to the entry pointed at, when it does anything.
     pub enter_does: Option<&'static str>,
     /// What is open over the rest, which owns the keys while it is.
@@ -315,15 +317,16 @@ impl Status {
             }
             spans.extend(key("/help", "more"));
         }
-        // What the key does here, which is not the same thing twice: a turn in flight is
-        // stopped, a line being typed is cleared, and only an empty line is offered the
-        // way out. A hint that said "quit" throughout was wrong two thirds of the time.
+        // What the key does here: a turn in flight is stopped, a line being typed is
+        // cleared, a command of the person's own is stopped, and only then is the way out
+        // offered.
         spans.extend(key(
             "ctrl-c",
-            match (self.busy, self.typing) {
-                (true, _) => "stop",
-                (false, true) => "clear",
-                (false, false) => "leave",
+            match (self.busy, self.typing, self.hand_running) {
+                (true, _, _) => "stop",
+                (false, true, _) => "clear",
+                (false, false, true) => "stop yours",
+                (false, false, false) => "leave",
             },
         ));
         Line::from(spans)
@@ -379,6 +382,7 @@ mod tests {
             on_receipt: false,
             open: None,
             enter_does: None,
+            hand_running: false,
             step: 2,
             max_steps: 16,
             busy,

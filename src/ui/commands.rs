@@ -127,36 +127,69 @@ pub(crate) async fn run_shell(
     root: &std::path::Path,
     cap: usize,
     stop: tokio_util::sync::CancellationToken,
+    lines: impl Fn(String),
 ) -> (bool, String) {
-    // Killed with the future when it is stopped, rather than left running unseen.
-    let run = tokio::process::Command::new("/bin/sh")
+    use tokio::io::AsyncBufReadExt;
+    // Killed when it is stopped or dropped, rather than left running unseen.
+    let child = tokio::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(command)
         .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
-        .output();
-    let done = tokio::select! {
-        _ = stop.cancelled() => return (true, "stopped before it finished".into()),
-        done = run => done,
-    };
-    let out = match done {
-        Ok(out) => out,
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
         Err(e) => return (true, format!("could not run it: {e}")),
     };
-    let mut body = String::from_utf8_lossy(&out.stdout).into_owned();
-    let errors = String::from_utf8_lossy(&out.stderr);
-    if !errors.trim().is_empty() {
-        if !body.is_empty() && !body.ends_with('\n') {
-            body.push('\n');
-        }
-        body.push_str(&errors);
-    }
-    if body.trim().is_empty() {
-        body = match out.status.success() {
-            true => "(said nothing)".into(),
-            false => format!("(said nothing, {})", out.status),
+    let mut out = child
+        .stdout
+        .take()
+        .map(|o| tokio::io::BufReader::new(o).lines());
+    let mut err = child
+        .stderr
+        .take()
+        .map(|e| tokio::io::BufReader::new(e).lines());
+    // Both streams in the order their lines arrive, as a terminal shows them.
+    let mut body = String::new();
+    while out.is_some() || err.is_some() {
+        let line = tokio::select! {
+            _ = stop.cancelled() => return (true, "stopped before it finished".into()),
+            line = async { out.as_mut()?.next_line().await.ok().flatten() }, if out.is_some() => {
+                if line.is_none() {
+                    out = None;
+                }
+                line
+            }
+            line = async { err.as_mut()?.next_line().await.ok().flatten() }, if err.is_some() => {
+                if line.is_none() {
+                    err = None;
+                }
+                line
+            }
         };
+        if let Some(line) = line {
+            if body.len() <= cap {
+                body.push_str(&line);
+                body.push('\n');
+            }
+            lines(line);
+        }
     }
+    let status = tokio::select! {
+        _ = stop.cancelled() => return (true, "stopped before it finished".into()),
+        status = child.wait() => status,
+    };
+    let ok = status.as_ref().is_ok_and(|s| s.success());
+    let body = body.trim_end().to_string();
+    let mut body = match (body.is_empty(), &status) {
+        (false, _) => body,
+        (true, _) if ok => "(said nothing)".into(),
+        (true, Ok(s)) => format!("(said nothing, {s})"),
+        (true, Err(e)) => format!("(said nothing, {e})"),
+    };
     if body.len() > cap {
         let cut = (0..=cap)
             .rev()
@@ -165,7 +198,7 @@ pub(crate) async fn run_shell(
         body.truncate(cut);
         body.push_str("\n… (truncated to fit the pane)");
     }
-    (!out.status.success(), body)
+    (!ok, body)
 }
 
 /// Put the conversation where a person can take it: on the terminal's clipboard, and in a
@@ -847,5 +880,44 @@ mod help_tests {
             let groups = GROUPS.iter().filter(|(_, n)| n.contains(&name)).count();
             assert_eq!(groups, 1, "/{name} is in {groups} groups");
         }
+    }
+}
+
+#[cfg(test)]
+mod shell_tests {
+    use super::*;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+    use tokio_util::sync::CancellationToken;
+
+    /// Each line reaches the screen as it is printed, from either stream, and the body and
+    /// the failure are what the command said and how it ended.
+    #[tokio::test]
+    async fn a_command_of_your_own_prints_as_it_goes() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let kept = seen.clone();
+        let (is_error, body) = run_shell(
+            "echo one; echo two >&2; exit 3",
+            Path::new("."),
+            4096,
+            CancellationToken::new(),
+            move |line| kept.lock().unwrap().push(line),
+        )
+        .await;
+        let mut seen = seen.lock().unwrap().clone();
+        seen.sort();
+        assert_eq!(seen, ["one", "two"]);
+        assert!(is_error);
+        assert!(body.contains("one") && body.contains("two"), "{body}");
+    }
+
+    /// A command stopped ends at once and says so.
+    #[tokio::test]
+    async fn a_command_of_your_own_stops_when_asked() {
+        let stop = CancellationToken::new();
+        stop.cancel();
+        let (is_error, body) = run_shell("sleep 30", Path::new("."), 4096, stop, |_| {}).await;
+        assert!(is_error);
+        assert_eq!(body, "stopped before it finished");
     }
 }
