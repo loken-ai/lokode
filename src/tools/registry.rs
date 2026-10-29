@@ -192,6 +192,7 @@ impl ToolCtx {
         // The configuration is read first, and its refusals answer on their own: a rule
         // written down so that something never happens must not be reachable by an
         // agreement given in a hurry at the modal.
+        let mut insist = false;
         match self.policy.verdict(
             &req.scope,
             &self.root,
@@ -206,17 +207,24 @@ impl ToolCtx {
                 tracing::info!(tool = %req.tool, scope = ?req.scope, "allowed by policy");
                 return Approval::Proceed;
             }
+            crate::sandbox::policy::Verdict::Insist(why) if !self.honour_allow => {
+                tracing::info!(tool = %req.tool, scope = ?req.scope, %why, "nobody to ask");
+                return Approval::Denied(Denial::Rule(format!(
+                    "{why}, and this run has nobody to ask"
+                )));
+            }
+            crate::sandbox::policy::Verdict::Insist(_) => insist = true,
             crate::sandbox::policy::Verdict::Allowed => {}
             crate::sandbox::policy::Verdict::Ask => {}
         }
         // A standing decision for writes, taken deliberately for a stretch of work. It
         // covers writes and nothing else: a command and a request leaving the machine stay
         // asked about, because those are the two a person most wants to see coming.
-        if self.session_approvals.writes_accepted(&req.scope) {
+        if !insist && self.session_approvals.writes_accepted(&req.scope) {
             tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by accepting writes");
             return Approval::Proceed;
         }
-        if self.session_approvals.is_always(&req.scope).await {
+        if !insist && self.session_approvals.is_always(&req.scope).await {
             tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by an earlier agreement");
             return Approval::Proceed;
         }

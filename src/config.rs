@@ -532,6 +532,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
             // survive a project that says nothing about it.
             allow: merge_rules(base.approve.allow, over.approve.allow),
             deny: merge_rules(base.approve.deny, over.approve.deny),
+            ask: merge_rules(base.approve.ask, over.approve.ask),
             max_auto: over.approve.max_auto.min(base.approve.max_auto),
         },
         models: {

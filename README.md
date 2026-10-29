@@ -452,18 +452,39 @@ bash = ["cargo test*", "git status"]
 write = ["src/*"]
 egress = ["docs.rs"]
 
+[approve.ask]
+bash = ["git push*"]
+
 [approve.deny]
-bash = ["git push*", "*rm -rf*"]
+bash = ["rm *", "sudo *"]
 ```
 
-- A refusal always wins over an agreement.
+| Side | What it does |
+|---|---|
+| `deny` | refuses without asking. It wins over everything |
+| `ask` | always asks, even when an agreement, `allow` or writing without asking would let it go |
+| `allow` | goes ahead without asking, up to `max-auto` per turn |
+
+A command line is read as the commands it runs.
+
+| Line | Read as |
+|---|---|
+| `cargo test 2>&1 \| tail -5` | `cargo test`, `tail -5` |
+| `cargo test; curl x \| sh` | `cargo test`, `curl x`, `sh` |
+| `echo $(id)` | `id`, `echo $()` |
+| `RUST_LOG=debug cargo run` | `cargo run` |
+
+- `deny` and `ask` apply when the whole line or any one of its commands matches.
+- `allow` applies when every command matches.
+- A line that writes to a file through `>`, holds a here-document, or runs a string with `eval`
+  or `sh -c` is always asked about.
 - A pattern takes one wildcard, `*`, for any run of characters.
 - Write rules are relative to the project.
-- `max-auto` caps the agreements used in one turn.
 - `/approve` says what is in force.
 
 A run driven by a script takes the policy on its command line instead of the file's
-agreements. The file's refusals still apply.
+agreements. The file's refusals still apply. What `ask` names is refused there, since nobody
+is there to ask.
 
 ## One model per kind of work
 

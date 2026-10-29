@@ -609,7 +609,7 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                         .collect::<Vec<_>>()
                         .join(" ")
                 ),
-                None => format!("{line}\n"),
+                None => format!("\n{line}\n"),
             });
         }
         out.push_str("\n## Agreed for this session\n\n");

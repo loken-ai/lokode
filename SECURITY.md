@@ -35,6 +35,11 @@ command, writes by this tool under this directory, requests to this host - so ag
 `ls` does not hand over the shell. A command is matched in full rather than by the program at
 the front of it, because `ls` and `ls; rm -rf ~` share a first word.
 
+**Rules read each command.** An `[approve]` rule is matched against each command of a line,
+substitutions included. An `allow` rule covers a line only when it covers every command and the
+line writes no file through a redirection. A `deny` rule names commands as written. A program
+run by another one, as with `xargs rm` or `find -exec rm`, is not seen by it.
+
 **Egress.** `web_fetch` accepts only `http(s)`, resolves the host rather than trusting the
 name, and refuses loopback, link-local (including the cloud metadata address), RFC1918, CGNAT
 and unique-local addresses. It follows redirects itself so the same check runs on every hop,

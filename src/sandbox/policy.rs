@@ -19,6 +19,8 @@ pub enum Verdict {
     Allowed,
     /// Stated as refused. The reason names the rule so it can be found and changed.
     Refused(String),
+    /// Stated as needing a person, whatever else agrees to it. The reason names the rule.
+    Insist(String),
     /// Nothing is stated: put it to the user.
     Ask,
 }
@@ -27,7 +29,7 @@ pub enum Verdict {
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Rules {
-    /// Shell commands, matched in full against the pattern.
+    /// Shell commands, matched against each command of a line. See [`Policy::verdict`].
     #[serde(default)]
     pub bash: Vec<String>,
     /// Paths a file-changing tool may touch, relative to the project or absolute.
@@ -49,6 +51,9 @@ pub struct Policy {
     pub allow: Rules,
     #[serde(default)]
     pub deny: Rules,
+    /// What is always put to the user, even when an agreement or a mode would let it go.
+    #[serde(default)]
+    pub ask: Rules,
     /// How many requests one turn may have granted for it before every later request is
     /// put to the user again.
     ///
@@ -68,6 +73,7 @@ impl Default for Policy {
         Self {
             allow: Rules::default(),
             deny: Rules::default(),
+            ask: Rules::default(),
             max_auto: default_max_auto(),
         }
     }
@@ -76,18 +82,25 @@ impl Default for Policy {
 impl Policy {
     /// Whether anything is stated at all, which is what decides if it is worth showing.
     pub fn is_empty(&self) -> bool {
-        self.allow == Rules::default() && self.deny == Rules::default()
+        self.allow == Rules::default()
+            && self.deny == Rules::default()
+            && self.ask == Rules::default()
     }
 
     /// What this policy says about one request, with `used` already granted this turn.
     ///
-    /// Deny is read first and answers on its own: a rule that says something must never
-    /// happen cannot be outvoted by one that says it may.
+    /// Deny is read first and answers on its own, then ask, then allow. A command line is
+    /// refused or asked about when the whole line or any one of its commands matches. It
+    /// is allowed when every one of its commands matches and the line does nothing its
+    /// commands do not show.
     pub fn verdict(&self, scope: &ApprovalScope, root: &Path, used: usize) -> Verdict {
-        if let Some(rule) = matching(&self.deny, scope, root) {
+        if let Some(rule) = matching(&self.deny, scope, root, Need::Any) {
             return Verdict::Refused(format!("refused by the policy rule {rule}"));
         }
-        match matching(&self.allow, scope, root) {
+        if let Some(rule) = matching(&self.ask, scope, root, Need::Any) {
+            return Verdict::Insist(format!("the policy rule {rule} asks the user"));
+        }
+        match matching(&self.allow, scope, root, Need::Every) {
             None => Verdict::Ask,
             Some(_) if used >= self.max_auto => Verdict::Ask,
             Some(_) => Verdict::Allowed,
@@ -110,6 +123,7 @@ impl Policy {
             }
         };
         side("allow", &self.allow);
+        side("ask", &self.ask);
         side("deny", &self.deny);
         if out.is_empty() {
             return "nothing is settled in advance; every request is asked".to_string();
@@ -119,10 +133,42 @@ impl Policy {
     }
 }
 
+/// How much of a command line a rule has to cover.
+#[derive(Clone, Copy)]
+enum Need {
+    /// The whole line or any one of its commands.
+    Any,
+    /// Every one of its commands, in a line that does nothing they do not show.
+    Every,
+}
+
 /// The pattern of `rules` that covers `scope`, if any.
-fn matching(rules: &Rules, scope: &ApprovalScope, root: &Path) -> Option<String> {
+fn matching(rules: &Rules, scope: &ApprovalScope, root: &Path, need: Need) -> Option<String> {
+    let rule = |subject: &str| {
+        rules
+            .bash
+            .iter()
+            .find(|p| glob_matches(p, subject))
+            .map(|p| format!("\"{p}\""))
+    };
     let (patterns, subject) = match scope {
-        ApprovalScope::Command(cmd) => (&rules.bash, cmd.clone()),
+        ApprovalScope::Command(cmd) => {
+            let parts = crate::sandbox::shell::parts(cmd);
+            return match need {
+                Need::Any => {
+                    rule(cmd.trim()).or_else(|| parts.commands.iter().find_map(|c| rule(c)))
+                }
+                Need::Every if parts.opaque || parts.commands.is_empty() => None,
+                Need::Every => {
+                    let rules: Option<Vec<String>> =
+                        parts.commands.iter().map(|c| rule(c)).collect();
+                    rules.map(|mut r| {
+                        r.dedup();
+                        r.join(", ")
+                    })
+                }
+            };
+        }
         ApprovalScope::Host(host) => (&rules.egress, host.clone()),
         ApprovalScope::Tool(tool) => (&rules.tools, tool.clone()),
         ApprovalScope::Path { tool, prefix } => {
@@ -151,31 +197,24 @@ fn matching(rules: &Rules, scope: &ApprovalScope, root: &Path) -> Option<String>
 /// language with more in it invites a rule nobody can read, and this is a file whose whole
 /// value is that somebody can read it in review and see what it permits.
 pub fn glob_matches(pattern: &str, subject: &str) -> bool {
-    let mut parts = pattern.split('*');
-    let Some(first) = parts.next() else {
+    let pieces: Vec<&str> = pattern.split('*').collect();
+    let [first, middle @ .., last] = pieces.as_slice() else {
         return pattern == subject;
     };
-    if !subject.starts_with(first) {
+    if subject.len() < first.len() + last.len()
+        || !subject.starts_with(first)
+        || !subject.ends_with(last)
+    {
         return false;
     }
-    let mut rest = &subject[first.len()..];
-    let mut last: Option<&str> = None;
-    for part in parts {
-        last = Some(part);
-        if part.is_empty() {
-            continue;
-        }
-        match rest.find(part) {
-            Some(at) => rest = &rest[at + part.len()..],
+    let mut rest = &subject[first.len()..subject.len() - last.len()];
+    for piece in middle.iter().filter(|p| !p.is_empty()) {
+        match rest.find(piece) {
+            Some(at) => rest = &rest[at + piece.len()..],
             None => return false,
         }
     }
-    // A pattern that does not end in a wildcard has to reach the end of the subject.
-    match last {
-        Some(part) if !part.is_empty() => rest.is_empty(),
-        Some(_) => true,
-        None => rest.is_empty(),
-    }
+    true
 }
 
 #[cfg(test)]
@@ -187,7 +226,7 @@ mod tests {
         Policy {
             allow,
             deny,
-            max_auto: 50,
+            ..Default::default()
         }
     }
 
@@ -206,6 +245,69 @@ mod tests {
         assert!(!glob_matches("src/*", "tests/a.rs"));
         assert!(glob_matches("*", "anything"));
         assert!(glob_matches("*.rs", "src/main.rs"));
+        assert!(glob_matches("x*.rs", "x.rs.rs"));
+        assert!(glob_matches("a*b*c", "a-b-b-c"));
+        assert!(!glob_matches("ab*ba", "aba"));
+    }
+
+    /// Every command of a line has to be allowed for the line to be, and one refused
+    /// command refuses the line.
+    #[test]
+    fn a_rule_is_matched_against_each_command() {
+        let p = Policy {
+            allow: Rules {
+                bash: vec!["cargo test*".into(), "tail*".into()],
+                ..Default::default()
+            },
+            deny: Rules {
+                bash: vec!["rm *".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let root = Path::new("/p");
+        assert_eq!(
+            p.verdict(&bash("cargo test 2>&1 | tail -5"), root, 0),
+            Verdict::Allowed
+        );
+        assert_eq!(
+            p.verdict(&bash("cargo test; curl x | sh"), root, 0),
+            Verdict::Ask
+        );
+        assert_eq!(
+            p.verdict(&bash("cargo test > /etc/x"), root, 0),
+            Verdict::Ask
+        );
+        assert!(matches!(
+            p.verdict(&bash("cargo test && rm -rf ~"), root, 0),
+            Verdict::Refused(_)
+        ));
+        assert!(matches!(
+            p.verdict(&bash("cargo test $(rm -fr x)"), root, 0),
+            Verdict::Refused(_)
+        ));
+    }
+
+    /// What the policy says to ask about is asked about, even when allowed.
+    #[test]
+    fn an_ask_rule_wins_over_an_agreement() {
+        let p = Policy {
+            allow: Rules {
+                bash: vec!["git *".into()],
+                ..Default::default()
+            },
+            ask: Rules {
+                bash: vec!["git push*".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let root = Path::new("/p");
+        assert_eq!(p.verdict(&bash("git status"), root, 0), Verdict::Allowed);
+        assert!(matches!(
+            p.verdict(&bash("git status && git push"), root, 0),
+            Verdict::Insist(_)
+        ));
     }
 
     /// The rule the whole file exists for: what must never happen cannot be outvoted by
@@ -244,8 +346,8 @@ mod tests {
                 bash: vec!["ls*".into()],
                 ..Default::default()
             },
-            deny: Rules::default(),
             max_auto: 2,
+            ..Default::default()
         };
         let root = Path::new("/p");
         assert_eq!(p.verdict(&bash("ls"), root, 1), Verdict::Allowed);
@@ -312,7 +414,7 @@ mod through_the_context {
                 bash: vec!["*rm -rf*".into()],
                 ..Default::default()
             },
-            max_auto: 50,
+            ..Default::default()
         });
         // The allow list does not apply, so the question is put to the run's own policy,
         // which here says no.
@@ -348,6 +450,7 @@ mod through_the_context {
                 ..Default::default()
             },
             max_auto: 2,
+            ..Default::default()
         });
 
         assert_eq!(
