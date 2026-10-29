@@ -186,9 +186,9 @@ enum Command {
 
 #[derive(clap::Subcommand, Debug, Clone)]
 enum PluginAction {
-    /// Install a plugin from a git repository.
+    /// Install a plugin from a git repository, or one a marketplace lists.
     Install {
-        /// Where to clone it from.
+        /// A git url or path to clone, or a listed plugin as name or name@marketplace.
         source: String,
         /// The name to install it under. The end of the source when not given.
         #[arg(long)]
@@ -197,7 +197,7 @@ enum PluginAction {
         #[arg(long)]
         yes: bool,
     },
-    /// Bring plugins up to their source: those named, or every one installed from git.
+    /// Bring plugins up to their source: those named, or every one that has a source.
     Update {
         names: Vec<String>,
         /// Take an update without asking, even when it runs new programs.
@@ -207,6 +207,30 @@ enum PluginAction {
     /// Take a plugin out.
     Remove { name: String },
     /// List the plugins installed.
+    List,
+    /// List what the marketplaces offer, those whose name or description holds `term`.
+    Search { term: Option<String> },
+    /// Add, update, remove or list marketplaces.
+    Marketplace {
+        #[command(subcommand)]
+        action: MarketAction,
+    },
+}
+
+#[derive(clap::Subcommand, Debug, Clone)]
+enum MarketAction {
+    /// Add the marketplace kept in a git repository.
+    Add {
+        url: String,
+        /// The name to add it under. The end of the url when not given.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Bring marketplaces up to their source: those named, or all of them.
+    Update { names: Vec<String> },
+    /// Take a marketplace out. The plugins installed from it stay.
+    Remove { name: String },
+    /// List the marketplaces added.
     List,
 }
 
@@ -497,17 +521,41 @@ fn acp_command(cli: Cli, port: Option<u16>) -> Result<()> {
 
 /// Install, update, remove or list plugins, saying what was done.
 fn plugin_command(action: PluginAction) -> Result<()> {
-    use lokode::plugins;
+    use lokode::{marketplace, plugins};
     let home = plugins::home().context("there is no configuration directory")?;
     std::fs::create_dir_all(&home)?;
     match action {
         PluginAction::Install { source, name, yes } => {
-            let name = name
-                .or_else(|| plugins::name_for(&source))
-                .context("no name can be read off the source: give one with --name")?;
-            match plugins::install(&home, &source, &name, |p| {
-                agree_plugin(p, yes, "Install it?")
-            })? {
+            let agree = |p: &plugins::Plugin| agree_plugin(p, yes, "Install it?");
+            // A url or a path is cloned; anything else is a name a marketplace lists.
+            let cloned = source.contains("://")
+                || source.starts_with("git@")
+                || source.contains('/')
+                || source.ends_with(".git");
+            let installed = match cloned {
+                true => {
+                    let name = name
+                        .clone()
+                        .or_else(|| plugins::name_for(&source))
+                        .context("no name can be read off the source: give one with --name")?;
+                    plugins::install(&home, &source, &name, agree)?
+                }
+                false => {
+                    let markets = load_markets()?;
+                    let listing = marketplace::find(&markets, &source)?;
+                    let name = name.clone().unwrap_or_else(|| listing.name.clone());
+                    match &listing.source {
+                        marketplace::Source::Git(url) => {
+                            plugins::install(&home, url, &name, agree)?
+                        }
+                        marketplace::Source::Dir(dir) => {
+                            plugins::install_dir(&home, dir, &listing.market, &name, agree)?
+                        }
+                    }
+                }
+            };
+            let name = name.unwrap_or(source);
+            match installed {
                 Some(p) => println!(
                     "installed {} in {}: {}",
                     p.name,
@@ -523,17 +571,47 @@ fn plugin_command(action: PluginAction) -> Result<()> {
                 true => plugins::load_from(&home, &[])
                     .0
                     .into_iter()
-                    .filter(|p| p.dir.join(".git").exists())
+                    .filter(|p| {
+                        p.dir.join(".git").exists() || plugins::market_of(&home, &p.name).is_some()
+                    })
                     .map(|p| p.name)
                     .collect(),
             };
             if names.is_empty() {
-                println!("no plugin was installed from git");
+                println!("no plugin has a source to update it from");
             }
+            // Each marketplace a plugin came from is brought up to date once, first.
+            let market_home = marketplace::home().context("there is no configuration directory")?;
+            let mut refreshed = std::collections::BTreeMap::new();
             for name in names {
-                match plugins::update(&home, &name, |p| {
+                let agree = |p: &plugins::Plugin| {
                     agree_plugin(p, yes, "It runs something new. Take the update?")
-                }) {
+                };
+                let said = match plugins::market_of(&home, &name) {
+                    None => plugins::update(&home, &name, agree),
+                    Some(market) => {
+                        let fresh = refreshed
+                            .entry(market.clone())
+                            .or_insert_with(|| marketplace::update(&market_home, &market));
+                        match fresh {
+                            Err(e) => Err(anyhow::anyhow!("the marketplace {market}: {e:#}")),
+                            Ok(m) => match marketplace::find(
+                                std::slice::from_ref(m),
+                                &format!("{name}@{market}"),
+                            ) {
+                                Ok(marketplace::Listing {
+                                    source: marketplace::Source::Dir(dir),
+                                    ..
+                                }) => plugins::update_from_dir(&home, &dir, &name, agree),
+                                Ok(_) => Err(anyhow::anyhow!(
+                                    "{market} now lists {name} from git: remove it and install it again"
+                                )),
+                                Err(e) => Err(e),
+                            },
+                        }
+                    }
+                };
+                match said {
                     Ok(said) => println!("{said}"),
                     Err(e) => eprintln!("{name}: {e:#}"),
                 }
@@ -565,8 +643,86 @@ fn plugin_command(action: PluginAction) -> Result<()> {
                 eprintln!("{w}");
             }
         }
+        PluginAction::Search { term } => {
+            let markets = load_markets()?;
+            if markets.is_empty() {
+                println!("no marketplace is added: lokode plugin marketplace add <git url>");
+            }
+            let term = term.unwrap_or_default().to_lowercase();
+            for l in markets.iter().flat_map(|m| &m.listings) {
+                let text = format!("{} {}", l.name, l.description).to_lowercase();
+                if !text.contains(&term) {
+                    continue;
+                }
+                let installed = home.join(&l.name).join("plugin.toml").is_file();
+                println!(
+                    "{}@{}{}{}  {}",
+                    l.name,
+                    l.market,
+                    l.version
+                        .as_deref()
+                        .map(|v| format!(" {v}"))
+                        .unwrap_or_default(),
+                    if installed { " (installed)" } else { "" },
+                    l.description
+                );
+            }
+        }
+        PluginAction::Marketplace { action } => {
+            let market_home = marketplace::home().context("there is no configuration directory")?;
+            match action {
+                MarketAction::Add { url, name } => {
+                    let m = marketplace::add(&market_home, &url, name.as_deref())?;
+                    println!(
+                        "added the marketplace {}: {} plugin(s). lokode plugin search lists them",
+                        m.name,
+                        m.listings.len()
+                    );
+                }
+                MarketAction::Update { names } => {
+                    let names = match names.is_empty() {
+                        false => names,
+                        true => load_markets()?.into_iter().map(|m| m.name).collect(),
+                    };
+                    for name in names {
+                        match marketplace::update(&market_home, &name) {
+                            Ok(m) => println!("{name}: {} plugin(s)", m.listings.len()),
+                            Err(e) => eprintln!("{name}: {e:#}"),
+                        }
+                    }
+                }
+                MarketAction::Remove { name } => {
+                    marketplace::remove(&market_home, &name)?;
+                    println!("removed the marketplace {name}; its plugins stay installed");
+                }
+                MarketAction::List => {
+                    let markets = load_markets()?;
+                    if markets.is_empty() {
+                        println!("no marketplace is added");
+                    }
+                    for m in markets {
+                        println!(
+                            "{}  {}  {} plugin(s)",
+                            m.name,
+                            m.description,
+                            m.listings.len()
+                        );
+                    }
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// The marketplaces added, with a word on any that could not be read.
+fn load_markets() -> Result<Vec<lokode::marketplace::Market>> {
+    let home = lokode::marketplace::home().context("there is no configuration directory")?;
+    let (markets, warnings) = lokode::marketplace::load(&home);
+    for w in warnings {
+        eprintln!("{w}");
+    }
+    Ok(markets)
 }
 
 fn brought(p: &lokode::plugins::Plugin) -> String {

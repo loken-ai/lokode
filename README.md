@@ -810,6 +810,33 @@ A plugin kept in git is installed and kept up to date from the command line:
 A plugin whose hooks or servers run programs shows them and asks before it is installed. An
 update that changes what runs asks again. `--yes` takes it without asking, which a script needs.
 
+A marketplace is a git repository that lists plugins in a `marketplace.toml`:
+
+```toml
+description = "the team's plugins"
+
+[[plugins]]
+name = "release"
+description = "the release routine"
+source = "https://example.com/team/lokode-release.git"   # a git url
+
+[[plugins]]
+name = "fmt"
+source = "plugins/fmt"                                    # or a directory of the marketplace
+```
+
+| Command | What it does |
+|---|---|
+| `lokode plugin marketplace add <git url>` | Adds it under the end of the url, or under `--name` |
+| `lokode plugin search [term]` | Lists what the marketplaces offer, and what is installed |
+| `lokode plugin install release` | Installs a plugin one marketplace alone lists |
+| `lokode plugin install release@team` | Installs it from that marketplace |
+| `lokode plugin marketplace update [name...]` | Brings marketplaces up to their source |
+| `lokode plugin marketplace remove <name>` | Takes one out. Its plugins stay installed |
+
+`lokode plugin update` brings a plugin copied from a marketplace up to it, after updating the
+marketplace.
+
 ## Tools from elsewhere
 
 A Model Context Protocol server you configure adds its tools, named `<server>__<tool>`.

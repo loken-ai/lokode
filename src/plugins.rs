@@ -219,7 +219,7 @@ pub fn name_for(source: &str) -> Option<String> {
 }
 
 /// Run git in `dir` with `args`, and say what it printed when it fails.
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = std::process::Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -257,6 +257,43 @@ pub fn install(
     name: &str,
     agree: impl FnOnce(&Plugin) -> bool,
 ) -> Result<Option<Plugin>> {
+    land(home, name, agree, |fetching| {
+        git(
+            fetching,
+            &["clone", "--quiet", "--depth", "1", "--", source, name],
+        )
+        .map(|_| ())
+    })
+}
+
+/// The file a plugin copied from a marketplace keeps its marketplace in.
+pub const FROM_MARKET: &str = ".marketplace";
+
+/// Install the plugin in the marketplace directory `dir` under `home`, named `name`, as
+/// `install` does from git. It keeps the name of `market`, to be updated from it.
+pub fn install_dir(
+    home: &Path,
+    dir: &Path,
+    market: &str,
+    name: &str,
+    agree: impl FnOnce(&Plugin) -> bool,
+) -> Result<Option<Plugin>> {
+    land(home, name, agree, |fetching| {
+        let landing = fetching.join(name);
+        copy_tree(dir, &landing)?;
+        std::fs::write(landing.join(FROM_MARKET), market)?;
+        Ok(())
+    })
+}
+
+/// Fetch a plugin into the fetching directory with `fetch`, show it to `agree`, and put it
+/// in place under `home` as `name` when agreed to.
+fn land(
+    home: &Path,
+    name: &str,
+    agree: impl FnOnce(&Plugin) -> bool,
+    fetch: impl FnOnce(&Path) -> Result<()>,
+) -> Result<Option<Plugin>> {
     if !crate::frontmatter::is_name(name) {
         bail!("a plugin is named with letters, digits, - and _ only, and {name} is not");
     }
@@ -273,11 +310,7 @@ pub fn install(
     if landing.exists() {
         std::fs::remove_dir_all(&landing)?;
     }
-    let fetched = git(
-        &fetching,
-        &["clone", "--quiet", "--depth", "1", "--", source, name],
-    )
-    .and_then(|_| read_plugin(&landing, name));
+    let fetched = fetch(&fetching).and_then(|_| read_plugin(&landing, name));
     let plugin = match fetched {
         Ok(p) => p,
         Err(e) => {
@@ -292,6 +325,91 @@ pub fn install(
     std::fs::rename(&landing, &target)?;
     let _ = std::fs::remove_dir(&fetching);
     read_plugin(&target, name).map(Some)
+}
+
+/// Copy the tree at `from` to `to`, leaving out git's directory and every link.
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if entry.file_name() == ".git" || kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// The marketplace the installed plugin `name` was copied from, when it was.
+pub fn market_of(home: &Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(home.join(name).join(FROM_MARKET))
+        .ok()
+        .map(|m| m.trim().to_string())
+}
+
+/// Bring the plugin `name` under `home` to what the marketplace directory `dir` holds now,
+/// asking `agree` as `update` does. Says what changed.
+pub fn update_from_dir(
+    home: &Path,
+    dir: &Path,
+    name: &str,
+    agree: impl FnOnce(&Plugin) -> bool,
+) -> Result<String> {
+    let installed = home.join(name);
+    let before = read_plugin(&installed, name)?;
+    let market = market_of(home, name).unwrap_or_default();
+    let fetching = home.join(FETCHING);
+    let landing = fetching.join(name);
+    if landing.exists() {
+        std::fs::remove_dir_all(&landing)?;
+    }
+    copy_tree(dir, &landing)?;
+    std::fs::write(landing.join(FROM_MARKET), &market)?;
+    let after = read_plugin(&landing, name)?;
+    if same_tree(&installed, &landing) {
+        std::fs::remove_dir_all(&landing)?;
+        let _ = std::fs::remove_dir(&fetching);
+        return Ok(format!("{name} is up to date"));
+    }
+    if after.file.runs() != before.file.runs() && !agree(&after) {
+        std::fs::remove_dir_all(&landing)?;
+        let _ = std::fs::remove_dir(&fetching);
+        return Ok(format!("{name} left as it was"));
+    }
+    std::fs::remove_dir_all(&installed)?;
+    std::fs::rename(&landing, &installed)?;
+    let _ = std::fs::remove_dir(&fetching);
+    Ok(format!("{name} updated from {market}"))
+}
+
+/// Whether the trees at `a` and `b` hold the same files with the same contents.
+fn same_tree(a: &Path, b: &Path) -> bool {
+    fn files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if let Ok(bytes) = std::fs::read(&path) {
+                    out.push((
+                        path.strip_prefix(root).unwrap_or(&path).to_path_buf(),
+                        bytes,
+                    ));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+    files(a) == files(b)
 }
 
 /// Bring the installed plugin `name` under `home` up to its source. `agree` is shown the
@@ -455,5 +573,39 @@ mod tests {
         remove(&home, "fmt").unwrap();
         assert!(!home.join("fmt").exists());
         assert!(remove(&home, "fmt").is_err());
+    }
+
+    /// A plugin copied from a marketplace remembers it, and an update copies it again,
+    /// asking when what it runs changes.
+    #[test]
+    fn a_plugin_is_copied_from_a_marketplace() {
+        let dir = tempfile::tempdir().unwrap();
+        let listed = dir.path().join("market/plugins/notes");
+        let home = dir.path().join("plugins");
+        std::fs::create_dir_all(listed.join("commands")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(listed.join("plugin.toml"), "description = \"one\"\n").unwrap();
+        std::fs::write(listed.join("commands/note.md"), "write a note").unwrap();
+        let p = install_dir(&home, &listed, "team", "notes", |_| true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.brings(), ["1 command"]);
+        assert_eq!(market_of(&home, "notes").as_deref(), Some("team"));
+        assert!(update_from_dir(&home, &listed, "notes", |_| true)
+            .unwrap()
+            .contains("up to date"));
+        std::fs::write(
+            listed.join("plugin.toml"),
+            "description = \"two\"\n[hooks]\nprompt = \"echo\"\n",
+        )
+        .unwrap();
+        assert!(update_from_dir(&home, &listed, "notes", |_| false)
+            .unwrap()
+            .contains("left as it was"));
+        assert!(update_from_dir(&home, &listed, "notes", |_| true)
+            .unwrap()
+            .contains("updated from team"));
+        let (loaded, _) = load_from(&home, &[]);
+        assert_eq!(loaded[0].file.description, "two");
     }
 }

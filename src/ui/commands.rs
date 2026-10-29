@@ -785,7 +785,8 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         }
         out.push_str(
             "\nA plugin is a directory with a `plugin.toml` in `~/.config/lokode/plugins/`, \
-             installed with `lokode plugin install <git url>`. `[plugins] disabled` turns one \
+             installed with `lokode plugin install <git url or name>`, the name one a marketplace lists. \
+             `[plugins] disabled` turns one \
              off. A change is taken at the next session.\n",
         );
         return Ran::Said(out);

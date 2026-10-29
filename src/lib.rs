@@ -47,6 +47,7 @@ pub mod config;
 pub mod frontmatter;
 pub mod headless;
 pub mod lsp;
+pub mod marketplace;
 pub mod mcp;
 pub mod paths;
 pub mod plugins;
