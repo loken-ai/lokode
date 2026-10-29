@@ -452,12 +452,14 @@ mod tests {
                 took: std::time::Duration::from_secs(12),
                 entry: Some(3),
                 doing: Some("read_file  src/config.rs".into()),
+                stoppable: true,
             },
             crate::ui::state::Job {
                 what: "$  cargo build".into(),
                 took: std::time::Duration::from_secs(75),
                 entry: Some(5),
                 doing: None,
+                stoppable: true,
             },
         ];
         let rail = Rail {

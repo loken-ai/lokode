@@ -278,6 +278,7 @@ pub(crate) fn draw(
             .background
             .as_ref()
             .map(|(what, since)| (what.clone(), since.elapsed())),
+        pointed_stoppable: state.pointed_stop().is_some(),
         finding: state
             .finding
             .as_ref()

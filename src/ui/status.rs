@@ -22,6 +22,8 @@ pub struct Status {
     pub context_percent: u8,
     /// Whether the entry pointed at is a receipt whose turn changed files.
     pub on_receipt: bool,
+    /// Whether the step pointed at is running and can be stopped alone.
+    pub pointed_stoppable: bool,
     /// Whether a command of the person's own is running.
     pub hand_running: bool,
     /// What enter does to the entry pointed at, when it does anything.
@@ -322,11 +324,17 @@ impl Status {
         // offered.
         spans.extend(key(
             "ctrl-c",
-            match (self.busy, self.typing, self.hand_running) {
-                (true, _, _) => "stop",
-                (false, true, _) => "clear",
-                (false, false, true) => "stop yours",
-                (false, false, false) => "leave",
+            match (
+                self.pointed_stoppable,
+                self.busy,
+                self.typing,
+                self.hand_running,
+            ) {
+                (true, _, _, _) => "stop this",
+                (false, true, _, _) => "stop",
+                (false, false, true, _) => "clear",
+                (false, false, false, true) => "stop yours",
+                (false, false, false, false) => "leave",
             },
         ));
         Line::from(spans)
@@ -383,6 +391,7 @@ mod tests {
             open: None,
             enter_does: None,
             hand_running: false,
+            pointed_stoppable: false,
             step: 2,
             max_steps: 16,
             busy,

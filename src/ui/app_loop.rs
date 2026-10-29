@@ -552,6 +552,11 @@ async fn run_ui(
                     crate::tools::registry::Live::Sub(sub) => {
                         state.apply_sub(printed.call.as_deref(), sub)
                     }
+                    crate::tools::registry::Live::Stop(stop) => {
+                        if let Some(id) = printed.call {
+                            state.stops.insert(id, stop);
+                        }
+                    }
                 }
             }
 
@@ -633,6 +638,9 @@ async fn run_ui(
                         // changed and the agent is free to answer.
                         refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                         state.busy = false;
+                        // The turn's calls are over, the ones made inside a delegated
+                        // session too.
+                        state.stops.clear();
                         state.step = 0;
                         state.phase = None;
                         state.prefill = None;
@@ -839,8 +847,17 @@ async fn run_ui(
                     // leave - and then only when asked twice. It used to end the session
                     // outright, in the middle of a turn, with a change history nobody had
                     // looked at yet.
+                    // The step pointed at, running, is what ctrl-c stops first, alone, the
+                    // turn going on without it.
+                    if matches!(quit_intent(&key), Some(crate::ui::input::Quit::Ask)) {
+                        if let Some(stop) = state.pointed_stop() {
+                            stop.cancel();
+                            state.said = Some(("stopping it".into(), Instant::now()));
+                            continue;
+                        }
+                    }
                     // A command of the person's own, running, is what ctrl-c and esc stop
-                    // first.
+                    // next.
                     let stops = matches!(quit_intent(&key), Some(crate::ui::input::Quit::Ask))
                         || (key.code == KeyCode::Esc
                             && state.picker.is_none()

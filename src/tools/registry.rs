@@ -249,6 +249,11 @@ impl ToolCtx {
         self.tell(tool, Live::Sub(sub)).await;
     }
 
+    /// Hand the screen what stops this call alone, leaving the rest of the turn running.
+    pub async fn offer_stop(&self, tool: &str) {
+        self.tell(tool, Live::Stop(self.cancel.clone())).await;
+    }
+
     async fn tell(&self, tool: &str, what: Live) {
         if let Some(live) = &self.live {
             let _ = live
@@ -319,6 +324,8 @@ pub enum Live {
     Printed(Arc<Tail>),
     /// A session the call runs did something.
     Sub(SubEvent),
+    /// What stops this call alone.
+    Stop(CancellationToken),
 }
 
 /// What a session run by a call did: a step asked for, a step settled, its answer.

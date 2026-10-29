@@ -56,6 +56,8 @@ pub(crate) struct Job {
     pub entry: Option<usize>,
     /// The call a delegated session is on.
     pub doing: Option<String>,
+    /// Whether it can be stopped alone.
+    pub stoppable: bool,
 }
 
 /// What a click lands on.
@@ -120,6 +122,8 @@ pub(crate) struct UiState {
     pub(crate) draft: Option<String>,
     /// What is being done for this session outside any turn, and since when.
     pub(crate) background: Option<(String, Instant)>,
+    /// What stops each call of the turn alone, by the id of its call.
+    pub(crate) stops: std::collections::HashMap<String, tokio_util::sync::CancellationToken>,
     /// Whether the mouse belongs to this program or to the terminal.
     ///
     /// Taking it buys the wheel and a selection that can scroll past the edge of the
@@ -483,6 +487,7 @@ impl UiState {
                         .rev()
                         .find(|c| c.outcome.is_none())
                         .map(|c| format!("{}  {}", c.name, c.subject)),
+                    stoppable: self.stop_for(&step.id).is_some(),
                 }),
                 _ => None,
             })
@@ -493,9 +498,28 @@ impl UiState {
                 took: since.elapsed(),
                 entry: None,
                 doing: None,
+                stoppable: false,
             });
         }
         out
+    }
+
+    /// What stops the call whose step has the id `id`, while it runs.
+    pub(crate) fn stop_for(&self, id: &str) -> Option<tokio_util::sync::CancellationToken> {
+        self.stops.get(id).cloned().or_else(|| {
+            self.hand
+                .iter()
+                .find(|(running, _)| running == id)
+                .map(|(_, stop)| stop.clone())
+        })
+    }
+
+    /// What stops the step pointed at, when it is running and can be stopped.
+    pub(crate) fn pointed_stop(&self) -> Option<tokio_util::sync::CancellationToken> {
+        match self.at_entry.and_then(|i| self.entries.get(i)) {
+            Some(Entry::Step(step)) if step.outcome.is_none() => self.stop_for(&step.id),
+            _ => None,
+        }
     }
 
     /// Show the entry at `i` whole if it was counted, or counted if it was whole.
@@ -544,6 +568,7 @@ impl UiState {
     /// What it printed while it ran goes: the result holds the whole of it. A result whose
     /// call is not on screen gets a step of its own.
     pub(crate) fn settle_step(&mut self, id: &str, name: String, outcome: Outcome) {
+        self.stops.remove(id);
         let at = self
             .entries
             .iter()

@@ -212,8 +212,8 @@ still caps it where it is stated.
 | drag with the mouse | select here; dragging past an edge scrolls |
 | `Shift` + drag | select in the terminal itself, for its own copy key |
 | `Ctrl-T` | hand the mouse to the terminal, or take it back |
-| `Ctrl-C` | stop the turn, clear the line, or leave - twice, on an empty line |
-| `Ctrl-D`, `Ctrl-Q` | leave from an empty line; leave at once |
+| `Ctrl-C` | stop the step you point at alone, stop the turn or a command of yours, clear the line, or leave when pressed twice on an empty line |
+| `Ctrl-D`, `Ctrl-Q` | leave, and ask first when a turn, an answer or a typed line would be lost |
 
 The window's title says whether the session is working or waiting for you. Ghostty, WezTerm,
 Windows Terminal and iTerm2 from 3.6 also show it as progress in the tab. When the terminal is

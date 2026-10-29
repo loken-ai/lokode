@@ -2842,9 +2842,10 @@ impl Agent {
 
     async fn dispatch_tool(&self, id: &str, name: &str, args: Value) -> ToolOutput {
         // The call's own context: what it prints carries the id of its step and fills a
-        // tail of its own.
+        // tail of its own, and it can be stopped alone, the turn going on without it.
         let ctx = crate::tools::registry::ToolCtx {
             call: Some(id.to_string()),
+            cancel: self.ctx.cancel.child_token(),
             tail: Default::default(),
             ..self.ctx.clone()
         };
@@ -2883,10 +2884,14 @@ impl Agent {
             }
         }
         let started = std::time::Instant::now();
+        ctx.offer_stop(name).await;
         let out = match tool.run(&ctx, args).await {
             Ok(o) => o,
             Err(e) => ToolOutput::err(format!("tool '{name}' failed: {e:#}")),
         };
+        if ctx.cancel.is_cancelled() && !self.ctx.cancel.is_cancelled() {
+            return ToolOutput::err("the person stopped this call before it finished");
+        }
         // What the compiler already knows about the file that was just written, handed
         // back in the same result. Without it the model learns of its own syntax error on
         // the next turn, if it thinks to ask, and usually it does not.
@@ -3221,6 +3226,63 @@ mod tests {
 
     /// A file named in the question arrives with it, so the model does not spend a round
     /// trip fetching what the person had already decided was relevant.
+    /// A call stopped from the screen ends alone: it says the person stopped it, and the
+    /// turn it belongs to is not abandoned.
+    #[tokio::test]
+    async fn a_call_stops_alone() {
+        struct Waits;
+        #[async_trait::async_trait]
+        impl crate::tools::registry::Tool for Waits {
+            fn name(&self) -> &str {
+                "waits"
+            }
+            fn description(&self) -> &str {
+                "waits until it is stopped"
+            }
+            fn args_schema(&self) -> Value {
+                serde_json::json!({"type": "object"})
+            }
+            async fn run(
+                &self,
+                ctx: &crate::tools::registry::ToolCtx,
+                _: Value,
+            ) -> anyhow::Result<ToolOutput> {
+                ctx.cancel.cancelled().await;
+                Ok(ToolOutput::ok("ended"))
+            }
+        }
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(Vec::new()).await;
+        let mut reg = Registry::new();
+        reg.register(Waits);
+        let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+        let (live, mut screen) = tokio::sync::mpsc::channel(8);
+        agent.ctx.live = Some(live);
+        let turn = agent.ctx.cancel.clone();
+        let agent = std::sync::Arc::new(agent);
+        let running = agent.clone();
+        let call = tokio::spawn(async move {
+            running
+                .dispatch_tool("1", "waits", serde_json::json!({}))
+                .await
+        });
+        let stop = loop {
+            let told = screen.recv().await.expect("the call tells the screen");
+            if let crate::tools::registry::Live::Stop(stop) = told.what {
+                assert_eq!(told.call.as_deref(), Some("1"));
+                break stop;
+            }
+        };
+        stop.cancel();
+        let out = call.await.unwrap();
+        assert!(out.is_error);
+        assert_eq!(
+            out.content,
+            "the person stopped this call before it finished"
+        );
+        assert!(!turn.is_cancelled(), "the turn goes on");
+    }
+
     #[tokio::test]
     async fn a_file_named_in_the_question_arrives_with_it() {
         let h = Harness::new(Answer::Yes);
