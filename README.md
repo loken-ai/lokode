@@ -208,8 +208,8 @@ still caps it where it is stated.
 | `Alt-Enter` while it works | ask it once the turn is over |
 | `Up` / `Down` | walk what you cleared, then what you have already sent |
 | `PageUp` / `PageDown`, `Home` / `End`, wheel | scroll |
-| click | unfold a step, answer a question by its badge, take an item of a list |
-| drag with the mouse | select here; dragging past an edge scrolls |
+| click | unfold a step, answer a question by its badge, take an item of a list, go to what runs from the rail |
+| drag with the mouse | select here, and scroll when dragging past an edge |
 | `Shift` + drag | select in the terminal itself, for its own copy key |
 | `Ctrl-T` | hand the mouse to the terminal, or take it back |
 | `Ctrl-C` | stop the step you point at alone, stop the turn or a command of yours, clear the line, or leave when pressed twice on an empty line |

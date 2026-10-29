@@ -157,6 +157,8 @@ pub(crate) struct UiState {
     pub(crate) stops: std::collections::HashMap<String, tokio_util::sync::CancellationToken>,
     /// What the list of running things offered, in its order, while it is open.
     pub(crate) jobs_offered: Vec<JobTarget>,
+    /// Where the rail was drawn and, for each of its first rows, the running thing on it.
+    pub(crate) rail_hit: Option<(ratatui::layout::Rect, Vec<Option<usize>>)>,
     /// Whether the mouse belongs to this program or to the terminal.
     ///
     /// Taking it buys the wheel and a selection that can scroll past the edge of the

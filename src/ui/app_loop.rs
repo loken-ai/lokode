@@ -781,6 +781,28 @@ async fn run_ui(
                         // the selecting itself: pressing starts one, moving extends it,
                         // and letting go puts it on the clipboard. Both are had at once
                         // rather than one being traded for the other.
+                        MouseEventKind::Down(MouseButton::Left)
+                            if state.rail_hit.as_ref().is_some_and(|(area, _)| {
+                                area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                            }) =>
+                        {
+                            // A click on something running goes to its step, or offers to
+                            // stop work aside.
+                            let job = state.rail_hit.as_ref().and_then(|(area, rows)| {
+                                rows.get((mouse.row - area.y) as usize).copied().flatten()
+                            });
+                            if let Some(i) = job {
+                                match state.jobs().get(i).and_then(|j| j.entry) {
+                                    Some(at) => {
+                                        state.at_entry = Some(at);
+                                        state.show_entry(at);
+                                    }
+                                    None => {
+                                        state.open_jobs(Some(i));
+                                    }
+                                }
+                            }
+                        }
                         MouseEventKind::Down(MouseButton::Left) => {
                             match state.spot_at(mouse.column, mouse.row) {
                                 Some(spot) => {

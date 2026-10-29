@@ -194,8 +194,10 @@ pub(crate) fn draw(
         typing[0],
     );
     f.render_widget(input, typing[1]);
+    state.rail_hit = None;
     if let Some(area) = rail_area {
         let jobs = state.jobs();
+        state.rail_hit = Some((area, crate::ui::rail::running_rows(&jobs)));
         crate::ui::rail::Rail {
             model: &state.model,
             tasks: &state.tasks,

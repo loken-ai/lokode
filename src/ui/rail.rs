@@ -28,6 +28,22 @@ pub const WIDTH: u16 = 36;
 pub const RATES_KEPT: usize = 24;
 
 /// How many turns that can be put back are listed.
+/// For each of the rail's first rows, the running thing on it, laid out as the rail lays
+/// out its section of running things.
+pub fn running_rows(jobs: &[crate::ui::state::Job]) -> Vec<Option<usize>> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+    let mut rows = vec![None, None];
+    for (i, job) in jobs.iter().enumerate().take(JOBS_SHOWN) {
+        rows.push(Some(i));
+        if job.doing.is_some() {
+            rows.push(Some(i));
+        }
+    }
+    rows
+}
+
 /// How many running things the rail lists before it counts the rest.
 const JOBS_SHOWN: usize = 5;
 
@@ -485,6 +501,8 @@ mod tests {
         assert!(text[2].trim_end().ends_with("12.0s"), "{text:?}");
         assert_eq!(text[3].trim_end(), "   › read_file  src/config.rs");
         assert!(text[4].trim_end().ends_with("1m15s"), "{text:?}");
+        // A click finds the thing on the row it lands on.
+        assert_eq!(running_rows(&jobs), [None, None, Some(0), Some(0), Some(1)]);
     }
 
     #[test]
