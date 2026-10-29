@@ -3,11 +3,16 @@
 //! JSON-RPC again, but not framed the way the language server protocol frames it: one
 //! message per line, no headers. Close enough to be confusing and different enough to
 //! break if you assume.
+//!
+//! The server may ask things of the client as well as answer it. Its requests are told
+//! apart from its replies by their method, and answered: `ping`, and `roots/list` with the
+//! project. A server that stops fails every request still waiting at once.
 
 use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
@@ -15,13 +20,19 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::{oneshot, Mutex};
+use tokio_util::sync::CancellationToken;
 
-/// The revision this client speaks. A server that wants a different one says so, and is
-/// taken at its word rather than argued with.
-const PROTOCOL_VERSION: &str = "2024-11-05";
+/// The revision this client asks for.
+const PROTOCOL_VERSION: &str = "2025-06-18";
 
-/// How long to wait for any one request.
-const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// The revisions this client can speak, should the server answer with another.
+const SPOKEN: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// How long to wait for any one request, when the configuration does not say.
+pub const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a server told to stop has before it is killed.
+const STOP_GRACE: Duration = Duration::from_secs(2);
 
 /// Bytes of a server's complaints to keep for when something goes wrong.
 const STDERR_TAIL: usize = 4 * 1024;
@@ -36,26 +47,43 @@ pub struct McpToolInfo {
     /// is allowed anywhere near the grammar the model is held to.
     #[serde(rename = "inputSchema", default)]
     pub input_schema: Value,
+    /// What the server says of the tool: `readOnlyHint` among others.
+    #[serde(default)]
+    pub annotations: Value,
+}
+
+/// What the client and the task reading the server's output share.
+struct Shared {
+    server: String,
+    stdin: Mutex<ChildStdin>,
+    pending: Mutex<HashMap<i64, oneshot::Sender<Value>>>,
+    stderr: Mutex<String>,
+    alive: AtomicBool,
+    /// Set when the server says its tools changed.
+    tools_changed: AtomicBool,
+    root: std::path::PathBuf,
 }
 
 pub struct McpClient {
     /// Named by the configuration, and used to prefix its tools.
     pub server: String,
-    _child: Child,
-    stdin: Mutex<ChildStdin>,
+    child: Mutex<Option<Child>>,
+    shared: Arc<Shared>,
     next_id: AtomicI64,
-    pending: Mutex<HashMap<i64, oneshot::Sender<Value>>>,
-    stderr: Arc<Mutex<String>>,
+    timeout: Duration,
+    /// The revision the server answered with.
+    pub version: String,
 }
 
 impl McpClient {
-    /// Start a server and complete the handshake.
+    /// Start a server and complete the handshake. Each request waits `timeout` at most.
     pub async fn start(
         server: &str,
         command: &str,
         args: &[String],
         env: &HashMap<String, String>,
         cwd: &std::path::Path,
+        timeout: Duration,
     ) -> Result<Arc<Self>> {
         let mut child = tokio::process::Command::new(command)
             .args(args)
@@ -70,47 +98,78 @@ impl McpClient {
 
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
-
-        let stderr_buf = Arc::new(Mutex::new(String::new()));
-        if let Some(stderr) = child.stderr.take() {
-            let buf = stderr_buf.clone();
-            tokio::spawn(async move { drain_stderr(stderr, buf).await });
-        }
-
-        let client = Arc::new(Self {
+        let shared = Arc::new(Shared {
             server: server.to_string(),
-            _child: child,
             stdin: Mutex::new(stdin),
-            next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
-            stderr: stderr_buf,
+            stderr: Mutex::new(String::new()),
+            alive: AtomicBool::new(true),
+            tools_changed: AtomicBool::new(false),
+            root: cwd.to_path_buf(),
         });
-
+        if let Some(stderr) = child.stderr.take() {
+            let shared = shared.clone();
+            tokio::spawn(async move { drain_stderr(stderr, shared).await });
+        }
         {
-            let client = client.clone();
-            tokio::spawn(async move { reader_loop(client, stdout).await });
+            let shared = shared.clone();
+            tokio::spawn(async move { reader_loop(shared, stdout).await });
         }
 
+        let mut client = Self {
+            server: server.to_string(),
+            child: Mutex::new(Some(child)),
+            shared,
+            next_id: AtomicI64::new(1),
+            timeout,
+            version: String::new(),
+        };
         let init = client
             .request(
                 "initialize",
                 json!({
                     "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {},
+                    "capabilities": { "roots": { "listChanged": false } },
                     "clientInfo": { "name": "lokode", "version": env!("CARGO_PKG_VERSION") },
                 }),
+                None,
             )
             .await;
-        if let Err(e) = init {
+        let init = match init {
+            Ok(v) => v,
+            Err(e) => {
+                let tail = client.stderr_tail().await;
+                client.shutdown().await;
+                return Err(anyhow!("{server} did not initialise: {e}{tail}"));
+            }
+        };
+        let version = init
+            .get("protocolVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or(PROTOCOL_VERSION)
+            .to_string();
+        if !SPOKEN.contains(&version.as_str()) {
+            client.shutdown().await;
             return Err(anyhow!(
-                "{server} did not initialise: {e}{}",
-                client.stderr_tail().await
+                "{server} speaks the protocol of {version}, which lokode does not ({})",
+                SPOKEN.join(", ")
             ));
         }
+        client.version = version;
         client
             .notify("notifications/initialized", json!({}))
             .await?;
-        Ok(client)
+        Ok(Arc::new(client))
+    }
+
+    /// Whether the server is still running.
+    pub fn alive(&self) -> bool {
+        self.shared.alive.load(Ordering::Relaxed)
+    }
+
+    /// Whether the server said its tools changed since this was last asked.
+    pub fn take_tools_changed(&self) -> bool {
+        self.shared.tools_changed.swap(false, Ordering::Relaxed)
     }
 
     /// What this server offers.
@@ -122,7 +181,7 @@ impl McpClient {
                 Some(c) => json!({ "cursor": c }),
                 None => json!({}),
             };
-            let page = self.request("tools/list", params).await?;
+            let page = self.request("tools/list", params, None).await?;
             if let Some(tools) = page.get("tools").and_then(|t| t.as_array()) {
                 for t in tools {
                     match serde_json::from_value::<McpToolInfo>(t.clone()) {
@@ -158,7 +217,7 @@ impl McpClient {
 
     /// The name and description of each row of a listing, whatever it is called there.
     async fn list_named(&self, method: &str, field: &str, key: &str) -> Vec<(String, String)> {
-        let Ok(page) = self.request(method, json!({})).await else {
+        let Ok(page) = self.request(method, json!({}), None).await else {
             return Vec::new();
         };
         page.get(field)
@@ -181,7 +240,7 @@ impl McpClient {
     /// Read one resource, as text.
     pub async fn read_resource(&self, uri: &str) -> Result<String> {
         let reply = self
-            .request("resources/read", json!({ "uri": uri }))
+            .request("resources/read", json!({ "uri": uri }), None)
             .await?;
         let text = reply
             .get("contents")
@@ -205,6 +264,7 @@ impl McpClient {
             .request(
                 "prompts/get",
                 json!({ "name": name, "arguments": arguments }),
+                None,
             )
             .await?;
         let text = reply
@@ -227,55 +287,45 @@ impl McpClient {
         Ok(text)
     }
 
-    /// Run one of its tools.
-    pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<(String, bool)> {
+    /// Run one of its tools. Stopped with `cancel`, the server is told.
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: Value,
+        cancel: &CancellationToken,
+    ) -> Result<(String, bool)> {
         let reply = self
             .request(
                 "tools/call",
                 json!({ "name": name, "arguments": arguments }),
+                Some(cancel),
             )
             .await?;
-
-        // The result is a list of content blocks. Only text is rendered; anything else is
-        // named rather than dropped silently, so the model is not left wondering what it
-        // was given.
-        let mut text = String::new();
-        if let Some(blocks) = reply.get("content").and_then(|c| c.as_array()) {
-            for block in blocks {
-                match block.get("type").and_then(|t| t.as_str()) {
-                    Some("text") => {
-                        if let Some(s) = block.get("text").and_then(|t| t.as_str()) {
-                            if !text.is_empty() {
-                                text.push('\n');
-                            }
-                            text.push_str(s);
-                        }
-                    }
-                    Some(other) => {
-                        if !text.is_empty() {
-                            text.push('\n');
-                        }
-                        text.push_str(&format!("[{other} content, not shown]"));
-                    }
-                    None => {}
-                }
-            }
-        }
         let is_error = reply
             .get("isError")
             .and_then(|e| e.as_bool())
             .unwrap_or(false);
-        Ok((text, is_error))
+        Ok((render_result(&reply), is_error))
     }
 
+    /// Tell the server to stop: close its input, and kill it if it is still there after a
+    /// moment.
     pub async fn shutdown(&self) {
         // MCP has no shutdown request; closing stdin is how a stdio server is told to go.
-        let mut stdin = self.stdin.lock().await;
-        let _ = stdin.shutdown().await;
+        let _ = self.shared.stdin.lock().await.shutdown().await;
+        if let Some(mut child) = self.child.lock().await.take() {
+            if tokio::time::timeout(STOP_GRACE, child.wait())
+                .await
+                .is_err()
+            {
+                let _ = child.kill().await;
+            }
+        }
     }
 
-    async fn stderr_tail(&self) -> String {
-        let buf = self.stderr.lock().await;
+    /// What the server last wrote to its error output, for a message about it.
+    pub async fn stderr_tail(&self) -> String {
+        let buf = self.shared.stderr.lock().await;
         if buf.trim().is_empty() {
             String::new()
         } else {
@@ -283,18 +333,57 @@ impl McpClient {
         }
     }
 
-    async fn request(&self, method: &str, params: Value) -> Result<Value> {
+    /// Send a request and wait for its answer. When `cancel` fires first, the server is
+    /// told the request is withdrawn.
+    async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<Value> {
+        if !self.alive() {
+            return Err(anyhow!("{method}: the server is not running"));
+        }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
+        self.shared.pending.lock().await.insert(id, tx);
 
-        self.write(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
-            .await?;
-
-        let reply = tokio::time::timeout(TIMEOUT, rx)
+        if let Err(e) = self
+            .write(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
             .await
-            .map_err(|_| anyhow!("{method} timed out after {}s", TIMEOUT.as_secs()))?
-            .map_err(|_| anyhow!("{method}: the server went away"))?;
+        {
+            self.shared.pending.lock().await.remove(&id);
+            return Err(e);
+        }
+
+        let never = CancellationToken::new();
+        let cancel = cancel.unwrap_or(&never);
+        let reply = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                self.shared.pending.lock().await.remove(&id);
+                let _ = self
+                    .notify(
+                        "notifications/cancelled",
+                        json!({"requestId": id, "reason": "the user stopped it"}),
+                    )
+                    .await;
+                return Err(anyhow!("{method}: stopped"));
+            }
+            r = tokio::time::timeout(self.timeout, rx) => match r {
+                Err(_) => {
+                    self.shared.pending.lock().await.remove(&id);
+                    return Err(anyhow!("{method} timed out after {}s", self.timeout.as_secs()));
+                }
+                Ok(Err(_)) => {
+                    return Err(anyhow!(
+                        "{method}: the server stopped{}",
+                        self.stderr_tail().await
+                    ))
+                }
+                Ok(Ok(reply)) => reply,
+            },
+        };
 
         if let Some(err) = reply.get("error") {
             return Err(anyhow!("{method}: {err}"));
@@ -308,41 +397,83 @@ impl McpClient {
     }
 
     async fn write(&self, payload: &Value) -> Result<()> {
-        let mut line = serde_json::to_vec(payload)?;
-        line.push(b'\n');
-        let mut stdin = self.stdin.lock().await;
-        stdin.write_all(&line).await.context("writing to server")?;
-        stdin.flush().await?;
-        Ok(())
+        write_to(&self.shared, payload).await
     }
 }
 
-async fn reader_loop(client: Arc<McpClient>, stdout: tokio::process::ChildStdout) {
+async fn write_to(shared: &Shared, payload: &Value) -> Result<()> {
+    let mut line = serde_json::to_vec(payload)?;
+    line.push(b'\n');
+    let mut stdin = shared.stdin.lock().await;
+    stdin.write_all(&line).await.context("writing to server")?;
+    stdin.flush().await?;
+    Ok(())
+}
+
+/// What the client answers a request from the server.
+fn answer(shared: &Shared, method: &str) -> Result<Value, (i64, String)> {
+    match method {
+        "ping" => Ok(json!({})),
+        "roots/list" => {
+            let uri = url::Url::from_directory_path(&shared.root)
+                .map(|u| u.to_string())
+                .unwrap_or_default();
+            let name = shared
+                .root
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            Ok(json!({"roots": [{"uri": uri, "name": name}]}))
+        }
+        other => Err((-32601, format!("lokode does not answer {other}"))),
+    }
+}
+
+async fn reader_loop(shared: Arc<Shared>, stdout: tokio::process::ChildStdout) {
     let mut lines = BufReader::new(stdout).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         if line.trim().is_empty() {
             continue;
         }
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
-            tracing::warn!(server = %client.server, "unreadable line from server");
+            tracing::warn!(server = %shared.server, "unreadable line from server");
             continue;
         };
-        // Only replies are awaited; a notification from the server has nobody waiting for
-        // it and is recorded rather than acted on.
-        match msg.get("id").and_then(|i| i.as_i64()) {
-            Some(id) => {
-                if let Some(tx) = client.pending.lock().await.remove(&id) {
-                    let _ = tx.send(msg);
+        let method = msg.get("method").and_then(|m| m.as_str());
+        match (msg.get("id"), method) {
+            // A request of the server's own, answered with the id it gave.
+            (Some(id), Some(method)) => {
+                let reply = match answer(&shared, method) {
+                    Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                    Err((code, message)) => json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "error": {"code": code, "message": message}
+                    }),
+                };
+                let _ = write_to(&shared, &reply).await;
+            }
+            (Some(id), None) => {
+                if let Some(id) = id.as_i64() {
+                    if let Some(tx) = shared.pending.lock().await.remove(&id) {
+                        let _ = tx.send(msg);
+                    }
                 }
             }
-            None => {
-                tracing::debug!(server = %client.server, method = ?msg.get("method"), "notification")
+            (None, Some("notifications/tools/list_changed")) => {
+                shared.tools_changed.store(true, Ordering::Relaxed);
+            }
+            (None, method) => {
+                tracing::debug!(server = %shared.server, ?method, "notification")
             }
         }
     }
+    // Every request still waiting is answered now, with the server gone.
+    shared.alive.store(false, Ordering::Relaxed);
+    shared.pending.lock().await.clear();
+    tracing::warn!(server = %shared.server, "MCP server stopped");
 }
 
-async fn drain_stderr(stderr: tokio::process::ChildStderr, buf: Arc<Mutex<String>>) {
+async fn drain_stderr(stderr: tokio::process::ChildStderr, shared: Arc<Shared>) {
     use tokio::io::AsyncReadExt;
     let mut reader = BufReader::new(stderr);
     let mut chunk = [0u8; 1024];
@@ -350,7 +481,7 @@ async fn drain_stderr(stderr: tokio::process::ChildStderr, buf: Arc<Mutex<String
         match reader.read(&mut chunk).await {
             Ok(0) | Err(_) => return,
             Ok(n) => {
-                let mut held = buf.lock().await;
+                let mut held = shared.stderr.lock().await;
                 held.push_str(&String::from_utf8_lossy(&chunk[..n]));
                 if held.len() > STDERR_TAIL {
                     let cut = held.len() - STDERR_TAIL;
@@ -361,5 +492,124 @@ async fn drain_stderr(stderr: tokio::process::ChildStderr, buf: Arc<Mutex<String
                 }
             }
         }
+    }
+}
+
+/// A tool's result as text: its text blocks, the text of the resources it embeds, a line
+/// naming each block that is not text, and its structured content when it has nothing
+/// else to say.
+fn render_result(reply: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for block in reply
+        .get("content")
+        .and_then(|c| c.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let text = |v: Option<&Value>| v.and_then(|t| t.as_str()).map(str::to_string);
+        match block.get("type").and_then(|t| t.as_str()) {
+            Some("text") => parts.extend(text(block.get("text"))),
+            Some("resource") => match text(block.pointer("/resource/text")) {
+                Some(t) => parts.push(t),
+                None => parts.push(format!(
+                    "[a resource, {}, not shown]",
+                    text(block.pointer("/resource/uri")).unwrap_or_default()
+                )),
+            },
+            Some("resource_link") => parts.push(format!(
+                "[a link to {}]",
+                text(block.get("uri")).unwrap_or_default()
+            )),
+            Some(other) => parts.push(format!(
+                "[{other} content{}, not shown]",
+                text(block.get("mimeType"))
+                    .map(|m| format!(", {m}"))
+                    .unwrap_or_default()
+            )),
+            None => {}
+        }
+    }
+    if parts.is_empty() {
+        if let Some(structured) = reply.get("structuredContent") {
+            parts.push(serde_json::to_string_pretty(structured).unwrap_or_default());
+        }
+    }
+    parts.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Text and embedded text come through, other blocks are named, and structured content
+    /// speaks when nothing else does.
+    #[test]
+    fn a_result_is_rendered_as_text() {
+        let reply = json!({"content": [
+            {"type": "text", "text": "one"},
+            {"type": "image", "data": "...", "mimeType": "image/png"},
+            {"type": "resource", "resource": {"uri": "file:///a", "text": "two"}},
+            {"type": "resource_link", "uri": "file:///b"}
+        ]});
+        assert_eq!(
+            render_result(&reply),
+            "one\n[image content, image/png, not shown]\ntwo\n[a link to file:///b]"
+        );
+        let structured = json!({"content": [], "structuredContent": {"n": 1}});
+        assert!(render_result(&structured).contains("\"n\": 1"));
+    }
+
+    /// A small server written in shell. Before it answers the handshake it pings the
+    /// client with the handshake's own id and asks for its roots. It answers one tool
+    /// call, then exits on the second.
+    const SERVER: &str = r#"
+read -r init
+echo '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+read -r pong
+echo '{"jsonrpc":"2.0","id":7,"method":"roots/list"}'
+read -r roots
+echo "$roots" > roots.json
+echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}}}}'
+read -r initialized
+read -r call
+echo '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"called"}]}}'
+read -r second
+exit 3
+"#;
+
+    /// A request of the server's own with the same id as one of ours is answered and not
+    /// taken for our reply, and a server that stops fails what waits on it at once.
+    #[tokio::test]
+    async fn the_server_is_answered_and_its_end_is_noticed() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = McpClient::start(
+            "t",
+            "sh",
+            &["-c".to_string(), SERVER.to_string()],
+            &HashMap::new(),
+            dir.path(),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+        assert_eq!(client.version, "2025-06-18");
+        let never = CancellationToken::new();
+        let (text, is_error) = client.call_tool("x", json!({}), &never).await.unwrap();
+        assert_eq!(text, "called");
+        assert!(!is_error);
+        let roots = std::fs::read_to_string(dir.path().join("roots.json")).unwrap();
+        assert!(
+            roots.contains("\"id\":7") && roots.contains("file://"),
+            "{roots}"
+        );
+
+        let started = std::time::Instant::now();
+        let err = client.call_tool("x", json!({}), &never).await.unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited for the timeout"
+        );
+        assert!(format!("{err}").contains("stopped"), "{err}");
+        assert!(!client.alive());
     }
 }

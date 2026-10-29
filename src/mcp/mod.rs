@@ -41,19 +41,23 @@ pub async fn load(
 ) -> Loaded {
     let mut out = Loaded::default();
 
-    for (name, spec) in servers {
-        if !spec.enabled {
-            continue;
-        }
-        let client = match client::McpClient::start(
+    // Started side by side, and adopted in the order of their names.
+    let enabled: Vec<_> = servers.iter().filter(|(_, s)| s.enabled).collect();
+    let started = futures::future::join_all(enabled.iter().map(|(name, spec)| {
+        client::McpClient::start(
             name,
             &spec.command,
             &spec.args,
             &spec.env,
             root,
+            spec.timeout
+                .map(std::time::Duration::from_secs)
+                .unwrap_or(client::TIMEOUT),
         )
-        .await
-        {
+    }))
+    .await;
+    for ((name, _), started) in enabled.into_iter().zip(started) {
+        let client = match started {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(server = %name, why = %format!("{e:#}"), "MCP server did not start");

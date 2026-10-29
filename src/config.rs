@@ -415,6 +415,8 @@ pub struct McpServer {
     /// Set false to keep a server configured but not started.
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Seconds to wait for one of its answers, the handshake included.
+    pub timeout: Option<u64>,
 }
 
 fn yes() -> bool {

@@ -28,6 +28,8 @@ pub struct McpTool {
     schema: Value,
     client: Arc<McpClient>,
     remote_name: String,
+    /// The server says the tool changes nothing.
+    read_only: bool,
 }
 
 impl McpTool {
@@ -43,6 +45,7 @@ impl McpTool {
             },
             schema,
             remote_name: info.name.clone(),
+            read_only: info.annotations.get("readOnlyHint") == Some(&Value::Bool(true)),
             client,
         })
     }
@@ -125,36 +128,39 @@ impl Tool for McpTool {
         self.schema.clone()
     }
 
-    /// Assumed, because it cannot be known.
+    /// Assumed unless the server says the tool changes nothing, with `readOnlyHint`.
     ///
-    /// A server describes what its tool is called and what it takes, and says nothing about
-    /// whether running it changes the project. Treating it as mutating costs a checkpoint
-    /// that may turn out to record nothing; treating it as pure would mean a change nobody
-    /// can undo.
+    /// Treating a tool as mutating costs a checkpoint that may turn out to record nothing;
+    /// treating it as pure would mean a change nobody can undo. A server the user set up
+    /// is taken at its word when it says a tool only reads.
     fn mutates(&self) -> bool {
-        true
+        !self.read_only
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
-        // Gated without exception. A built-in tool is trusted because its behaviour is in
-        // this repository; this one is a program the user configured, and the root does not
-        // confine it any more than it confines a shell.
-        match ctx
-            .approve(ApprovalRequest {
-                tool: self.name.clone(),
-                summary: format!(
-                    "{} via the {} MCP server\n{}",
-                    self.remote_name,
-                    self.client.server,
-                    serde_json::to_string_pretty(&args).unwrap_or_default()
-                ),
-                diff_preview: None,
-                // Per tool rather than per server: agreeing to one of a server's tools is
-                // not agreeing to the rest of them.
-                scope: ApprovalScope::Tool(self.name.clone()),
-            })
-            .await
-        {
+        // Gated unless the server says the tool only reads. A built-in tool is trusted
+        // because its behaviour is in this repository; this one is a program the user
+        // configured, and the root does not confine it any more than it confines a shell.
+        let approval = match self.read_only {
+            true => Approval::Proceed,
+            false => {
+                ctx.approve(ApprovalRequest {
+                    tool: self.name.clone(),
+                    summary: format!(
+                        "{} via the {} MCP server\n{}",
+                        self.remote_name,
+                        self.client.server,
+                        serde_json::to_string_pretty(&args).unwrap_or_default()
+                    ),
+                    diff_preview: None,
+                    // Per tool rather than per server: agreeing to one of a server's tools
+                    // is not agreeing to the rest of them.
+                    scope: ApprovalScope::Tool(self.name.clone()),
+                })
+                .await
+            }
+        };
+        match approval {
             Approval::Proceed => {}
             Approval::Denied(why) => {
                 return Ok(ToolOutput::err(crate::sandbox::approval::denial(why)))
@@ -162,14 +168,16 @@ impl Tool for McpTool {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        let call = self.client.call_tool(&self.remote_name, args);
-        let (text, is_error) = tokio::select! {
-            biased;
-            _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
-            r = call => match r {
-                Ok(v) => v,
-                Err(e) => return Ok(ToolOutput::err(format!("{}: {e:#}", self.client.server))),
-            },
+        let (text, is_error) = match self
+            .client
+            .call_tool(&self.remote_name, args, &ctx.cancel)
+            .await
+        {
+            Ok(v) => v,
+            Err(_) if ctx.cancel.is_cancelled() => {
+                return Ok(ToolOutput::err("interrupted by user"))
+            }
+            Err(e) => return Ok(ToolOutput::err(format!("{}: {e:#}", self.client.server))),
         };
 
         let text = ctx.clamp(text);
@@ -188,9 +196,10 @@ impl Tool for McpTool {
 /// the transcript working on it unchanged: everything already built for a tool applies.
 pub struct McpResources {
     client: std::sync::Arc<crate::mcp::client::McpClient>,
+    name: String,
     /// What the server said it had, at startup: the list goes in the description so the
     /// model can name one without a round trip to discover it.
-    catalogue: String,
+    description: String,
 }
 
 impl McpResources {
@@ -209,7 +218,14 @@ impl McpResources {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        Self { client, catalogue }
+        Self {
+            name: Self::tool_name(&client.server),
+            description: format!(
+                "Read a document offered by the {} server. Available: {catalogue}",
+                client.server
+            ),
+            client,
+        }
     }
 
     pub fn tool_name(server: &str) -> String {
@@ -220,9 +236,7 @@ impl McpResources {
 #[async_trait::async_trait]
 impl Tool for McpResources {
     fn name(&self) -> &str {
-        // Leaked once at startup, like every other adopted tool's name: the registry
-        // holds names for the life of the process.
-        Box::leak(Self::tool_name(&self.client.server).into_boxed_str())
+        &self.name
     }
 
     fn mutates(&self) -> bool {
@@ -230,13 +244,7 @@ impl Tool for McpResources {
     }
 
     fn description(&self) -> &str {
-        Box::leak(
-            format!(
-                "Read a document offered by the {} server. Available: {}",
-                self.client.server, self.catalogue
-            )
-            .into_boxed_str(),
-        )
+        &self.description
     }
 
     fn args_schema(&self) -> serde_json::Value {

@@ -695,9 +695,17 @@ A Model Context Protocol server you configure adds its tools, named `<server>__<
 command = "mcp-server-github"
 args = []
 env = { GITHUB_TOKEN = "..." }     # prefer naming a variable your shell already has
+timeout = 30                       # seconds for one answer, the handshake included
 ```
 
-- Every call is approved, and treated as able to change the project.
+- Every call is approved, and treated as able to change the project, unless the server marks
+  the tool `readOnlyHint`. Such a tool runs without a question, while planning too.
+- The servers start side by side. One that stops fails what waits on it at once, and is
+  stopped for good at the end of the session.
+- Stopping a call tells the server it is withdrawn.
+- The server's own requests are answered: `ping`, and `roots/list` with the project.
+- Text, embedded documents and structured content reach the model. An image or a sound is
+  named, not shown.
 - The schema a server advertises is checked before it shapes the grammar. A tool that fails the
   check is refused by name.
 - A server that does not start takes only itself down.
