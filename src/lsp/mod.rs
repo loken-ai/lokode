@@ -4,6 +4,7 @@
 //! started at all, leaves it down for the session with what it said, so a tool asks once
 //! and is answered at once afterwards.
 
+pub mod check;
 pub mod language;
 pub mod position;
 pub mod server;
@@ -92,6 +93,11 @@ impl LspPool {
                 Err(why)
             }
         }
+    }
+
+    /// Whether a server is known for `path`.
+    pub fn knows(&self, path: &Path) -> bool {
+        self.languages.for_path(path).is_some()
     }
 
     /// The servers running now.

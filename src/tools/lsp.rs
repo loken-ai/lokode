@@ -1,26 +1,21 @@
 //! The tools that ask a language server: what it reports about a file, and what it says
 //! about the symbol at a position.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::lsp::position;
-use crate::lsp::server::Server;
 use crate::lsp::LspPool;
+use crate::lsp::{check, position};
 use crate::sandbox::allowlist;
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
-/// How long the tool waits for a server to publish about a file it was just told of.
-const PUBLISH_WAIT: Duration = Duration::from_secs(4);
-
-/// How often a waiter looks again when the server says nothing.
-const POLL: Duration = Duration::from_millis(100);
+/// How many diagnostics the tool lists before it counts the rest.
+const LISTED: usize = 50;
 
 pub struct LspDiagnostics {
     pub pool: Arc<LspPool>,
@@ -57,69 +52,54 @@ impl Tool for LspDiagnostics {
             Ok(s) => s,
             Err(why) => return Ok(ToolOutput::err(why)),
         };
-        let shown = ctx.short(&path);
-        match published_after_sync(&server, &path, PUBLISH_WAIT).await {
-            Ok(Some(diags)) => Ok(ToolOutput::ok(
-                format_diags(&server, &path, &shown, &diags).await,
-            )),
-            Ok(None) => Ok(ToolOutput::ok(format!("{shown}: (no diagnostics)"))),
-            Err(e) => Ok(ToolOutput::err(format!(
-                "could not reach the language server: {e:#}"
-            ))),
-        }
-    }
-}
-
-/// Tell `server` about `path` as it is on disk, and wait up to `wait` for what it
-/// publishes about it. `None` when it published nothing in time.
-async fn published_after_sync(
-    server: &Server,
-    path: &Path,
-    wait: Duration,
-) -> Result<Option<Vec<lsp_types::Diagnostic>>> {
-    let (uri, version, sent) = server.sync(path).await?;
-    let asked = std::time::Instant::now();
-    let deadline = asked + wait;
-    loop {
-        if let Some(p) = server.published(&uri).await {
-            // What was published before this version was sent describes older text.
-            let current = match (p.version, sent) {
-                (Some(v), _) => v >= version,
-                (None, true) => p.at >= asked,
-                (None, false) => true,
-            };
-            if current {
-                return Ok(Some(p.diagnostics));
+        let asked = std::time::Instant::now();
+        let target = match server.sync(&path).await {
+            Ok(t) => t,
+            Err(e) => {
+                return Ok(ToolOutput::err(format!(
+                    "could not reach the language server: {e:#}"
+                )))
             }
+        };
+        let settled = check::settle(
+            &server,
+            std::slice::from_ref(&target),
+            asked,
+            check::SETTLE_AT_MOST,
+        )
+        .await;
+        if let (Err(why), false) = (&settled, server.alive()) {
+            return Ok(ToolOutput::err(why.clone()));
         }
-        if !server.alive() {
-            anyhow::bail!(
-                "{} stopped while reading the file{}",
-                server.spec.command,
-                server.stderr_tail().await
-            );
+        let shown = ctx.short(&path);
+        let Some(published) = server.published(&target.0).await else {
+            return Ok(match settled {
+                Ok(()) => ToolOutput::ok(format!("{shown}: no diagnostics")),
+                Err(why) => ToolOutput::err(why),
+            });
+        };
+        let mut diags = published.diagnostics;
+        diags.sort_by_key(|d| {
+            (
+                d.severity.map(|s| format!("{s:?}")) != Some("Error".into()),
+                d.range.start.line,
+            )
+        });
+        let mut out = Vec::new();
+        for d in diags.iter().take(LISTED) {
+            out.push(check::describe(&server, &ctx.root, &target.0, d).await);
         }
-        if std::time::Instant::now() >= deadline {
-            return Ok(None);
+        if diags.len() > LISTED {
+            out.push(format!("and {} more", diags.len() - LISTED));
         }
-        let _ = tokio::time::timeout(POLL, server.changed.notified()).await;
+        if out.is_empty() {
+            out.push(format!("{shown}: no diagnostics"));
+        }
+        if let Err(why) = settled {
+            out.push(format!("this may be incomplete: {why}"));
+        }
+        Ok(ToolOutput::ok(out.join("\n")))
     }
-}
-
-/// What the language server says about one file, or nothing when it has no server, it
-/// cannot be started, or it says nothing within `wait`.
-///
-/// Written for two callers: the tool a model calls on purpose, and the check that runs
-/// after a write. The second must never fail a write, so every path here answers `None`
-/// rather than an error.
-pub async fn diagnostics_now(pool: &LspPool, path: &Path, wait: Duration) -> Option<String> {
-    let server = pool.server_for(path).await.ok()?;
-    let diags = published_after_sync(&server, path, wait).await.ok()??;
-    if diags.is_empty() {
-        return None;
-    }
-    let shown = path.display().to_string();
-    Some(format_diags(&server, path, &shown, &diags).await)
 }
 
 pub struct LspHover {
@@ -198,40 +178,6 @@ impl Tool for LspHover {
             .unwrap_or_else(|| reply.to_string());
         Ok(ToolOutput::ok(txt))
     }
-}
-
-/// One line per diagnostic: its severity, where it is in characters, and what it says.
-async fn format_diags(
-    server: &Server,
-    path: &Path,
-    shown: &str,
-    diags: &[lsp_types::Diagnostic],
-) -> String {
-    if diags.is_empty() {
-        return format!("{shown}: (no diagnostics)");
-    }
-    let text = server.text_of(path).await.unwrap_or_default();
-    let lines: Vec<&str> = text.lines().collect();
-    let encoding = server.caps().encoding;
-    let mut out = String::new();
-    for d in diags {
-        let sev = d
-            .severity
-            .map(|s| format!("{:?}", s))
-            .unwrap_or_else(|| "Info".into());
-        let line = d.range.start.line as usize;
-        let col = position::chars(
-            lines.get(line).copied().unwrap_or(""),
-            d.range.start.character,
-            encoding,
-        ) + 1;
-        out.push_str(&format!(
-            "{sev}: {shown}:{}:{col} {}\n",
-            line + 1,
-            d.message
-        ));
-    }
-    out
 }
 
 fn pretty_contents(c: &Value) -> String {

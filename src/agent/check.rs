@@ -12,6 +12,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+use crate::lsp::check::Verdict;
+
 /// How long the narrow check may take before it is abandoned.
 ///
 /// A check that outlasts this is not the narrow one, and the model is better served by
@@ -46,24 +48,30 @@ fn narrowest(root: &Path, paths: &[String]) -> Option<(&'static str, Vec<String>
     None
 }
 
-/// Ask, and hand back what went wrong when something did.
+/// Ask, and say what came of it.
 ///
-/// `None` means nothing to report: no check for this project, the check could not be run,
-/// or it passed. A check that cannot run is not a failure of the change - saying so would
-/// send the model to fix a compiler that is not installed.
-pub async fn run(root: &Path, paths: &[String]) -> Option<String> {
+/// `None` when there is no check for this project or it could not be started: a check that
+/// cannot run is not a failure of the change.
+pub async fn run(root: &Path, paths: &[String]) -> Option<Verdict> {
     let (program, args, label) = narrowest(root, paths)?;
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(&args)
         .current_dir(root)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
-    let out = tokio::time::timeout(TIMEOUT, cmd.output())
-        .await
-        .ok()?
-        .ok()?;
+    let out = match tokio::time::timeout(TIMEOUT, cmd.output()).await {
+        Err(_) => {
+            return Some(Verdict::NotChecked {
+                why: format!("{label} took longer than {}s", TIMEOUT.as_secs()),
+            })
+        }
+        Ok(out) => out.ok()?,
+    };
     if out.status.success() {
-        return None;
+        return Some(Verdict::Passed {
+            by: label.to_string(),
+            notes: String::new(),
+        });
     }
     let text = String::from_utf8_lossy(&out.stderr);
     let text = if text.trim().is_empty() {
@@ -72,13 +80,19 @@ pub async fn run(root: &Path, paths: &[String]) -> Option<String> {
         text.into_owned()
     };
     let text = text.trim();
-    if text.is_empty() {
-        return Some(format!("{label} failed"));
-    }
-    // The first lines carry the first error, which is the one to fix; the rest is usually
-    // the same mistake seen from further away.
-    let head: Vec<&str> = text.lines().take(24).collect();
-    Some(format!("{label}:\n{}", head.join("\n")))
+    let report = match text.is_empty() {
+        true => format!("{label} failed"),
+        // The first lines carry the first error, which is the one to fix. The rest is
+        // usually the same mistake seen from further away.
+        false => format!(
+            "{label}:\n{}",
+            text.lines().take(24).collect::<Vec<_>>().join("\n")
+        ),
+    };
+    Some(Verdict::Failed {
+        by: label.to_string(),
+        report,
+    })
 }
 
 #[cfg(test)]
@@ -128,10 +142,10 @@ mod tests {
             "fn main() { not_a_thing() }",
         )
         .unwrap();
-        let said = run(dir.path(), &[])
-            .await
-            .expect("the crate does not build");
-        assert!(said.starts_with("cargo check"), "{said}");
-        assert!(said.contains("not_a_thing"), "{said}");
+        let Some(Verdict::Failed { report, .. }) = run(dir.path(), &[]).await else {
+            panic!("the crate does not build");
+        };
+        assert!(report.starts_with("cargo check"), "{report}");
+        assert!(report.contains("not_a_thing"), "{report}");
     }
 }

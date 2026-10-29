@@ -22,6 +22,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Interface: draw again only the entries that changed, so a long session stays fast.
 - Interface: lay out turns, lists and the status line as cards and bands.
 - Engine: read loken's timings, cache, drafts and energy, and the power drawn.
+- Checks: say whether each write was checked, and report only what it introduced.
 
 ### Changed
 

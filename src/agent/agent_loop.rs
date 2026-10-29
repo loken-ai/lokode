@@ -268,6 +268,12 @@ fn changed_paths(content: &str) -> Vec<String> {
 /// exactly this.
 const CHECK_FAILED: &str = "the language server reports:";
 
+/// Opens what a check that found no new error adds to a result.
+const CHECK_PASSED: &str = "checked by";
+
+/// Opens what a check that could not tell adds to a result.
+const NOT_CHECKED: &str = "not checked:";
+
 /// Left in the transcript when a turn ends without the model having answered.
 ///
 /// The turn's user message is already in the history, and `Session::compact` drops whole
@@ -2157,14 +2163,23 @@ impl Agent {
                         record.after.wrote = true;
                         // The objective signal a cascade would escalate on. Recorded now,
                         // used by nothing yet.
-                        let passed = !result.content.contains(CHECK_FAILED);
-                        record.after.check_passed = Some(passed);
+                        // Passed or failed only when a check could tell.
+                        record.after.check_passed = if result.content.contains(CHECK_FAILED) {
+                            Some(false)
+                        } else if result.content.contains(CHECK_PASSED) {
+                            Some(true)
+                        } else {
+                            None
+                        };
                         // What fixed this before, and what this is fixing now. A complaint
                         // is held until a change makes it go away, and the pair is what
                         // the next occurrence arrives with.
                         match result.content.split_once(CHECK_FAILED) {
                             Some((_, said)) => self.repairs.failed(said),
-                            None => self.repairs.fixed(&result.content),
+                            None if record.after.check_passed == Some(true) => {
+                                self.repairs.fixed(&result.content)
+                            }
+                            None => {}
                         }
                         self.record_change(&call.name, &events).await;
                     }
@@ -2453,7 +2468,12 @@ impl Agent {
     /// was written is what the tool says it wrote, and a refused or failed call says
     /// nothing to parse. Never fails a write: a language server that is missing, slow or
     /// silent leaves the result as it was.
-    async fn verify_written(&self, tool: &str, out: &ToolOutput) -> Option<String> {
+    async fn verify_written(
+        &self,
+        tool: &str,
+        out: &ToolOutput,
+    ) -> Option<crate::lsp::check::Verdict> {
+        use crate::lsp::check::Verdict;
         if out.is_error
             || !matches!(
                 tool,
@@ -2463,39 +2483,30 @@ impl Agent {
             return None;
         }
         let written = changed_paths(&out.content);
-        // The language server first: it is already running, it knows the file, and it
-        // answers in milliseconds.
+        // The language servers first: they are running, they know the project, and they
+        // say what this write changed in what they report.
+        let mut unchecked = None;
         if let Some(lsp) = self.lsp.as_ref() {
-            // Every server hears of what was written, created or removed, so what it
-            // knows of the project is the project.
             let paths: Vec<_> = written.iter().map(|n| self.ctx.root.join(n)).collect();
             lsp.files_changed(&paths).await;
-            for name in &written {
-                let path = self.ctx.root.join(name);
-                if !path.exists() {
-                    continue;
-                }
-                if let Some(said) = crate::tools::lsp::diagnostics_now(
-                    lsp,
-                    &path,
-                    std::time::Duration::from_secs(2),
-                )
-                .await
-                {
-                    return Some(said);
-                }
+            match crate::lsp::check::after_write(lsp, &self.ctx.root, &paths).await {
+                Some(Verdict::NotChecked { why }) => unchecked = Some(why),
+                Some(verdict) => return Some(verdict),
+                None => {}
             }
         }
-        // Underneath it, the compiler, asked to compile and nothing else. Once per step,
-        // because a step that writes three files is one change and asking three times
-        // costs three builds to learn the same thing.
+        // Underneath them, the compiler, asked to compile and nothing else. Once per step,
+        // because a step that writes three files is one change.
         if self
             .checked_this_step
             .swap(true, std::sync::atomic::Ordering::Relaxed)
         {
-            return None;
+            return unchecked.map(|why| Verdict::NotChecked { why });
         }
-        crate::agent::check::run(&self.ctx.root, &written).await
+        match crate::agent::check::run(&self.ctx.root, &written).await {
+            Some(verdict) => Some(verdict),
+            None => unchecked.map(|why| Verdict::NotChecked { why }),
+        }
     }
 
     /// Run the turn-end hook, if there is one, and close the turn.
@@ -2900,10 +2911,20 @@ impl Agent {
         // back in the same result. Without it the model learns of its own syntax error on
         // the next turn, if it thinks to ask, and usually it does not.
         let out = match self.verify_written(name, &out).await {
-            Some(diagnostics) => {
+            Some(verdict) => {
+                use crate::lsp::check::Verdict;
                 let mut out = out;
-                out.content
-                    .push_str(&format!("\n\n{CHECK_FAILED}\n{diagnostics}"));
+                let said = match verdict {
+                    Verdict::Failed { report, .. } => format!("{CHECK_FAILED}\n{report}"),
+                    Verdict::Passed { by, notes } if notes.is_empty() => {
+                        format!("{CHECK_PASSED} {by}: no new errors")
+                    }
+                    Verdict::Passed { by, notes } => {
+                        format!("{CHECK_PASSED} {by}: no new errors\n{notes}")
+                    }
+                    Verdict::NotChecked { why } => format!("{NOT_CHECKED} {why}"),
+                };
+                out.content.push_str(&format!("\n\n{said}"));
                 out
             }
             None => out,
