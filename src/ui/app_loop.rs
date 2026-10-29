@@ -79,6 +79,7 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         digest,
         discovery,
         mut live,
+        mut questions,
     } = boot::boot(&cfg).await?;
     // A resumed session may have come back planning.
     cfg.mode = agent.cfg.mode;
@@ -271,6 +272,7 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         session_approvals,
         &mut agent_evt_rx,
         &mut approval_rx,
+        &mut questions,
     )
     .await;
 
@@ -349,6 +351,8 @@ async fn run_ui(
     session_approvals: std::sync::Arc<crate::sandbox::approval::SessionApprovals>,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
+    // The forms the tool servers put to the person.
+    questions: &mut mpsc::Receiver<crate::mcp::host::Question>,
 ) -> Result<()> {
     // What the background worker has to say, and the handle that stops it. It runs only
     // while nothing else does, so the token is fired the moment a turn starts: the user's
@@ -445,7 +449,8 @@ async fn run_ui(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let (doing, progress) = match (state.pending_approval.is_some(), state.busy) {
+        let waiting = state.pending_approval.is_some() || state.asking.is_some();
+        let (doing, progress) = match (waiting, state.busy) {
             (true, _) => (" · waiting for you", term::Progress::Waiting),
             (false, true) => (" · working", term::Progress::Busy),
             (false, false) => ("", term::Progress::Off),
@@ -512,7 +517,9 @@ async fn run_ui(
             // One question at a time: another waits in the channel until this one is
             // answered, so no answer is lost to a question drawn over it.
             Some(prompt) = approval_rx.recv(),
-                if state.pending_approval.is_none() && state.refusing.is_none() =>
+                if state.pending_approval.is_none()
+                    && state.refusing.is_none()
+                    && state.asking.is_none() =>
             {
                 // Somewhere else, the person would not see the question until they came
                 // back to look.
@@ -535,6 +542,19 @@ async fn run_ui(
                 // "running write_file" for the minutes a prompt sits there is the one
                 // thing the status line must never do.
                 state.waiting_since = Some(Instant::now());
+            }
+
+            // A server's form, asked a field at a time on the line, one form at a time.
+            Some(question) = questions.recv(),
+                if state.pending_approval.is_none()
+                    && state.refusing.is_none()
+                    && state.asking.is_none() =>
+            {
+                if !state.focused {
+                    term::notify("lokode", &format!("{} asks: {}", question.server, question.message));
+                }
+                state.at_entry = None;
+                state.ask(question);
             }
 
             Some(power) = power_rx.recv() => state.note_power(power),
@@ -952,7 +972,8 @@ async fn run_ui(
                             let stake = crate::ui::input::AtStake {
                                 busy: state.busy,
                                 typing: !input.is_empty(),
-                                waiting: state.pending_approval.is_some(),
+                                waiting: state.pending_approval.is_some()
+                                    || state.asking.is_some(),
                             };
                             let confirmed = state.quit_asked.is_some_and(|(at, k)| {
                                 k == quit.key() && at.elapsed() < ASK_AGAIN_WITHIN
@@ -1381,6 +1402,18 @@ async fn run_ui(
                             // A refusal being explained, which is a question still on the
                             // table: escaping it refuses without saying anything rather
                             // than leaving the turn waiting on an answer nobody is giving.
+                            // A server's form: esc turns it down, enter answers the field.
+                            KeyCode::Esc if state.asking.is_some() => {
+                                state.decline_form();
+                                input = fresh_input("");
+                                continue;
+                            }
+                            KeyCode::Enter if state.asking.is_some() => {
+                                let typed = input.lines().join("\n");
+                                state.answer_field(&typed);
+                                input = fresh_input("");
+                                continue;
+                            }
                             KeyCode::Esc if state.refusing.is_some() => {
                                 if let Some(prompt) = state.refusing.take() {
                                     let _ = prompt

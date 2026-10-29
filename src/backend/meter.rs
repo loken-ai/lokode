@@ -26,15 +26,18 @@ pub enum Purpose {
     Repair,
     /// The question asked at startup to learn what the backend can do.
     Probe,
+    /// A question a tool server asked the model.
+    Sampling,
 }
 
 impl Purpose {
-    const ALL: [Purpose; 5] = [
+    const ALL: [Purpose; 6] = [
         Purpose::Step,
         Purpose::Guess,
         Purpose::Review,
         Purpose::Repair,
         Purpose::Probe,
+        Purpose::Sampling,
     ];
 
     fn at(self) -> usize {
@@ -49,6 +52,7 @@ impl Purpose {
             Purpose::Review => "second opinions",
             Purpose::Repair => "repairs",
             Purpose::Probe => "startup probe",
+            Purpose::Sampling => "tool servers",
         }
     }
 }
@@ -122,7 +126,7 @@ pub fn watt_hours(joules: f64) -> String {
 /// The totals by purpose, as read at one moment.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Totals {
-    by: [Spent; 5],
+    by: [Spent; Purpose::ALL.len()],
 }
 
 impl Totals {

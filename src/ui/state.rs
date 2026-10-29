@@ -111,6 +111,88 @@ const TICK_EVERY: Duration = Duration::from_millis(120);
 /// How often a drag held past an edge scrolls the pane one more line.
 const DRAG_EVERY: Duration = Duration::from_millis(80);
 
+/// A tool server's form being answered: the field being asked, and what was given.
+pub(crate) struct Asking {
+    pub(crate) question: crate::mcp::host::Question,
+    pub(crate) at: usize,
+    pub(crate) got: serde_json::Map<String, serde_json::Value>,
+}
+
+impl UiState {
+    /// Take a server's form: say what it asks, then ask its first field.
+    pub(crate) fn ask(&mut self, question: crate::mcp::host::Question) {
+        self.entries.push(Entry::Notice(format!(
+            "{} asks: {}   (enter to answer each field, esc to decline)",
+            question.server, question.message
+        )));
+        self.asking = Some(Asking {
+            question,
+            at: 0,
+            got: Default::default(),
+        });
+        self.waiting_since = Some(Instant::now());
+        self.ask_field();
+    }
+
+    /// Ask the field the form is at, or send the form once every field is answered.
+    fn ask_field(&mut self) {
+        let Some(asking) = &self.asking else { return };
+        let fields = &asking.question.fields;
+        if let Some(field) = fields.get(asking.at) {
+            let line = format!("{}/{} {}", asking.at + 1, fields.len(), field.prompt());
+            self.entries.push(Entry::Notice(line));
+            return;
+        }
+        if let Some(asking) = self.asking.take() {
+            self.entries.push(Entry::Notice(format!(
+                "answered {}",
+                asking.question.server
+            )));
+            let _ = asking
+                .question
+                .reply
+                .send(crate::mcp::host::Answer::Accept(asking.got));
+        }
+        self.waiting_since = None;
+    }
+
+    /// What was typed for the field being asked: kept and the next one asked, or said
+    /// not to fit and asked again.
+    pub(crate) fn answer_field(&mut self, typed: &str) {
+        let Some(asking) = &mut self.asking else {
+            return;
+        };
+        let Some(field) = asking.question.fields.get(asking.at) else {
+            return;
+        };
+        match field.read(typed) {
+            Ok(value) => {
+                if let Some(value) = value {
+                    asking.got.insert(field.name.clone(), value);
+                }
+                asking.at += 1;
+                self.ask_field();
+            }
+            Err(why) => self.entries.push(Entry::Notice(why)),
+        }
+    }
+
+    /// Turn the form down.
+    pub(crate) fn decline_form(&mut self) {
+        if let Some(asking) = self.asking.take() {
+            self.entries.push(Entry::Notice(format!(
+                "declined what {} asked",
+                asking.question.server
+            )));
+            let _ = asking
+                .question
+                .reply
+                .send(crate::mcp::host::Answer::Decline);
+        }
+        self.waiting_since = None;
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct UiState {
     pub(crate) entries: Thread,
@@ -145,6 +227,8 @@ pub(crate) struct UiState {
     pub(crate) choosing: Option<crate::ui::chooser::Chooser>,
     /// A call being refused, while what to do instead is being typed.
     pub(crate) refusing: Option<crate::sandbox::approval::ApprovalPrompt>,
+    /// A tool server's form, while its fields are being answered.
+    pub(crate) asking: Option<Asking>,
     /// What was typed during a turn to be asked once it is over.
     pub(crate) queued: Vec<String>,
     /// How many entries the search matched, for saying which one is being shown.

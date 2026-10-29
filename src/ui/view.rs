@@ -227,7 +227,7 @@ pub(crate) fn draw(
         );
     }
 
-    let waiting = state.pending_approval.is_some();
+    let waiting = state.pending_approval.is_some() || state.asking.is_some();
     let status = Status {
         planning: state.planning,
         pointing: state.at_entry.is_some(),
@@ -258,6 +258,8 @@ pub(crate) fn draw(
             Some(crate::ui::status::Open::Page)
         } else if state.picker.is_some() {
             Some(crate::ui::status::Open::Completion)
+        } else if state.asking.is_some() {
+            Some(crate::ui::status::Open::Form)
         } else {
             None
         },

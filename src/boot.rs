@@ -71,6 +71,9 @@ pub struct Booted {
     pub discovery: Option<Arc<crate::agent::background::Discovery>>,
     /// Lines the tools are printing as they print them.
     pub live: tokio::sync::mpsc::Receiver<crate::tools::registry::LiveOutput>,
+    /// The forms the tool servers put to the person. Nothing is sent on it in a run driven
+    /// by a script, where the servers are declined.
+    pub questions: tokio::sync::mpsc::Receiver<crate::mcp::host::Question>,
 }
 
 pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
@@ -81,7 +84,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     lsp.warm();
     // Third-party tools go in after the built-ins, so a server cannot take a name the agent
     // already relies on.
-    let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root).await;
+    // What answers the servers' questions, set once the backend is known below.
+    let mcp_host: crate::mcp::host::SharedHost = Default::default();
+    let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root, &mcp_host).await;
     let mcp_clients: crate::mcp::Clients = Arc::new(std::sync::RwLock::new(mcp.clients.clone()));
     // The skills, offered by name and loaded when the model needs one.
     let (skills, skill_warnings) = crate::tools::skill::load(&crate::tools::skill::dirs(&cfg.root));
@@ -384,6 +389,15 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         answers: Some(steer_tx.clone()),
         depth: cfg.delegate_depth.max(1),
     });
+    let (questions_tx, questions_rx) = tokio::sync::mpsc::channel(4);
+    let _ = mcp_host.set(crate::mcp::host::Host {
+        approval: ctx.approval.clone(),
+        session_approvals: session_approvals.clone(),
+        backend: backend.clone(),
+        model: model.clone(),
+        max_tokens: u32::try_from(max_answer_tokens).unwrap_or(u32::MAX),
+        questions: (!cfg.headless).then_some(questions_tx),
+    });
     model_notes.extend(delegation.unknown());
     model_notes.extend(skill_warnings);
     registry.register(crate::tools::delegate::Delegate::new(delegation));
@@ -493,6 +507,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         digest,
         discovery,
         live: live_rx,
+        questions: questions_rx,
     })
 }
 

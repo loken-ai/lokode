@@ -821,6 +821,11 @@ headers = { "X-Team" = "lokode" }
   stopped for good at the end of the session.
 - Stopping a call tells the server it is withdrawn.
 - The server's own requests are answered: `ping`, and `roots/list` with the project.
+- A server may ask the model a question. You approve it like a tool call, and `a` covers that
+  server for the session. The session's model answers, within its answer budget, whatever model
+  the server names.
+- A server may ask you for values. Each field is asked in turn on the input line, what must be
+  given first. Enter answers a field and esc declines the form. A run with `-p` declines.
 - Text, embedded documents and structured content reach the model. An image or a sound is
   named, not shown.
 - The schema a server advertises is checked before it shapes the grammar. A tool that fails the

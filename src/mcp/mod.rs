@@ -11,6 +11,7 @@
 //! is allowed to shape the grammar the model is held to.
 
 pub mod client;
+pub mod host;
 pub mod tool;
 
 use std::sync::Arc;
@@ -96,7 +97,7 @@ pub async fn restart(
             anyhow::anyhow!("{} was not started from a configuration", old.server)
         })?;
     old.shutdown().await;
-    let new = start(&old.server, &spec, &root).await?;
+    let new = start(&old.server, &spec, &root, old.host()).await?;
     let prefix = format!("{}__", new.server);
     registry.retain(|name| !name.starts_with(&prefix));
     let offered = new.list_tools().await?;
@@ -125,6 +126,7 @@ async fn start(
     name: &str,
     spec: &McpServer,
     root: &std::path::Path,
+    host: host::SharedHost,
 ) -> anyhow::Result<Arc<client::McpClient>> {
     let timeout = spec
         .timeout
@@ -132,7 +134,8 @@ async fn start(
         .unwrap_or(client::TIMEOUT);
     let client = match (&spec.command, &spec.url) {
         (Some(command), None) => {
-            client::McpClient::start(name, command, &spec.args, &spec.env, root, timeout).await
+            client::McpClient::start(name, command, &spec.args, &spec.env, root, timeout, host)
+                .await
         }
         (None, Some(url)) => {
             let mut headers: Vec<(String, String)> = spec.headers.clone().into_iter().collect();
@@ -141,7 +144,7 @@ async fn start(
                     .map_err(|_| anyhow::anyhow!("the variable {var} holds no token"))?;
                 headers.push(("Authorization".into(), format!("Bearer {token}")));
             }
-            client::McpClient::connect(name, url, headers, root, timeout).await
+            client::McpClient::connect(name, url, headers, root, timeout, host).await
         }
         _ => anyhow::bail!("a server needs either a command or a url"),
     }?;
@@ -158,13 +161,18 @@ pub async fn load(
     servers: &std::collections::BTreeMap<String, McpServer>,
     registry: &mut Registry,
     root: &std::path::Path,
+    host: &host::SharedHost,
 ) -> Loaded {
     let mut out = Loaded::default();
 
     // Started side by side, and adopted in the order of their names.
     let enabled: Vec<_> = servers.iter().filter(|(_, s)| s.enabled).collect();
-    let started =
-        futures::future::join_all(enabled.iter().map(|(name, spec)| start(name, spec, root))).await;
+    let started = futures::future::join_all(
+        enabled
+            .iter()
+            .map(|(name, spec)| start(name, spec, root, host.clone())),
+    )
+    .await;
     for ((name, _), started) in enabled.into_iter().zip(started) {
         let client = match started {
             Ok(c) => c,

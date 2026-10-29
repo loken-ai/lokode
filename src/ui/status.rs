@@ -84,6 +84,8 @@ pub enum Open {
     Choice,
     /// The completion list over the input.
     Completion,
+    /// A tool server's form, answered a field at a time on the line.
+    Form,
 }
 
 impl Status {
@@ -261,6 +263,11 @@ impl Status {
                 spans.extend(key("↑↓", "move"));
                 spans.extend(key("type", "narrow"));
                 spans.extend(key("esc", "cancel"));
+                return Line::from(spans);
+            }
+            Some(Open::Form) => {
+                spans.extend(key("enter", "answer"));
+                spans.extend(key("esc", "decline"));
                 return Line::from(spans);
             }
             Some(Open::Completion) => {

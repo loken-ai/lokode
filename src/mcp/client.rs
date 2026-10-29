@@ -8,8 +8,9 @@
 //! before it.
 //!
 //! The server may ask things of the client as well as answer it. Its requests are told
-//! apart from its replies by their method, and answered: `ping`, and `roots/list` with the
-//! project. A server that stops fails every request still waiting at once.
+//! apart from its replies by their method, and answered: `ping`, `roots/list` with the
+//! project, and through the session's host a question for the model or a form for the
+//! person. A server that stops fails every request still waiting at once.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -66,6 +67,8 @@ struct Shared {
     /// Set when the server says its tools changed.
     tools_changed: AtomicBool,
     root: std::path::PathBuf,
+    /// What answers the server's questions for the model and the person.
+    host: super::host::SharedHost,
 }
 
 /// A server reached over HTTP.
@@ -113,6 +116,7 @@ impl McpClient {
         env: &HashMap<String, String>,
         cwd: &std::path::Path,
         timeout: Duration,
+        host: super::host::SharedHost,
     ) -> Result<Arc<Self>> {
         let mut child = tokio::process::Command::new(command)
             .args(args)
@@ -135,6 +139,7 @@ impl McpClient {
             alive: AtomicBool::new(true),
             tools_changed: AtomicBool::new(false),
             root: cwd.to_path_buf(),
+            host,
         });
         if let Some(stderr) = child.stderr.take() {
             let shared = shared.clone();
@@ -172,6 +177,7 @@ impl McpClient {
         headers: Vec<(String, String)>,
         root: &std::path::Path,
         timeout: Duration,
+        host: super::host::SharedHost,
     ) -> Result<Arc<Self>> {
         let shared = Arc::new(Shared {
             server: server.to_string(),
@@ -181,6 +187,7 @@ impl McpClient {
             alive: AtomicBool::new(true),
             tools_changed: AtomicBool::new(false),
             root: root.to_path_buf(),
+            host,
         });
         Self {
             server: server.to_string(),
@@ -212,7 +219,11 @@ impl McpClient {
                 "initialize",
                 json!({
                     "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": { "roots": { "listChanged": false } },
+                    "capabilities": {
+                        "roots": { "listChanged": false },
+                        "sampling": {},
+                        "elicitation": {},
+                    },
                     "clientInfo": { "name": "lokode", "version": env!("CARGO_PKG_VERSION") },
                 }),
                 None,
@@ -286,6 +297,11 @@ impl McpClient {
                 })
             })
             .collect()
+    }
+
+    /// What answers the server's questions, shared with a server started in its place.
+    pub fn host(&self) -> super::host::SharedHost {
+        self.shared.host.clone()
     }
 
     /// Whether the server is still running.
@@ -617,7 +633,8 @@ impl McpClient {
             let method = msg.get("method").and_then(|m| m.as_str());
             match (msg.get("id"), method) {
                 (Some(their), Some(method)) => {
-                    let reply = reply_to(&self.shared, their, method);
+                    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+                    let reply = reply_to(&self.shared, their, method, &params).await;
                     // Posted beside the stream, which is still open for the reply.
                     let _ = Box::pin(self.post(http, &reply, None)).await;
                 }
@@ -645,8 +662,8 @@ async fn write_to(shared: &Shared, payload: &Value) -> Result<()> {
 }
 
 /// The client's reply to a request of the server's, with the id it gave.
-fn reply_to(shared: &Shared, id: &Value, method: &str) -> Value {
-    match answer(shared, method) {
+async fn reply_to(shared: &Shared, id: &Value, method: &str, params: &Value) -> Value {
+    match answer(shared, method, params).await {
         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
         Err((code, message)) => json!({
             "jsonrpc": "2.0", "id": id,
@@ -656,8 +673,16 @@ fn reply_to(shared: &Shared, id: &Value, method: &str) -> Value {
 }
 
 /// What the client answers a request from the server.
-fn answer(shared: &Shared, method: &str) -> Result<Value, (i64, String)> {
+async fn answer(shared: &Shared, method: &str, params: &Value) -> Result<Value, (i64, String)> {
+    let host = || {
+        shared
+            .host
+            .get()
+            .ok_or((-32603, "the session is not ready yet".to_string()))
+    };
     match method {
+        "sampling/createMessage" => host()?.sample(&shared.server, params).await,
+        "elicitation/create" => host()?.elicit(&shared.server, params).await,
         "ping" => Ok(json!({})),
         "roots/list" => {
             let uri = url::Url::from_directory_path(&shared.root)
@@ -686,9 +711,15 @@ async fn reader_loop(shared: Arc<Shared>, stdout: tokio::process::ChildStdout) {
         };
         let method = msg.get("method").and_then(|m| m.as_str());
         match (msg.get("id"), method) {
-            // A request of the server's own, answered with the id it gave.
+            // A request of the server's own, answered with the id it gave. Answered beside
+            // the reading, since the person or the model may take a while.
             (Some(id), Some(method)) => {
-                let _ = write_to(&shared, &reply_to(&shared, id, method)).await;
+                let (shared, id, method) = (shared.clone(), id.clone(), method.to_string());
+                let params = msg.get("params").cloned().unwrap_or(Value::Null);
+                tokio::spawn(async move {
+                    let reply = reply_to(&shared, &id, &method, &params).await;
+                    let _ = write_to(&shared, &reply).await;
+                });
             }
             (Some(id), None) => {
                 if let Some(id) = id.as_i64() {
@@ -827,6 +858,7 @@ exit 3
             &HashMap::new(),
             dir.path(),
             Duration::from_secs(10),
+            Default::default(),
         )
         .await
         .unwrap();
@@ -917,9 +949,16 @@ exit 3
             }
         });
         let dir = tempfile::tempdir().unwrap();
-        let client = McpClient::connect("h", &url, Vec::new(), dir.path(), Duration::from_secs(10))
-            .await
-            .unwrap();
+        let client = McpClient::connect(
+            "h",
+            &url,
+            Vec::new(),
+            dir.path(),
+            Duration::from_secs(10),
+            Default::default(),
+        )
+        .await
+        .unwrap();
         let (text, _) = client
             .call_tool("x", json!({}), &CancellationToken::new())
             .await
