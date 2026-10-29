@@ -124,6 +124,7 @@ still caps it where it is stated.
 | `Alt-Up` / `Alt-Down` | move between the steps of the session |
 | `Space` | open a block that was counted, while pointing at it |
 | `Ctrl-F` | find something said earlier; enter and up walk the matches |
+| `Ctrl-B` | show or hide the rail: the plan, what changed, the window, the speed, the turns to put back |
 | `Ctrl-G` | write the prompt in `$EDITOR` and bring it back |
 | `Ctrl-Y` | take what is selected, or the block you are pointing at |
 | `y` / `a` / `n` | answer a change: once, always in the stated scope, no |

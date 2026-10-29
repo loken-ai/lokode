@@ -203,8 +203,19 @@ pub(crate) fn copy_out(entries: &[Entry], last_only: bool, root: &std::path::Pat
 /// at the moments they can have changed rather than watched.
 pub(crate) async fn refresh_status(
     control: &mpsc::Sender<crate::agent::agent_loop::Control>,
+    checkpoints: Option<&Checkpoints>,
     state: &mut UiState,
 ) {
+    // What the change history holds, for the rail: the turns that can be put back and
+    // what the session changed, file by file.
+    if let Some(cp) = checkpoints {
+        state.turns = cp.turns().await.unwrap_or_default();
+        state.changes = cp
+            .diff()
+            .await
+            .map(|d| crate::ui::diff::changes(&d))
+            .unwrap_or_default();
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     if control
         .send(crate::agent::agent_loop::Control::Status { reply: tx })
@@ -215,7 +226,7 @@ pub(crate) async fn refresh_status(
     }
     if let Ok(report) = rx.await {
         state.model = report.model;
-        state.context_percent = report.context_percent;
+        state.window = report.window;
         state.protocol = report.protocol;
     }
 }

@@ -45,7 +45,34 @@ pub(crate) fn draw(
     // a screen and a half above the pane, and the only way to see it was to guess
     // how far to scroll.
     // The last column is kept for the scrollbar, so it never sits over text.
-    let width = chunks[0].width.saturating_sub(1) as usize;
+    // The rail takes a column of its own from a wide enough screen, and opens over the
+    // conversation on a narrow one when asked for.
+    let wide = f.area().width >= crate::ui::rail::WIDE_FROM;
+    let rail_shown = state.rail.unwrap_or(wide);
+    state.rail_now = rail_shown;
+    let (pane_area, rail_area) = match (rail_shown, wide) {
+        (true, true) => {
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(crate::ui::rail::WIDTH),
+                ])
+                .split(chunks[0]);
+            (columns[0], Some(columns[1]))
+        }
+        (true, false) => {
+            let w = crate::ui::rail::WIDTH.min(chunks[0].width);
+            let over = ratatui::layout::Rect {
+                x: chunks[0].x + chunks[0].width - w,
+                width: w,
+                ..chunks[0]
+            };
+            (chunks[0], Some(over))
+        }
+        (false, _) => (chunks[0], None),
+    };
+    let width = pane_area.width.saturating_sub(1) as usize;
     let mut pane = crate::ui::thread::Pane::default();
     for i in 0..state.entries.len() {
         pane.push(state.drawings.rows(
@@ -61,8 +88,8 @@ pub(crate) fn draw(
     // while the terminal showed rows, so scrolling was off by however much had
     // wrapped and nothing could say which line sits at a given row - which is what
     // pointing at text with the mouse needs to know.
-    state.pane = chunks[0];
-    let inner_h = chunks[0].height as usize;
+    state.pane = pane_area;
+    let inner_h = pane_area.height as usize;
     let total = pane.len();
     // Remembered for the scroll keys, which cannot know either of these.
     state.content_lines = total;
@@ -102,7 +129,7 @@ pub(crate) fn draw(
             None => line,
         })
         .collect();
-    f.render_widget(Paragraph::new(visible), chunks[0]);
+    f.render_widget(Paragraph::new(visible), pane_area);
     // Nothing used to say the conversation had been scrolled back, or by how
     // much: a pane showing an hour-old answer looks exactly like a pane showing
     // the newest one.
@@ -117,7 +144,7 @@ pub(crate) fn draw(
                 .track_style(theme().dim)
                 .thumb_symbol("▐")
                 .thumb_style(Style::default().fg(theme().text)),
-            chunks[0],
+            pane_area,
             &mut bar,
         );
     }
@@ -148,6 +175,18 @@ pub(crate) fn draw(
         picker.render(f, typing[1]);
     }
 
+    if let Some(area) = rail_area {
+        crate::ui::rail::Rail {
+            model: &state.model,
+            tasks: &state.tasks,
+            changes: &state.changes,
+            window: &state.window,
+            rates: &state.rates,
+            turns: &state.turns,
+        }
+        .render(f, area);
+    }
+
     let waiting = state.pending_approval.is_some();
     let status = Status {
         model: state.model.clone(),
@@ -159,7 +198,20 @@ pub(crate) fn draw(
             .unwrap_or_else(|| root.display().to_string()),
         planning: state.planning,
         pointing: state.at_entry.is_some(),
-        context_percent: state.context_percent,
+        context_percent: state.window.percent,
+        // What the rail would say of the plan, when the rail is not there to say it.
+        plan: match (rail_area.is_some(), state.tasks.is_empty()) {
+            (false, false) => Some((
+                state
+                    .tasks
+                    .iter()
+                    .filter(|t| t.state == crate::tools::plan::State::Done)
+                    .count(),
+                state.tasks.len(),
+            )),
+            _ => None,
+        },
+        rail_offered: !wide,
         step: state.step,
         max_steps,
         busy: state.busy,
@@ -234,9 +286,52 @@ mod tests {
         let mut state = UiState {
             model: "qwen3-coder".into(),
             mouse_ours: true,
-            context_percent: 23,
+            window: crate::agent::session::Occupancy {
+                percent: 23,
+                used: 2300,
+                budget: 10_000,
+                parts: vec![
+                    ("instructions", 1000),
+                    ("you", 300),
+                    ("model", 400),
+                    ("tools", 600),
+                ],
+            },
             ..Default::default()
         };
+        state.tasks = vec![
+            crate::tools::plan::Task {
+                what: "read the MCP client".into(),
+                state: crate::tools::plan::State::Done,
+            },
+            crate::tools::plan::Task {
+                what: "a timeout for every server".into(),
+                state: crate::tools::plan::State::Doing,
+            },
+            crate::tools::plan::Task {
+                what: "test a silent server".into(),
+                state: crate::tools::plan::State::Todo,
+            },
+        ];
+        state.changes = vec![
+            crate::ui::rail::FileChange {
+                path: "src/mcp/client.rs".into(),
+                added: 3,
+                removed: 1,
+            },
+            crate::ui::rail::FileChange {
+                path: "src/config.rs".into(),
+                added: 2,
+                removed: 0,
+            },
+        ];
+        state.turns = vec![crate::checkpoint::Turn {
+            turn: 1,
+            files: vec!["src/config.rs".into()],
+        }];
+        for rate in [38.0, 61.0, 88.0, 94.0, 90.0, 93.0] {
+            state.note_rate(rate);
+        }
         state.entries.extend([
             Entry::Notice("backend http://127.0.0.1:11435".into()),
             Entry::User("add a configurable timeout to the MCP calls".into()),

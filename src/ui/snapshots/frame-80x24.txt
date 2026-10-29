@@ -20,5 +20,5 @@ The client waits on rx.await forever. I add timeout-secs:                      �
 ! backend error: gave up after 3 attempts                                      ▐
 
 ❯
-    ACT    qwen3-coder  demo  ctx 23%
-  shift-tab write  enter send  alt-↑ steps  ctrl-f find  /help more …
+    ACT    qwen3-coder  demo  ctx 23%  plan 1/3
+  shift-tab write  enter send  alt-↑ steps  ctrl-f find  ctrl-b rail …

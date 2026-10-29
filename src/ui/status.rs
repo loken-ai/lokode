@@ -22,6 +22,11 @@ pub struct Status {
     /// because the first elision is the moment a session starts forgetting what it was
     /// told.
     pub context_percent: u8,
+    /// The plan's tasks done and in all, said here when the rail is not on screen.
+    pub plan: Option<(usize, usize)>,
+    /// Whether the screen is too narrow for the rail to be there unasked, which puts the
+    /// key that opens it on the line of keys.
+    pub rail_offered: bool,
     pub step: usize,
     pub max_steps: usize,
     pub busy: bool,
@@ -113,6 +118,9 @@ impl Status {
                 _ => theme().bad,
             }),
         ));
+        if let Some((done, all)) = self.plan {
+            spans.push(Span::styled(format!("  plan {done}/{all}"), theme().dim));
+        }
         if self.busy {
             spans.push(Span::styled(
                 format!("  {}/{}", self.step, self.max_steps),
@@ -243,6 +251,9 @@ impl Status {
             spans.extend(key("enter", "send"));
             spans.extend(key("alt-↑", "steps"));
             spans.extend(key("ctrl-f", "find"));
+            if self.rail_offered {
+                spans.extend(key("ctrl-b", "rail"));
+            }
             spans.extend(key("/help", "more"));
         }
         // What the key does here, which is not the same thing twice: a turn in flight is
@@ -305,6 +316,8 @@ mod tests {
             said: None,
             accepting_writes: false,
             context_percent: 40,
+            plan: None,
+            rail_offered: false,
             step: 2,
             max_steps: 16,
             busy,

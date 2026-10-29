@@ -526,8 +526,8 @@ async fn run_ui(
                             protocol.label()
                         )));
                     }
-                    AgentEvent::Window(percent) => state.context_percent = percent,
-                    AgentEvent::Rate(tokens_a_second) => state.rate = Some(tokens_a_second),
+                    AgentEvent::Window(window) => state.window = window,
+                    AgentEvent::Rate(tokens_a_second) => state.note_rate(tokens_a_second),
                     AgentEvent::Background(doing) => {
                         state.background = doing.map(|what| (what, Instant::now()))
                     }
@@ -537,7 +537,7 @@ async fn run_ui(
                     AgentEvent::TurnDone => {
                         // Asked once a turn is over, which is when the conversation has
                         // changed and the agent is free to answer.
-                        refresh_status(&control_tx, &mut state).await;
+                        refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                         state.busy = false;
                         state.step = 0;
                         state.phase = None;
@@ -876,7 +876,7 @@ async fn run_ui(
                                         // are about to ask before it goes.
                                         Ran::Prompt(prompt) => input = fresh_input(&prompt),
                                     }
-                                    refresh_status(&control_tx, &mut state).await;
+                                    refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                                 }
                             }
                             _ => {}
@@ -1334,7 +1334,7 @@ async fn run_ui(
                                             // between two questions for the rest of the
                                             // session.
                                             show(&mut state, verb, reply);
-                                            refresh_status(&control_tx, &mut state).await;
+                                            refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                                             continue;
                                         }
                                         // A command the project defines is a way of
@@ -1353,13 +1353,13 @@ async fn run_ui(
                                             state.start_again();
                                             state.entries.push(Entry::Notice(said));
                                             input = fresh_input("");
-                                            refresh_status(&control_tx, &mut state).await;
+                                            refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                                             continue;
                                         }
                                         Ran::Resumed(resumed) => {
                                             state.show_resumed(*resumed);
                                             input = fresh_input("");
-                                            refresh_status(&control_tx, &mut state).await;
+                                            refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                                             continue;
                                         }
                                     }
@@ -1478,6 +1478,12 @@ async fn run_ui(
                                 .entries
                                 .push(Entry::Notice(format!("could not open an editor: {e}"))),
                         }
+                        continue;
+                    }
+                    // The rail, over a narrow screen or out of the way of a wide one.
+                    if key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        state.rail = Some(!state.rail_now);
                         continue;
                     }
                     if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL)

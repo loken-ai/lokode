@@ -77,6 +77,32 @@ pub fn rows(text: &str, width: usize) -> Vec<Line<'static>> {
     out
 }
 
+/// The files a unified diff changes, each with the lines it adds and removes, in the
+/// order the diff names them.
+pub fn changes(text: &str) -> Vec<crate::ui::rail::FileChange> {
+    let mut out: Vec<crate::ui::rail::FileChange> = Vec::new();
+    for row in parse(text) {
+        match row {
+            Row::Path(path) => out.push(crate::ui::rail::FileChange {
+                path,
+                added: 0,
+                removed: 0,
+            }),
+            Row::Change(c) => {
+                if let Some(file) = out.last_mut() {
+                    match c.kind {
+                        Kind::Added => file.added += 1,
+                        Kind::Removed => file.removed += 1,
+                        Kind::Context => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 fn change_row(c: &Change<'_>, digits: usize, lang: Option<&str>, width: usize) -> Line<'static> {
     let t = theme();
     let (sign, line, word) = match c.kind {
@@ -332,6 +358,20 @@ mod tests {
         let sign_fg = |row: usize| rows[row].spans[1].style.fg;
         assert_eq!(sign_fg(3), Some(theme().bad));
         assert_eq!(sign_fg(4), Some(theme().good));
+    }
+
+    /// Each file is counted for the lines it adds and removes.
+    #[test]
+    fn a_diff_counts_its_files() {
+        let two = format!("{EDIT}\n--- a/b.rs\n+++ b/b.rs\n@@ -1 +1,2 @@\n keep\n+new");
+        let counted: Vec<(String, usize, usize)> = changes(&two)
+            .into_iter()
+            .map(|c| (c.path, c.added, c.removed))
+            .collect();
+        assert_eq!(
+            counted,
+            vec![("src/mcp/client.rs".into(), 1, 1), ("b.rs".into(), 1, 0)]
+        );
     }
 
     /// A hunk header that does not parse is shown as it is, not lost.

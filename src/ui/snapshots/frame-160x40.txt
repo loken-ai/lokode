@@ -1,30 +1,30 @@
 · backend http://127.0.0.1:11435
-> add a configurable timeout to the MCP calls
-
-  the client awaits its reply without a bound
- ● read_file  src/mcp/client.rs                                                                                                              guessed  212 lines
+> add a configurable timeout to the MCP calls                                                                                PLAN                           1/3
+                                                                                                                             ● read the MCP client
+  the client awaits its reply without a bound                                                                                ◉ a timeout for every server
+ ● read_file  src/mcp/client.rs                                                                          guessed  212 lines  ○ test a silent server
  ▏     1 use std::time::Duration;
- ▏     2 use tokio::sync::oneshot;
-
- ● bash  cargo test mcp                                                                                                                         14 passed  9.8s
+ ▏     2 use tokio::sync::oneshot;                                                                                           CHANGES                      +5 -1
+                                                                                                                             src/mcp/client.rs            +3 -1
+ ● bash  cargo test mcp                                                                                     14 passed  9.8s  src/config.rs                +2 -0
  ▏   test mcp::client::a_silent_server_times_out ... ok
-
-The client waits on rx.await forever. I add timeout-secs:
-
-• one setting per server, thirty seconds unless it says otherwise
+                                                                                                                             CONTEXT                        23%
+The client waits on rx.await forever. I add timeout-secs:                                                                    ████████··························
+                                                                                                                             █ instructions 10%  █ you 3%
+• one setting per server, thirty seconds unless it says otherwise                                                            █ model 4%  █ tools 6%
 • a test against a server that never answers
+                                                                                                                             ENGINE
+  rust                                                                                                                       qwen3-coder
+  let reply = timeout(self.timeout, rx).await??;                                                                             ▄▆████ 93 tok/s
 
-  rust
-  let reply = timeout(self.timeout, rx).await??;
-
-? edit src/mcp/client.rs
-    src/mcp/client.rs
-    @@ -212 +212 @@
+? edit src/mcp/client.rs                                                                                                     TURNS TO PUT BACK
+    src/mcp/client.rs                                                                                                          1  src/config.rs
+    @@ -212 +212 @@                                                                                                          /undo <turn> puts one back
     212 -     let reply = rx.await?;
     212 +     let reply = timeout(self.timeout, rx).await??;
   y once   a always (src/mcp/)   n or esc no   e no, and say why
 
- ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files                                                                   /undo put back  /diff see it
+ ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files                               /undo put back  /diff see it
 
 ! backend error: gave up after 3 attempts
 

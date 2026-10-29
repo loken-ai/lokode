@@ -193,8 +193,8 @@ pub enum AgentEvent {
     Steered(String),
     /// How tool calls travel, once something has found out what the backend does.
     Protocol(ToolProtocol),
-    /// How full the window is, as of this step.
-    Window(u8),
+    /// How full the window is, and with what, as of this step.
+    Window(crate::agent::session::Occupancy),
     /// How fast the last step came back, in tokens a second.
     ///
     /// A turn that takes a minute with nothing on screen looks the same as a turn that
@@ -740,7 +740,7 @@ impl Receipt {
 /// the interface's side, because the agent owns the session.
 pub struct StatusReport {
     pub model: String,
-    pub context_percent: u8,
+    pub window: crate::agent::session::Occupancy,
     pub protocol: ToolProtocol,
 }
 
@@ -1240,7 +1240,7 @@ impl Agent {
             Control::Status { reply } => {
                 let _ = reply.send(StatusReport {
                     model: self.cfg.model.clone(),
-                    context_percent: self.session.fullness_percent(),
+                    window: self.session.measure(),
                     protocol: self.cfg.protocol,
                 });
             }
@@ -1648,7 +1648,7 @@ impl Agent {
             // Sent every step rather than at the end of the turn: a window filling up is
             // something to see while there is still time to compact, not afterwards.
             let _ = events
-                .send(AgentEvent::Window(self.session.fullness_percent()))
+                .send(AgentEvent::Window(self.session.measure()))
                 .await;
             let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
             let asked_at = std::time::Instant::now();

@@ -130,9 +130,19 @@ pub(crate) struct UiState {
     /// Whether the agent is planning. Held here because the mode lives with the agent,
     /// and the interface only learns of a change by having asked for it.
     pub(crate) planning: bool,
-    /// How full the window was when it was last asked, which is at the end of a turn:
-    /// the figure only moves when the conversation does.
-    pub(crate) context_percent: u8,
+    /// How full the window is and with what, as the agent last measured it.
+    pub(crate) window: crate::agent::session::Occupancy,
+    /// The speeds of the latest steps, oldest first, for the rail's sparkline.
+    pub(crate) rates: std::collections::VecDeque<f64>,
+    /// The files this session changed, as the change history last said.
+    pub(crate) changes: Vec<crate::ui::rail::FileChange>,
+    /// The turns that can be put back, oldest first.
+    pub(crate) turns: Vec<crate::checkpoint::Turn>,
+    /// Whether the rail is shown: `None` follows the width of the screen, and a key sets
+    /// it either way.
+    pub(crate) rail: Option<bool>,
+    /// Whether the rail was on screen in the last frame, for the key that flips it.
+    pub(crate) rail_now: bool,
     /// How tool calls travel, as the agent has it: settled by asking the backend, so the
     /// interface can only know it by asking.
     pub(crate) protocol: crate::agent::protocol::ToolProtocol,
@@ -485,7 +495,17 @@ impl UiState {
         self.selecting = None;
         self.scroll = 0;
         self.step = 0;
-        self.context_percent = 0;
+        self.window = Default::default();
+        self.rates.clear();
+    }
+
+    /// Note how fast a step came back, keeping the latest few for the sparkline.
+    pub(crate) fn note_rate(&mut self, tokens_a_second: f64) {
+        self.rate = Some(tokens_a_second);
+        self.rates.push_back(tokens_a_second);
+        while self.rates.len() > crate::ui::rail::RATES_KEPT {
+            self.rates.pop_front();
+        }
     }
 
     /// Put a resumed session on screen: what was said, where it was said.

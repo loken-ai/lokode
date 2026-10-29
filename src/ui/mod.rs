@@ -8,6 +8,7 @@ mod highlight;
 mod input;
 mod markdown;
 pub mod picker;
+mod rail;
 pub mod sheet;
 mod state;
 pub mod status;

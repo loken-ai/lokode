@@ -51,6 +51,18 @@ const KEEP_RECENT: usize = 4;
 
 const ELISION: &str = "[earlier steps of this session were elided to fit the context window]";
 
+/// What the history holds against its budget, in characters, and who wrote it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Occupancy {
+    /// The share of the budget in use, as [`Session::fullness_percent`] says it.
+    pub percent: u8,
+    pub used: usize,
+    pub budget: usize,
+    /// The standing instructions, what the person said, what the model said and what the
+    /// tools returned, in that order.
+    pub parts: Vec<(&'static str, usize)>,
+}
+
 /// Conversation state for a single TUI session.
 pub struct Session {
     pub id: String,
@@ -240,6 +252,31 @@ impl Session {
             return 0;
         }
         ((self.size_chars() * 100 / self.budget_chars) as u64).min(255) as u8
+    }
+
+    /// What the history holds against its budget, and who wrote it.
+    pub fn measure(&self) -> Occupancy {
+        let mut parts = [
+            ("instructions", 0usize),
+            ("you", 0),
+            ("model", 0),
+            ("tools", 0),
+        ];
+        for m in &self.history {
+            let at = match m.role.as_str() {
+                "system" => 0,
+                "user" => 1,
+                "assistant" => 2,
+                _ => 3,
+            };
+            parts[at].1 += m.content.len() + m.role.len();
+        }
+        Occupancy {
+            percent: self.fullness_percent(),
+            used: self.size_chars(),
+            budget: self.budget_chars,
+            parts: parts.to_vec(),
+        }
     }
 
     /// What is holding the window, by kind, largest first.
