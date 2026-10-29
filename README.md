@@ -34,6 +34,7 @@ The sections of this page. Those marked local rely on the model running on your 
 | [Sessions](#sessions) | every turn recorded and resumable |
 | [Roles](#one-model-per-kind-of-work) *(local)* | a model per kind of work, a reviewer, and a stronger model when a change fails its check |
 | [Checks](#changing-a-file) | the language server after every write, or the compiler where there is none |
+| [Navigation](#asking-the-language-server) | definitions, uses, implementations, callers and outlines from the language server |
 | [Background discovery](#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody waits, kept between sessions |
 | [Speculation](#using-it) *(local)* | the next read guessed while the model is still writing |
 | [The engine](#what-the-engine-measures) *(local)* | what loken measured of each request, its energy and the power of the machine |
@@ -335,6 +336,23 @@ bounded wait.
 When a change fails its check and a later change clears the same complaint, the fix is filed
 against the complaint. The next occurrence arrives with the note. Line and column numbers and
 paths are left out of the comparison. `/why` lists what has been learned.
+
+## Asking the language server
+
+| Tool | What it answers |
+|---|---|
+| `lsp_definition` | where a symbol is defined |
+| `lsp_references` | every place a symbol is used |
+| `lsp_implementations` | the implementations of a trait, an interface or an abstract method |
+| `lsp_calls` | the functions that call a function, or that it calls |
+| `lsp_hover` | the type and the documentation of a symbol |
+| `lsp_symbols` | the outline of a file, or the symbols matching a name across the project |
+| `lsp_diagnostics` | what the server reports about a file |
+
+A symbol is named by its file, its line and its name as written there. The column is
+optional. A name not found on the line is looked for on the lines around it, and the answer
+says where it was found. Each place found comes back as `path:line:column` with its source
+line.
 
 ## Taking something back
 

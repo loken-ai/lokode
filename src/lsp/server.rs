@@ -228,6 +228,11 @@ impl Server {
         Ok(server)
     }
 
+    /// The project the server was started on.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn caps(&self) -> Capabilities {
         self.caps.get().cloned().unwrap_or_default()
     }

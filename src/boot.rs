@@ -528,7 +528,7 @@ pub fn build_registry_with(
         bash::Bash,
         fs_read::{Glob, ListDir, ReadFile},
         fs_write::{ApplyPatch, EditFile, EditLines, WriteFile},
-        lsp::{LspDiagnostics, LspHover},
+        lsp::{LspAt, LspDiagnostics, LspSymbols},
         run_tests::RunTests,
         search::Grep,
         web_fetch::WebFetch,
@@ -551,7 +551,10 @@ pub fn build_registry_with(
     reg.register(WebFetch);
     let pool = LspPool::new(root);
     reg.register(LspDiagnostics { pool: pool.clone() });
-    reg.register(LspHover { pool: pool.clone() });
+    for tool in LspAt::all(&pool) {
+        reg.register(tool);
+    }
+    reg.register(LspSymbols { pool: pool.clone() });
     ((reg, pool), tasks)
 }
 

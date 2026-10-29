@@ -102,81 +102,567 @@ impl Tool for LspDiagnostics {
     }
 }
 
-pub struct LspHover {
+/// What a tool that answers about one symbol asks of the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
+    Definition,
+    References,
+    Implementations,
+    Hover,
+    Calls,
+}
+
+/// A tool that answers about the symbol at a place in a file.
+pub struct LspAt {
+    pub pool: Arc<LspPool>,
+    pub op: Op,
+}
+
+impl LspAt {
+    /// The five tools that answer about one symbol.
+    pub fn all(pool: &Arc<LspPool>) -> Vec<Self> {
+        [
+            Op::Definition,
+            Op::References,
+            Op::Implementations,
+            Op::Hover,
+            Op::Calls,
+        ]
+        .into_iter()
+        .map(|op| Self {
+            pool: pool.clone(),
+            op,
+        })
+        .collect()
+    }
+}
+
+#[derive(Deserialize)]
+struct AtArgs {
+    path: PathBuf,
+    /// 1-indexed line.
+    line: u32,
+    /// The symbol as it is written on that line.
+    #[serde(default)]
+    symbol: Option<String>,
+    /// 1-indexed column, in characters, when the symbol is not named.
+    #[serde(default)]
+    column: Option<u32>,
+    /// For calls: "incoming" or "outgoing".
+    #[serde(default)]
+    direction: Option<String>,
+}
+
+#[async_trait]
+impl Tool for LspAt {
+    fn name(&self) -> &str {
+        match self.op {
+            Op::Definition => "lsp_definition",
+            Op::References => "lsp_references",
+            Op::Implementations => "lsp_implementations",
+            Op::Hover => "lsp_hover",
+            Op::Calls => "lsp_calls",
+        }
+    }
+    fn description(&self) -> &str {
+        match self.op {
+            Op::Definition => {
+                "Where a symbol is defined, from the language server. Name the file, the line \
+                 and the symbol as it is written on that line."
+            }
+            Op::References => {
+                "Every place a symbol is used, from the language server. Prefer it to grep to \
+                 find the uses of a function, type, field or variable."
+            }
+            Op::Implementations => {
+                "The implementations of a trait, an interface or an abstract method."
+            }
+            Op::Hover => "The type and the documentation of a symbol, from the language server.",
+            Op::Calls => {
+                "The functions that call a function (incoming), or that it calls (outgoing)."
+            }
+        }
+    }
+    fn args_schema(&self) -> Value {
+        let mut props = json!({
+            "path":   {"type": "string"},
+            "line":   {"type": "integer", "minimum": 1},
+            "symbol": {"type": "string", "description": "the name as written on that line"},
+            "column": {"type": "integer", "minimum": 1}
+        });
+        if self.op == Op::Calls {
+            props["direction"] = json!({"type": "string", "enum": ["incoming", "outgoing"]});
+        }
+        json!({
+            "type": "object",
+            "properties": props,
+            "required": ["path", "line"],
+            "additionalProperties": false
+        })
+    }
+    async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
+        let a: AtArgs = serde_json::from_value(args)?;
+        let at = match locate(&self.pool, ctx, &a).await {
+            Ok(at) => at,
+            Err(why) => return Ok(ToolOutput::err(why)),
+        };
+        let caps = at.server.caps();
+        let (offered, what) = match self.op {
+            Op::Definition => (caps.definition, "definitions"),
+            Op::References => (caps.references, "references"),
+            Op::Implementations => (caps.implementation, "implementations"),
+            Op::Hover => (caps.hover, "hover"),
+            Op::Calls => (caps.call_hierarchy, "call hierarchies"),
+        };
+        if !offered {
+            return Ok(ToolOutput::err(format!(
+                "{} does not answer {what}",
+                at.server.spec.command
+            )));
+        }
+        let position = json!({
+            "textDocument": {"uri": at.uri},
+            "position": {"line": at.line, "character": at.character}
+        });
+        let answer = match self.op {
+            Op::Definition => at.server.request("textDocument/definition", position).await,
+            Op::Implementations => {
+                at.server
+                    .request("textDocument/implementation", position)
+                    .await
+            }
+            Op::Hover => at.server.request("textDocument/hover", position).await,
+            Op::References => {
+                let mut params = position;
+                params["context"] = json!({"includeDeclaration": false});
+                at.server.request("textDocument/references", params).await
+            }
+            Op::Calls => calls(&at, a.direction.as_deref()).await,
+        };
+        let answer = match answer {
+            Ok(v) => v,
+            Err(e) => return Ok(ToolOutput::err(format!("{e:#}"))),
+        };
+        let said = match self.op {
+            Op::Hover => match answer.get("contents") {
+                Some(c) => pretty_contents(c),
+                None => format!("nothing is known of `{}`", at.name),
+            },
+            Op::Calls => answer.as_str().unwrap_or_default().to_string(),
+            _ => {
+                let found = locations(&answer);
+                match found.is_empty() {
+                    true => format!("the language server found no {what} of `{}`", at.name),
+                    false => show_locations(&at.server, &ctx.root, &found).await,
+                }
+            }
+        };
+        let said = match &at.moved {
+            Some(note) => format!("{note}\n{said}"),
+            None => said,
+        };
+        Ok(ToolOutput::ok(said))
+    }
+}
+
+/// A symbol found in a file: the server that answers for it and where it is, in the
+/// server's units.
+struct At {
+    server: Arc<crate::lsp::server::Server>,
+    uri: lsp_types::Url,
+    line: u32,
+    character: u32,
+    name: String,
+    /// Said when the symbol was found on another line than the one given.
+    moved: Option<String>,
+}
+
+/// How far from the line given a named symbol is looked for.
+const NEARBY_LINES: usize = 3;
+
+/// Find the symbol `a` names, starting the server for its file.
+async fn locate(pool: &LspPool, ctx: &ToolCtx, a: &AtArgs) -> Result<At, String> {
+    let path = allowlist::resolve(&ctx.root, &a.path, true)
+        .map_err(|e| allowlist::refusal(&ctx.root, &a.path, &e))?;
+    let server = pool.server_for(&path).await?;
+    let (uri, _, _) = server
+        .sync(&path)
+        .await
+        .map_err(|e| format!("could not reach the language server: {e:#}"))?;
+    let text = server.text_of(&path).await.unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    let given = a.line.saturating_sub(1) as usize;
+    let shown = ctx.short(&path);
+    let (line, column, name, moved) = match (&a.symbol, a.column) {
+        (Some(symbol), _) if !symbol.trim().is_empty() => {
+            let symbol = symbol.trim();
+            let (line, column) = find_symbol(&lines, given, symbol).ok_or_else(|| {
+                format!(
+                    "`{symbol}` is not on line {} of {shown} or near it. That line reads: {}",
+                    a.line,
+                    lines
+                        .get(given)
+                        .map(|l| l.trim())
+                        .unwrap_or("(past the end)")
+                )
+            })?;
+            let moved = (line != given).then(|| format!("(`{symbol}` is on line {})", line + 1));
+            (line, column, symbol.to_string(), moved)
+        }
+        (_, Some(column)) => {
+            let source = lines.get(given).copied().unwrap_or("");
+            let column = column.saturating_sub(1) as usize;
+            (given, column, word_at(source, column), None)
+        }
+        _ => return Err("name the symbol, as it is written on that line".into()),
+    };
+    let character = position::units(
+        lines.get(line).copied().unwrap_or(""),
+        column,
+        server.caps().encoding,
+    );
+    Ok(At {
+        server,
+        uri,
+        line: line as u32,
+        character,
+        name,
+        moved,
+    })
+}
+
+/// The line and character column of `symbol` as a whole word, on line `given` or the
+/// nearest line to it that has it.
+fn find_symbol(lines: &[&str], given: usize, symbol: &str) -> Option<(usize, usize)> {
+    let nearby = std::iter::once(given).chain((1..=NEARBY_LINES).flat_map(|d| {
+        [given.checked_sub(d), Some(given + d)]
+            .into_iter()
+            .flatten()
+    }));
+    for line in nearby {
+        let Some(text) = lines.get(line) else {
+            continue;
+        };
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        for (at, _) in text.match_indices(symbol) {
+            let before = text[..at].chars().next_back();
+            let after = text[at + symbol.len()..].chars().next();
+            if !word(before) && !word(after) {
+                return Some((line, text[..at].chars().count()));
+            }
+        }
+    }
+    None
+}
+
+/// The word around character `column` of `line`.
+fn word_at(line: &str, column: usize) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let is = |c: &char| c.is_alphanumeric() || *c == '_';
+    let mut from = column.min(chars.len());
+    while from > 0 && is(&chars[from - 1]) {
+        from -= 1;
+    }
+    let mut to = column.min(chars.len());
+    while to < chars.len() && is(&chars[to]) {
+        to += 1;
+    }
+    chars[from..to].iter().collect()
+}
+
+/// Who calls the function at `at`, or what it calls, as text.
+async fn calls(at: &At, direction: Option<&str>) -> Result<Value> {
+    let items = at
+        .server
+        .request(
+            "textDocument/prepareCallHierarchy",
+            json!({
+                "textDocument": {"uri": at.uri},
+                "position": {"line": at.line, "character": at.character}
+            }),
+        )
+        .await?;
+    let Some(item) = items.as_array().and_then(|a| a.first()).cloned() else {
+        return Ok(Value::String(format!(
+            "`{}` is not a function the server knows",
+            at.name
+        )));
+    };
+    let outgoing = direction == Some("outgoing");
+    let (method, side) = match outgoing {
+        true => ("callHierarchy/outgoingCalls", "to"),
+        false => ("callHierarchy/incomingCalls", "from"),
+    };
+    let found = at.server.request(method, json!({"item": item})).await?;
+    let mut out = Vec::new();
+    for call in found.as_array().into_iter().flatten().take(LISTED) {
+        let Some(other) = call.get(side) else {
+            continue;
+        };
+        let name = other.get("name").and_then(Value::as_str).unwrap_or("?");
+        let place = locations(&json!({
+            "uri": other.get("uri"),
+            "range": other.get("selectionRange").or(other.get("range"))
+        }));
+        out.push(match place.first() {
+            Some((uri, range)) => format!(
+                "{name}  {}:{}",
+                short_uri(uri, &at.server_root()),
+                range.start.line + 1
+            ),
+            None => name.to_string(),
+        });
+    }
+    let what = match outgoing {
+        true => format!("`{}` calls", at.name),
+        false => format!("`{}` is called by", at.name),
+    };
+    Ok(Value::String(match out.is_empty() {
+        true => format!("{what} nothing the server knows of"),
+        false => format!("{what}:\n{}", out.join("\n")),
+    }))
+}
+
+impl At {
+    fn server_root(&self) -> PathBuf {
+        self.server.root().to_path_buf()
+    }
+}
+
+/// The places a definition, implementation or references answer names.
+fn locations(answer: &Value) -> Vec<(lsp_types::Url, lsp_types::Range)> {
+    let one = |v: &Value| -> Option<(lsp_types::Url, lsp_types::Range)> {
+        let uri = v.get("uri").or(v.get("targetUri"))?.as_str()?;
+        let range = v.get("range").or(v.get("targetSelectionRange"))?;
+        Some((
+            lsp_types::Url::parse(uri).ok()?,
+            serde_json::from_value(range.clone()).ok()?,
+        ))
+    };
+    match answer {
+        Value::Array(list) => list.iter().filter_map(one).collect(),
+        Value::Object(_) => one(answer).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A path as the project names it, or whole when it is outside the project.
+fn short_uri(uri: &lsp_types::Url, root: &std::path::Path) -> String {
+    let path = uri.to_file_path().unwrap_or_default();
+    match path.strip_prefix(root) {
+        Ok(rel) => rel.display().to_string(),
+        Err(_) => format!("{} (outside the project)", path.display()),
+    }
+}
+
+/// One line per place: where it is, in characters, and the source line there.
+async fn show_locations(
+    server: &crate::lsp::server::Server,
+    root: &std::path::Path,
+    found: &[(lsp_types::Url, lsp_types::Range)],
+) -> String {
+    let mut out = Vec::new();
+    for (uri, range) in found.iter().take(LISTED) {
+        let path = uri.to_file_path().unwrap_or_default();
+        let text = server.text_of(&path).await.unwrap_or_default();
+        let source = text.lines().nth(range.start.line as usize).unwrap_or("");
+        let column = position::chars(source, range.start.character, server.caps().encoding) + 1;
+        out.push(format!(
+            "{}:{}:{column}  {}",
+            short_uri(uri, root),
+            range.start.line + 1,
+            source.trim()
+        ));
+    }
+    if found.len() > LISTED {
+        out.push(format!("and {} more", found.len() - LISTED));
+    }
+    out.join("\n")
+}
+
+/// The outline of a file, or the symbols matching a name across the project.
+pub struct LspSymbols {
     pub pool: Arc<LspPool>,
 }
 
 #[derive(Deserialize)]
-struct HoverArgs {
-    path: PathBuf,
-    /// 1-indexed line.
-    line: u32,
-    /// 1-indexed column, in characters.
-    column: u32,
+struct SymbolArgs {
+    #[serde(default)]
+    path: Option<PathBuf>,
+    #[serde(default)]
+    query: Option<String>,
 }
 
 #[async_trait]
-impl Tool for LspHover {
+impl Tool for LspSymbols {
     fn name(&self) -> &str {
-        "lsp_hover"
+        "lsp_symbols"
     }
     fn description(&self) -> &str {
-        "Get type/hover info at a 1-indexed (line, column) in a source file."
+        "With a path: the outline of that file, each type, function and field with its line. \
+         With a query: the symbols whose name matches it across the project. Prefer it to \
+         reading a whole file to find where something is."
     }
     fn args_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path":   {"type": "string"},
-                "line":   {"type": "integer", "minimum": 1},
-                "column": {"type": "integer", "minimum": 1}
+                "path":  {"type": "string"},
+                "query": {"type": "string"}
             },
-            "required": ["path", "line", "column"],
             "additionalProperties": false
         })
     }
     async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
-        let a: HoverArgs = serde_json::from_value(args)?;
-        let path = match allowlist::resolve(&ctx.root, &a.path, true) {
-            Ok(p) => p,
-            Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
-        };
-        let server = match self.pool.server_for(&path).await {
-            Ok(s) => s,
-            Err(why) => return Ok(ToolOutput::err(why)),
-        };
-        // The line and column mean nothing against an older copy of the file.
-        let uri = match server.sync(&path).await {
-            Ok((uri, _, _)) => uri,
-            Err(e) => {
-                return Ok(ToolOutput::err(format!(
-                    "could not reach the language server: {e:#}"
-                )))
-            }
-        };
-        let text = server.text_of(&path).await.unwrap_or_default();
-        let line = a.line.saturating_sub(1);
-        let character = position::units(
-            text.lines().nth(line as usize).unwrap_or(""),
-            a.column.saturating_sub(1) as usize,
-            server.caps().encoding,
-        );
-        let params = json!({
-            "textDocument": {"uri": uri},
-            "position": {"line": line, "character": character}
-        });
-        let reply = match server.request("textDocument/hover", params).await {
-            Ok(r) => r,
-            Err(e) => return Ok(ToolOutput::err(format!("hover failed: {e:#}"))),
-        };
-        if reply.is_null() {
-            return Ok(ToolOutput::ok("(no hover info)"));
+        let a: SymbolArgs = serde_json::from_value(args)?;
+        match (a.path, a.query) {
+            (Some(path), _) => Ok(outline(&self.pool, ctx, &path).await),
+            (None, Some(query)) => Ok(search(&self.pool, ctx, &query).await),
+            (None, None) => Ok(ToolOutput::err("give a path for an outline, or a query")),
         }
-        let txt = reply
-            .get("contents")
-            .map(pretty_contents)
-            .unwrap_or_else(|| reply.to_string());
-        Ok(ToolOutput::ok(txt))
+    }
+}
+
+async fn outline(pool: &LspPool, ctx: &ToolCtx, path: &std::path::Path) -> ToolOutput {
+    let path = match allowlist::resolve(&ctx.root, path, true) {
+        Ok(p) => p,
+        Err(e) => return ToolOutput::err(allowlist::refusal(&ctx.root, path, &e)),
+    };
+    let server = match pool.server_for(&path).await {
+        Ok(s) => s,
+        Err(why) => return ToolOutput::err(why),
+    };
+    if !server.caps().document_symbol {
+        return ToolOutput::err(format!("{} gives no outline", server.spec.command));
+    }
+    let uri = match server.sync(&path).await {
+        Ok((uri, _, _)) => uri,
+        Err(e) => return ToolOutput::err(format!("could not reach the language server: {e:#}")),
+    };
+    let answer = match server
+        .request(
+            "textDocument/documentSymbol",
+            json!({"textDocument": {"uri": uri}}),
+        )
+        .await
+    {
+        Ok(a) => a,
+        Err(e) => return ToolOutput::err(format!("{e:#}")),
+    };
+    let mut out = Vec::new();
+    for symbol in answer.as_array().into_iter().flatten() {
+        outline_lines(symbol, 0, &mut out);
+    }
+    if out.is_empty() {
+        return ToolOutput::ok(format!(
+            "{} declares nothing the server lists",
+            ctx.short(&path)
+        ));
+    }
+    let total = out.len();
+    out.truncate(OUTLINE_LISTED);
+    if total > OUTLINE_LISTED {
+        out.push(format!("and {} more", total - OUTLINE_LISTED));
+    }
+    ToolOutput::ok(out.join("\n"))
+}
+
+/// How many lines an outline lists before it counts the rest.
+const OUTLINE_LISTED: usize = 200;
+
+/// One line per symbol, nested under its parent: its line, its kind and its name.
+fn outline_lines(symbol: &Value, depth: usize, out: &mut Vec<String>) {
+    let name = symbol.get("name").and_then(Value::as_str).unwrap_or("?");
+    let kind = symbol_kind(symbol.get("kind").and_then(Value::as_u64).unwrap_or(0));
+    let line = symbol
+        .get("selectionRange")
+        .or(symbol.get("location").and_then(|l| l.get("range")))
+        .and_then(|r| r.get("start"))
+        .and_then(|s| s.get("line"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        + 1;
+    out.push(format!("{line:>5}  {}{kind} {name}", "  ".repeat(depth)));
+    for child in symbol
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        outline_lines(child, depth + 1, out);
+    }
+}
+
+async fn search(pool: &LspPool, ctx: &ToolCtx, query: &str) -> ToolOutput {
+    let servers = pool.running().await;
+    if servers.is_empty() {
+        return ToolOutput::err(
+            "no language server is running yet: ask about a file of the project first",
+        );
+    }
+    let mut out = Vec::new();
+    for server in servers.iter().filter(|s| s.caps().workspace_symbol) {
+        let Ok(answer) = server
+            .request("workspace/symbol", json!({"query": query}))
+            .await
+        else {
+            continue;
+        };
+        for symbol in answer.as_array().into_iter().flatten() {
+            let name = symbol.get("name").and_then(Value::as_str).unwrap_or("?");
+            let kind = symbol_kind(symbol.get("kind").and_then(Value::as_u64).unwrap_or(0));
+            let place = locations(symbol.get("location").unwrap_or(&Value::Null));
+            let Some((uri, range)) = place.first() else {
+                continue;
+            };
+            out.push(format!(
+                "{kind} {name}  {}:{}",
+                short_uri(uri, &ctx.root),
+                range.start.line + 1
+            ));
+        }
+    }
+    if out.is_empty() {
+        return ToolOutput::ok(format!("no symbol matches `{query}`"));
+    }
+    let total = out.len();
+    out.truncate(LISTED);
+    if total > LISTED {
+        out.push(format!("and {} more", total - LISTED));
+    }
+    ToolOutput::ok(out.join("\n"))
+}
+
+/// The protocol's symbol kinds, as words.
+fn symbol_kind(kind: u64) -> &'static str {
+    match kind {
+        1 => "file",
+        2 => "module",
+        3 => "namespace",
+        4 => "package",
+        5 => "class",
+        6 => "method",
+        7 => "property",
+        8 => "field",
+        9 => "constructor",
+        10 => "enum",
+        11 => "interface",
+        12 => "fn",
+        13 => "variable",
+        14 => "constant",
+        15 => "string",
+        16 => "number",
+        17 => "boolean",
+        18 => "array",
+        19 => "object",
+        20 => "key",
+        21 => "null",
+        22 => "variant",
+        23 => "struct",
+        24 => "event",
+        25 => "operator",
+        26 => "type parameter",
+        _ => "symbol",
     }
 }
 
@@ -287,6 +773,123 @@ while True:
         true
     }
 
+    /// A symbol is found as a whole word, on the line given or the nearest one that has
+    /// it, and a column inside a word names that word.
+    #[test]
+    fn a_symbol_is_found_by_name_near_its_line() {
+        let lines = ["let total = sub_total + 1;", "", "fn total() {}"];
+        assert_eq!(find_symbol(&lines, 0, "total"), Some((0, 4)));
+        assert_eq!(find_symbol(&lines, 1, "total"), Some((0, 4)));
+        assert_eq!(find_symbol(&lines, 2, "total"), Some((2, 3)));
+        assert_eq!(find_symbol(&lines, 0, "sub"), None);
+        assert_eq!(word_at("let total = 1;", 6), "total");
+    }
+
+    /// A definition answers with one place, a list of places or links, and all read alike.
+    #[test]
+    fn places_are_read_from_every_shape_of_answer() {
+        let range =
+            json!({"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 9}});
+        let one = json!({"uri": "file:///p/a.rs", "range": range});
+        let link = json!({"targetUri": "file:///p/b.rs", "targetRange": range, "targetSelectionRange": range});
+        assert_eq!(locations(&one).len(), 1);
+        assert_eq!(locations(&json!([one, link])).len(), 2);
+        assert!(locations(&Value::Null).is_empty());
+    }
+
+    /// Against a real rust-analyzer: a definition, the uses, an outline, a hover and the
+    /// callers of a function, each addressed by its name on a line.
+    #[tokio::test]
+    #[ignore]
+    async fn rust_analyzer_answers_the_navigation_tools() {
+        let h = Harness::new(Answer::Yes);
+        h.write(
+            "Cargo.toml",
+            "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        );
+        h.write(
+            "src/lib.rs",
+            "/// Twice the value.\npub fn twice(x: u32) -> u32 {\n    x * 2\n}\n",
+        );
+        h.write(
+            "src/main.rs",
+            "fn main() {\n    let four = probe::twice(2);\n    println!(\"{four}\");\n}\n",
+        );
+        let pool = LspPool::new(h.root.clone());
+        let tool = |op| LspAt {
+            pool: pool.clone(),
+            op,
+        };
+        // The first answer can come before the project is indexed: asked again until it
+        // names the definition, within the time indexing takes.
+        let mut definition = String::new();
+        for _ in 0..30 {
+            definition = tool(Op::Definition)
+                .run(
+                    &h.ctx,
+                    json!({"path": "src/main.rs", "line": 2, "symbol": "twice"}),
+                )
+                .await
+                .unwrap()
+                .content;
+            if definition.contains("src/lib.rs:2") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        assert!(
+            definition.contains("src/lib.rs:2:8  pub fn twice"),
+            "{definition}"
+        );
+        let uses = tool(Op::References)
+            .run(
+                &h.ctx,
+                json!({"path": "src/lib.rs", "line": 2, "symbol": "twice"}),
+            )
+            .await
+            .unwrap();
+        assert!(uses.content.contains("src/main.rs:2"), "{}", uses.content);
+        let hover = tool(Op::Hover)
+            .run(
+                &h.ctx,
+                json!({"path": "src/main.rs", "line": 1, "symbol": "twice"}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            hover.content.contains("`twice` is on line 2"),
+            "{}",
+            hover.content
+        );
+        assert!(
+            hover.content.contains("Twice the value"),
+            "{}",
+            hover.content
+        );
+        let callers = tool(Op::Calls)
+            .run(
+                &h.ctx,
+                json!({"path": "src/lib.rs", "line": 2, "symbol": "twice"}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            callers.content.contains("main  src/main.rs:1"),
+            "{}",
+            callers.content
+        );
+        let outline = LspSymbols { pool: pool.clone() }
+            .run(&h.ctx, json!({"path": "src/lib.rs"}))
+            .await
+            .unwrap();
+        assert!(
+            outline.content.contains("2  fn twice"),
+            "{}",
+            outline.content
+        );
+        pool.shutdown().await;
+    }
+
     /// One function, because they share the process environment and a language-server pool.
     #[tokio::test]
     async fn the_language_server_tools_talk_to_a_server() {
@@ -325,10 +928,13 @@ while True:
         // Hover reaches the same server, which had its own request answered rather than
         // taken for an answer. The column is sent in UTF-16 units: the emoji counts two.
         h.write("a.rs", "// 🙂 x\n");
-        let hover = LspHover { pool: pool.clone() }
-            .run(&h.ctx, json!({"path": "a.rs", "line": 1, "column": 6}))
-            .await
-            .unwrap();
+        let hover = LspAt {
+            pool: pool.clone(),
+            op: Op::Hover,
+        }
+        .run(&h.ctx, json!({"path": "a.rs", "line": 1, "column": 6}))
+        .await
+        .unwrap();
         assert!(!hover.is_error, "{}", hover.content);
         assert!(
             hover
