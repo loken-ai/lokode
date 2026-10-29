@@ -66,6 +66,7 @@ impl Harness {
             auto_used: Arc::new(Default::default()),
             honour_allow: true,
             live: None,
+            call: None,
             root: root.clone(),
             approval: tx,
             session_approvals: Arc::new(SessionApprovals::new()),

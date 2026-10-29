@@ -99,6 +99,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         // A script reads the result; a person watches the build. Only the second wants
         // it a line at a time.
         live: (!cfg.headless).then(|| live_tx.clone()),
+        call: None,
         root: cfg.root.clone(),
         approval: approval_tx,
         session_approvals: session_approvals.clone(),

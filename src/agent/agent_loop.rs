@@ -2048,7 +2048,9 @@ impl Agent {
                 let ran_at = std::time::Instant::now();
                 let ran = futures::future::join_all(fresh.iter().map(|call| async {
                     let started = std::time::Instant::now();
-                    let out = self.dispatch_tool(&call.name, call.arguments.clone()).await;
+                    let out = self
+                        .dispatch_tool(&call.id, &call.name, call.arguments.clone())
+                        .await;
                     (out, started.elapsed())
                 }))
                 .await;
@@ -2791,7 +2793,12 @@ impl Agent {
         unreachable!()
     }
 
-    async fn dispatch_tool(&self, name: &str, args: Value) -> ToolOutput {
+    async fn dispatch_tool(&self, id: &str, name: &str, args: Value) -> ToolOutput {
+        // The call's own context, so what the tool prints carries the id of its step.
+        let ctx = crate::tools::registry::ToolCtx {
+            call: Some(id.to_string()),
+            ..self.ctx.clone()
+        };
         let Some(tool) = self.registry.get(name) else {
             tracing::warn!(tool = name, "model called a tool that does not exist");
             // Named rather than merely refused. A model that invents `list_files` means
@@ -2827,7 +2834,7 @@ impl Agent {
             }
         }
         let started = std::time::Instant::now();
-        let out = match tool.run(&self.ctx, args).await {
+        let out = match tool.run(&ctx, args).await {
             Ok(o) => o,
             Err(e) => ToolOutput::err(format!("tool '{name}' failed: {e:#}")),
         };

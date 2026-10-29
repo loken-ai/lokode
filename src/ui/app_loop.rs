@@ -493,7 +493,7 @@ async fn run_ui(
                 // Kept as one entry that grows rather than a line each: a build's output
                 // is one thing happening, and a hundred entries would push the answer it
                 // belongs to off the screen.
-                state.print_line(&printed.tool, &printed.line);
+                state.print_line(printed.call.as_deref(), &printed.tool, &printed.line);
             }
 
             Some(learned) = learn_rx.recv() => {

@@ -145,11 +145,29 @@ impl Tool for Delegate {
             turn: 0,
         };
 
+        // Each call the sub-session makes is shown as it is made, under this call's step,
+        // so delegated work running side by side is seen as lanes rather than as silence.
         let cancel = ctx.cancel.clone();
-        let events = match sub.collect_turn(a.task, cancel).await {
-            Ok(events) => events,
-            Err(e) => return Ok(ToolOutput::err(format!("the delegated turn failed: {e:#}"))),
-        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let shown = ctx.clone();
+        let drain = tokio::spawn(async move {
+            let mut events = Vec::new();
+            while let Some(event) = rx.recv().await {
+                if let crate::agent::agent_loop::AgentEvent::ToolCall {
+                    name, args_pretty, ..
+                } = &event
+                {
+                    shown.show("delegate", &format!("{name}  {}", subject_of(args_pretty)));
+                }
+                events.push(event);
+            }
+            events
+        });
+        let outcome = sub.run_user_turn(a.task, cancel, tx).await;
+        let events = drain.await.unwrap_or_default();
+        if let Err(e) = outcome {
+            return Ok(ToolOutput::err(format!("the delegated turn failed: {e:#}")));
+        }
         let mut answer = String::new();
         let mut notices = Vec::new();
         for event in events {
@@ -180,4 +198,13 @@ impl Tool for Delegate {
         );
         Ok(ToolOutput::ok(ctx.clamp(answer)))
     }
+}
+/// What a call acts on, in a few words, from the argument that names it.
+fn subject_of(args: &str) -> String {
+    let parsed: Value = serde_json::from_str(args).unwrap_or(Value::Null);
+    ["path", "pattern", "cmd", "url", "task", "file", "target"]
+        .iter()
+        .find_map(|k| parsed.get(*k).and_then(|v| v.as_str()))
+        .map(|s| s.lines().next().unwrap_or("").chars().take(80).collect())
+        .unwrap_or_default()
 }

@@ -480,6 +480,7 @@ mod tests {
             auto_used: Arc::new(Default::default()),
             honour_allow: true,
             live: None,
+            call: None,
             root: std::env::temp_dir(),
             approval: tx,
             session_approvals: Arc::new(SessionApprovals::new()),

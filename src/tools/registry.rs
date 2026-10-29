@@ -26,6 +26,9 @@ pub struct ToolCtx {
     /// from a build that has hung. `None` for a caller with no screen: a script reads the
     /// result, and a line at a time would only be noise in its log.
     pub live: Option<tokio::sync::mpsc::Sender<LiveOutput>>,
+    /// The id of the call being run, so what it prints reaches the step it belongs to
+    /// when calls to the same tool run side by side. `None` outside a call.
+    pub call: Option<String>,
     /// Whether the configuration's allow list applies.
     ///
     /// False for a run driven by a script, where the policy stated on the command line is
@@ -199,6 +202,7 @@ impl ToolCtx {
         if let Some(live) = &self.live {
             let _ = live.try_send(LiveOutput {
                 tool: tool.to_string(),
+                call: self.call.clone(),
                 line: line.to_string(),
             });
         }
@@ -233,6 +237,8 @@ impl ToolCtx {
 #[derive(Debug, Clone)]
 pub struct LiveOutput {
     pub tool: String,
+    /// The id of the call printing it, when it is printed from inside one.
+    pub call: Option<String>,
     pub line: String,
 }
 

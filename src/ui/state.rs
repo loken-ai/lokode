@@ -418,6 +418,13 @@ impl UiState {
             .rposition(|e| matches!(e, Entry::Step(s) if s.name == tool && s.outcome.is_none()))
     }
 
+    /// Where the running step of the call `id` sits, if one is.
+    fn step_of_call(&self, id: &str) -> Option<usize> {
+        self.entries
+            .iter()
+            .rposition(|e| matches!(e, Entry::Step(s) if s.id == id && s.outcome.is_none()))
+    }
+
     /// Settle the step a result answers, found by the id the call and the result share.
     ///
     /// What it printed while it ran goes: the result holds the whole of it. A result whose
@@ -474,8 +481,15 @@ impl UiState {
     /// Add a line a tool just printed to the step that is running it.
     ///
     /// A line from a tool with no step running is dropped: the result carries it anyway.
-    pub(crate) fn print_line(&mut self, tool: &str, line: &str) {
-        let Some(at) = self.step_running(tool) else {
+    pub(crate) fn print_line(&mut self, call: Option<&str>, tool: &str, line: &str) {
+        // By the call when the line says which, so calls to one tool side by side keep
+        // their lines apart. A call that is not a step here, one made inside a delegated
+        // session, prints nothing.
+        let at = match call {
+            Some(id) => self.step_of_call(id),
+            None => self.step_running(tool),
+        };
+        let Some(at) = at else {
             return;
         };
         let Entry::Step(Step { live: body, .. }) = &mut self.entries[at] else {
@@ -661,11 +675,11 @@ mod tests {
         state
             .entries
             .push(Entry::Step(Step::called("7".into(), "shell".into(), "{}")));
-        state.print_line("shell", "compiling");
+        state.print_line(None, "shell", "compiling");
         state
             .entries
             .push(Entry::Notice("context budget now".into()));
-        state.print_line("shell", "linking");
+        state.print_line(None, "shell", "linking");
         assert_eq!(state.entries.len(), 2);
         assert!(matches!(
             &state.entries[0],
@@ -688,6 +702,31 @@ mod tests {
             Entry::Step(Step { live, outcome: Some(_), .. }) if live.is_empty()
         ));
         assert_eq!(state.step_running("shell"), None);
+    }
+
+    /// Lines from two calls of one tool running side by side go to their own steps.
+    #[test]
+    fn calls_side_by_side_keep_their_lines_apart() {
+        let mut state = UiState::default();
+        state.entries.push(Entry::Step(Step::called(
+            "a".into(),
+            "delegate".into(),
+            "{}",
+        )));
+        state.entries.push(Entry::Step(Step::called(
+            "b".into(),
+            "delegate".into(),
+            "{}",
+        )));
+        state.print_line(Some("a"), "delegate", "read_file  src/x.rs");
+        state.print_line(Some("b"), "delegate", "grep  timeout");
+        state.print_line(Some("elsewhere"), "bash", "dropped");
+        let live = |at: usize| match &state.entries[at] {
+            Entry::Step(s) => s.live.clone(),
+            _ => String::new(),
+        };
+        assert_eq!(live(0), "read_file  src/x.rs");
+        assert_eq!(live(1), "grep  timeout");
     }
 
     /// An idle screen sets no timer; work, a held drag and a fresh remark each set one.
@@ -720,7 +759,7 @@ mod tests {
             .entries
             .push(Entry::Step(Step::called("1".into(), "shell".into(), "{}")));
         for i in 0..KEPT_OUTPUT_LINES + 50 {
-            state.print_line("shell", &format!("line {i}"));
+            state.print_line(None, "shell", &format!("line {i}"));
         }
         let Entry::Step(Step { live: body, .. }) = &state.entries[0] else {
             panic!("one block of output")
