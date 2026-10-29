@@ -56,6 +56,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Interface: keep the directory of a command handed back to correct with x.
 - Delegation: keep a delegated session to reading tools, and bound how many run at once.
 - MCP: answer a server's requests, fail at once what waits on a stopped one, and say in /mcp which servers run.
+- Checkpoints: name the git command that failed once, not twice.
 
 ### Removed
 

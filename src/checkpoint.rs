@@ -84,7 +84,7 @@ impl Checkpoints {
         };
 
         if !me.git_dir.join("HEAD").exists() {
-            me.git(&["init", "--quiet"]).await.context("git init")?;
+            me.git(&["init", "--quiet"]).await?;
             std::fs::write(me.git_dir.join("info").join("exclude"), EXCLUDES).ok();
         }
 
@@ -232,7 +232,7 @@ impl Checkpoints {
     }
 
     async fn commit(&self, label: &str, turn: u32) -> Result<Snapshot> {
-        self.git(&["add", "--all", "."]).await.context("git add")?;
+        self.git(&["add", "--all", "."]).await?;
         // `diff --cached --quiet` exits 1 when the index differs from HEAD, which is how an
         // empty commit is avoided without parsing anything.
         let unchanged = self
@@ -250,8 +250,7 @@ impl Checkpoints {
             "-m",
             &format!("lokode-turn:{turn} {label}"),
         ])
-        .await
-        .context("git commit")?;
+        .await?;
         Ok(Snapshot::Recorded(self.head().await?))
     }
 
