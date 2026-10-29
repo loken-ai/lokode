@@ -87,8 +87,10 @@ impl Mode {
 /// is asked here and answered on the channel the asker holds.
 pub enum Control {
     /// Start a tool server again, and take its tools again.
+    /// With `spec`, a server the session does not have is started as configured.
     RestartMcp {
         server: String,
+        spec: Option<Box<crate::config::McpServer>>,
         reply: tokio::sync::oneshot::Sender<String>,
     },
     /// Switch model, or, with no name, say what could be switched to.
@@ -1251,23 +1253,33 @@ impl Agent {
                     n => format!("started again; {n} message(s) dropped"),
                 });
             }
-            Control::RestartMcp { server, reply } => {
+            Control::RestartMcp {
+                server,
+                spec,
+                reply,
+            } => {
                 let old = crate::mcp::snapshot(&self.mcp)
                     .into_iter()
                     .find(|c| c.server == server);
-                let said = match old {
-                    None => format!("no server called {server}"),
-                    Some(old) => {
-                        let mut registry = (*self.registry).clone();
-                        match crate::mcp::restart(&old, &self.mcp, &mut registry).await {
-                            Ok(said) => {
-                                self.registry = Arc::new(registry);
-                                self.rebuild_preamble();
-                                said
-                            }
-                            Err(e) => format!("{server} did not start again: {e:#}"),
-                        }
+                let mut registry = (*self.registry).clone();
+                let started = match (old, spec) {
+                    (Some(old), _) => {
+                        Some(crate::mcp::restart(&old, &self.mcp, &mut registry).await)
                     }
+                    (None, Some(spec)) => Some(
+                        crate::mcp::add(&server, &spec, &self.ctx.root, &self.mcp, &mut registry)
+                            .await,
+                    ),
+                    (None, None) => None,
+                };
+                let said = match started {
+                    None => format!("no server called {server}"),
+                    Some(Ok(said)) => {
+                        self.registry = Arc::new(registry);
+                        self.rebuild_preamble();
+                        said
+                    }
+                    Some(Err(e)) => format!("{server} did not start: {e:#}"),
                 };
                 let _ = reply.send(said);
             }

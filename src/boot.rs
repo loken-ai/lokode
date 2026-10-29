@@ -87,7 +87,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // What answers the servers' questions, set once the backend is known below.
     let mcp_host: crate::mcp::host::SharedHost = Default::default();
     let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root, &mcp_host).await;
-    let mcp_clients: crate::mcp::Clients = Arc::new(std::sync::RwLock::new(mcp.clients.clone()));
+    let mcp_clients = crate::mcp::Servers::new(mcp.clients.clone(), mcp_host.clone());
     // The skills, offered by name and loaded when the model needs one.
     let (skills, skill_warnings) = crate::tools::skill::load(&crate::tools::skill::dirs(&cfg.root));
     if let Some(tool) = crate::tools::skill::LoadSkill::new(skills) {

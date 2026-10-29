@@ -376,6 +376,11 @@ fn prompt_arguments(text: &str) -> Result<serde_json::Map<String, serde_json::Va
 pub(crate) enum Ran {
     /// Something to put on screen.
     Said(String),
+    /// Something to put on screen now, and work whose word comes later.
+    Later {
+        said: String,
+        then: std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send>>,
+    },
     /// Instructions to hand the model as this turn's prompt.
     Prompt(String),
     /// A list to choose from, and the command to run with what is chosen.
@@ -397,6 +402,8 @@ pub(crate) struct CommandCtx<'a> {
     /// What is known about the project, for /digest.
     pub(crate) digest: &'a tokio::sync::Mutex<crate::agent::digest::Digest>,
     pub(crate) mcp: &'a [std::sync::Arc<crate::mcp::client::McpClient>],
+    /// The servers the configuration names, started or not, for signing in to one.
+    pub(crate) mcp_servers: &'a std::collections::BTreeMap<String, crate::config::McpServer>,
     /// The session being had now, so coming back to a session does not offer this one.
     pub(crate) session_id: &'a str,
     /// What has been agreed to here, which is the half of the policy that can change.
@@ -404,6 +411,62 @@ pub(crate) struct CommandCtx<'a> {
     /// A control request is answered between turns, so a command that needs one has to
     /// wait rather than sit silent behind a running turn.
     pub(crate) busy: bool,
+}
+
+/// Sign in to the server `name` over HTTP: the address is given at once, and the server is
+/// started again once the browser comes back.
+async fn login(
+    name: &str,
+    servers: &std::collections::BTreeMap<String, crate::config::McpServer>,
+    control: &mpsc::Sender<crate::agent::agent_loop::Control>,
+) -> Ran {
+    let Some(spec) = servers.get(name) else {
+        return Ran::Said(format!("no server called {name} is configured"));
+    };
+    let Some(url) = &spec.url else {
+        return Ran::Said(format!(
+            "{name} is a program lokode starts: there is nothing to sign in to"
+        ));
+    };
+    if let Some(var) = &spec.token_env {
+        return Ran::Said(format!("{name} takes its token from {var}"));
+    }
+    let settings = crate::mcp::oauth::Settings {
+        client_id: spec.client_id.clone(),
+        scopes: spec.scopes.clone(),
+    };
+    let pending = match crate::mcp::oauth::begin(url, &settings).await {
+        Ok(p) => p,
+        Err(e) => return Ran::Said(format!("{name}: {e:#}")),
+    };
+    let said = match crate::mcp::oauth::open_browser(&pending.url) {
+        true => format!("sign in to {name} in the browser, or open {}", pending.url),
+        false => format!("open this to sign in to {name}: {}", pending.url),
+    };
+    let (name, spec, control) = (name.to_string(), spec.clone(), control.clone());
+    Ran::Later {
+        said,
+        then: Box::pin(async move {
+            if let Err(e) = pending.finish().await {
+                return format!("{name}: {e:#}");
+            }
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let asked = control
+                .send(crate::agent::agent_loop::Control::RestartMcp {
+                    server: name.clone(),
+                    spec: Some(Box::new(spec)),
+                    reply: tx,
+                })
+                .await;
+            match asked {
+                Ok(()) => format!(
+                    "signed in to {name}; {}",
+                    rx.await.unwrap_or_else(|_| "the agent said nothing".into())
+                ),
+                Err(_) => format!("signed in to {name}"),
+            }
+        }),
+    }
 }
 
 /// Answer a slash command.
@@ -420,6 +483,7 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         tools,
         digest,
         mcp,
+        mcp_servers,
         session_id,
         approvals,
         busy,
@@ -521,6 +585,7 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                 if control
                     .send(crate::agent::agent_loop::Control::RestartMcp {
                         server: name.to_string(),
+                        spec: None,
                         reply: tx,
                     })
                     .await
@@ -529,6 +594,19 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                     return Ran::Said("the agent is not listening".into());
                 }
                 return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
+            }
+            (Some("login"), Some(name)) if !mcp.iter().any(|c| c.server == "login") => {
+                return login(name, mcp_servers, control).await;
+            }
+            (Some("logout"), Some(name)) if !mcp.iter().any(|c| c.server == "logout") => {
+                let Some(url) = mcp_servers.get(name).and_then(|s| s.url.clone()) else {
+                    return Ran::Said(format!("no server over HTTP called {name}"));
+                };
+                return Ran::Said(match crate::mcp::oauth::forget(&url) {
+                    Ok(true) => format!("signed out of {name}; it stays reached until restarted"),
+                    Ok(false) => format!("{name} was not signed in"),
+                    Err(e) => format!("{name}: {e:#}"),
+                });
             }
             (Some(server), Some(prompt)) => {
                 let Some(client) = mcp.iter().find(|c| c.server == server) else {
@@ -1109,7 +1187,7 @@ pub(crate) const HELP: &str = "\
 /agents the agents a turn can hand work to, and what each may use
 /skills the skills the model can load, and what each is for
 /plugins the plugins installed, what each brings, and which are off
-/mcp    the tool servers, /mcp <server> <prompt> to take a prompt, /mcp restart <server>
+/mcp    the tool servers, /mcp <server> <prompt>, /mcp restart|login|logout <server>
 /clear  start the conversation again, keeping the project and the model
 /resume come back to a session recorded earlier, choosing from what there is
 /help   this, and any command the project defines";

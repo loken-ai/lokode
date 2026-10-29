@@ -813,6 +813,11 @@ timeout = 30                       # seconds for one answer, the handshake inclu
 url = "https://mcp.example.com/mcp"   # spoken to over HTTP, in place of a command
 token-env = "DOCS_TOKEN"              # sent as Authorization: Bearer
 headers = { "X-Team" = "lokode" }
+
+[mcp.servers.tracker]
+url = "https://tracker.example.com/mcp"   # signed in to with /mcp login tracker
+client-id = "..."                         # only where the server does not register clients
+scopes = ["read"]                         # only where the server does not say
 ```
 
 - Every call is approved, and treated as able to change the project, unless the server marks
@@ -840,6 +845,16 @@ what a stopped one said last. It lists the prompts and what each takes.
 `/mcp <server> <prompt> name=value` makes one the turn's prompt. A value in double quotes takes
 spaces, and an argument the prompt needs is asked for before the server is.
 `/mcp restart <server>` starts a server again as it was configured, and takes its tools again.
+
+`/mcp login <server>` signs in to a server over HTTP that wants a signed-in user:
+
+- The browser opens at the server's sign-in page, and the address is written in the thread.
+- The browser comes back to a port on the loopback address. The code it brings is bound to a
+  secret that never leaves lokode.
+- The token is kept in `mcp-tokens.json` in the data directory, readable by you alone, and
+  renewed when it runs out.
+- The server starts once you are signed in, a server that would not start included.
+- `/mcp logout <server>` forgets the token.
 
 ## Without the interface
 

@@ -78,6 +78,8 @@ struct Http {
     headers: Vec<(String, String)>,
     /// The session the server gave at the handshake, sent back with every message.
     session: Mutex<Option<String>>,
+    /// Whether the token kept from signing in is sent, the configuration naming none.
+    signs_in: bool,
 }
 
 /// One of a server's prompts, with what it takes.
@@ -179,6 +181,9 @@ impl McpClient {
         timeout: Duration,
         host: super::host::SharedHost,
     ) -> Result<Arc<Self>> {
+        let signs_in = !headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("authorization"));
         let shared = Arc::new(Shared {
             server: server.to_string(),
             stdin: None,
@@ -200,6 +205,7 @@ impl McpClient {
                 url: url.to_string(),
                 headers,
                 session: Mutex::new(None),
+                signs_in,
             }),
             shared,
             next_id: AtomicI64::new(1),
@@ -234,7 +240,7 @@ impl McpClient {
             Err(e) => {
                 let tail = client.stderr_tail().await;
                 client.shutdown().await;
-                return Err(anyhow!("{server} did not initialise: {e}{tail}"));
+                return Err(anyhow!("{server} did not initialise: {e:#}{tail}"));
             }
         };
         let version = init
@@ -597,6 +603,13 @@ impl McpClient {
         if let Some(session) = http.session.lock().await.clone() {
             req = req.header("Mcp-Session-Id", session);
         }
+        if http.signs_in {
+            match super::oauth::bearer(&http.client, &http.url).await {
+                Ok(Some(token)) => req = req.bearer_auth(token),
+                Ok(None) => {}
+                Err(e) => anyhow::bail!("{e:#}: sign in again with /mcp login {}", self.server),
+            }
+        }
         if !self.version.is_empty() {
             req = req.header("MCP-Protocol-Version", &self.version);
         }
@@ -609,6 +622,12 @@ impl McpClient {
             *http.session.lock().await = Some(session.to_string());
         }
         let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED && http.signs_in {
+            anyhow::bail!(
+                "the server wants a signed-in user: /mcp login {}",
+                self.server
+            );
+        }
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("the server answered {status}: {}", body.trim());

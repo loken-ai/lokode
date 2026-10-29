@@ -358,6 +358,8 @@ async fn run_ui(
     // while nothing else does, so the token is fired the moment a turn starts: the user's
     // work must never wait behind work nobody asked for.
     let (learn_tx, mut learn_rx) = mpsc::channel::<Option<String>>(4);
+    // What a command said once its work in the background was over.
+    let (later_tx, mut later_rx) = mpsc::channel::<String>(4);
     let mut discovering: Option<CancellationToken> = None;
 
     let mut state = UiState {
@@ -556,6 +558,8 @@ async fn run_ui(
                 state.at_entry = None;
                 state.ask(question);
             }
+
+            Some(said) = later_rx.recv() => state.entries.push(Entry::Notice(said)),
 
             Some(power) = power_rx.recv() => state.note_power(power),
 
@@ -1198,6 +1202,7 @@ async fn run_ui(
                                             tools: &tools,
                                             digest: &digest,
                                             mcp: &crate::mcp::snapshot(&mcp),
+                                            mcp_servers: &cfg.mcp_servers,
                                             session_id: &session_id,
                                             approvals: &session_approvals,
                                             busy: state.busy,
@@ -1206,6 +1211,13 @@ async fn run_ui(
                                     .await;
                                     match ran {
                                         Ran::Said(reply) => show(&mut state, &verb, reply),
+                                        Ran::Later { said, then } => {
+                                            state.entries.push(Entry::Notice(said));
+                                            let later = later_tx.clone();
+                                            tokio::spawn(async move {
+                                                let _ = later.send(then.await).await;
+                                            });
+                                        }
                                         // One list may lead to another: choosing a server
                                         // is not yet choosing what to ask it.
                                         Ran::Choose(chooser) => state.choosing = Some(*chooser),
@@ -1378,6 +1390,7 @@ async fn run_ui(
                                         tools: &tools,
                                         digest: &digest,
                                         mcp: &crate::mcp::snapshot(&mcp),
+                                        mcp_servers: &cfg.mcp_servers,
                                         session_id: &session_id,
                                         approvals: &session_approvals,
                                         busy: state.busy,
@@ -1395,13 +1408,6 @@ async fn run_ui(
                                 session_approvals.accept_writes(false);
                                 continue;
                             }
-                            // Nothing to interrupt, nothing open, not pointing: the one
-                            // thing left for Esc to mean is the line being typed. It did
-                            // nothing at all there, which is a key that works everywhere
-                            // except where it was pressed.
-                            // A refusal being explained, which is a question still on the
-                            // table: escaping it refuses without saying anything rather
-                            // than leaving the turn waiting on an answer nobody is giving.
                             // A server's form: esc turns it down, enter answers the field.
                             KeyCode::Esc if state.asking.is_some() => {
                                 state.decline_form();
@@ -1414,6 +1420,13 @@ async fn run_ui(
                                 input = fresh_input("");
                                 continue;
                             }
+                            // Nothing to interrupt, nothing open, not pointing: the one
+                            // thing left for Esc to mean is the line being typed. It did
+                            // nothing at all there, which is a key that works everywhere
+                            // except where it was pressed.
+                            // A refusal being explained, which is a question still on the
+                            // table: escaping it refuses without saying anything rather
+                            // than leaving the turn waiting on an answer nobody is giving.
                             KeyCode::Esc if state.refusing.is_some() => {
                                 if let Some(prompt) = state.refusing.take() {
                                     let _ = prompt
@@ -1792,6 +1805,7 @@ async fn run_ui(
                                             tools: &tools,
                                             digest: &digest,
                                             mcp: &crate::mcp::snapshot(&mcp),
+                                            mcp_servers: &cfg.mcp_servers,
                                             session_id: &session_id,
                                             approvals: &session_approvals,
                                             busy: state.busy,
@@ -1827,6 +1841,15 @@ async fn run_ui(
                                         // A command the project defines is a way of
                                         // asking, so it becomes this turn's prompt.
                                         Ran::Prompt(prompt) => text = prompt,
+                                        Ran::Later { said, then } => {
+                                            state.entries.push(Entry::Notice(said));
+                                            let later = later_tx.clone();
+                                            tokio::spawn(async move {
+                                                let _ = later.send(then.await).await;
+                                            });
+                                            input = fresh_input("");
+                                            continue;
+                                        }
                                         Ran::Choose(chooser) => {
                                             state.choosing = Some(*chooser);
                                             input = fresh_input("");

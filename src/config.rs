@@ -478,6 +478,12 @@ pub struct McpServer {
     /// The variable that holds a token sent as `Authorization: Bearer` to a server over
     /// HTTP.
     pub token_env: Option<String>,
+    /// The client to sign in as with `/mcp login`, for an authorization server that does
+    /// not register clients.
+    pub client_id: Option<String>,
+    /// What to ask for when signing in, when the server does not say.
+    #[serde(default)]
+    pub scopes: Vec<String>,
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
     /// Set false to keep a server configured but not started.

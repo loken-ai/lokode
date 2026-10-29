@@ -12,6 +12,7 @@
 
 pub mod client;
 pub mod host;
+pub mod oauth;
 pub mod tool;
 
 use std::sync::Arc;
@@ -19,13 +20,29 @@ use std::sync::Arc;
 use crate::config::McpServer;
 use crate::tools::registry::{Registry, Tool};
 
-/// The servers of a session, shared by the agent and the interface, so a server started
-/// again is the one both speak to.
-pub type Clients = Arc<std::sync::RwLock<Vec<Arc<client::McpClient>>>>;
+/// The servers of a session, and what answers their questions.
+#[derive(Default)]
+pub struct Servers {
+    list: std::sync::RwLock<Vec<Arc<client::McpClient>>>,
+    host: host::SharedHost,
+}
+
+/// The servers, shared by the agent and the interface, so a server started again is the
+/// one both speak to.
+pub type Clients = Arc<Servers>;
+
+impl Servers {
+    pub fn new(list: Vec<Arc<client::McpClient>>, host: host::SharedHost) -> Clients {
+        Arc::new(Self {
+            list: std::sync::RwLock::new(list),
+            host,
+        })
+    }
+}
 
 /// The servers as they stand, without holding the list.
 pub fn snapshot(clients: &Clients) -> Vec<Arc<client::McpClient>> {
-    clients.read().map(|c| c.clone()).unwrap_or_default()
+    clients.list.read().map(|c| c.clone()).unwrap_or_default()
 }
 
 /// Everything that came of starting the configured servers.
@@ -98,6 +115,29 @@ pub async fn restart(
         })?;
     old.shutdown().await;
     let new = start(&old.server, &spec, &root, old.host()).await?;
+    take_in(new, clients, registry).await
+}
+
+/// Start a server the session does not have yet, `name` configured as `spec`, and take
+/// its tools. Says what it has.
+pub async fn add(
+    name: &str,
+    spec: &McpServer,
+    root: &std::path::Path,
+    clients: &Clients,
+    registry: &mut Registry,
+) -> anyhow::Result<String> {
+    let new = start(name, spec, root, clients.host.clone()).await?;
+    take_in(new, clients, registry).await
+}
+
+/// Make `new` the server of its name that `clients` and `registry` hold, its tools and its
+/// documents taken again.
+async fn take_in(
+    new: Arc<client::McpClient>,
+    clients: &Clients,
+    registry: &mut Registry,
+) -> anyhow::Result<String> {
     let prefix = format!("{}__", new.server);
     registry.retain(|name| !name.starts_with(&prefix));
     let offered = new.list_tools().await?;
@@ -109,12 +149,13 @@ pub async fn restart(
         adopted += 1;
     }
     new.set_adopted(adopted);
-    if let Ok(mut list) = clients.write() {
-        for slot in list.iter_mut().filter(|c| c.server == new.server) {
-            *slot = new.clone();
+    if let Ok(mut list) = clients.list.write() {
+        match list.iter_mut().find(|c| c.server == new.server) {
+            Some(slot) => *slot = new.clone(),
+            None => list.push(new.clone()),
         }
     }
-    let mut said = format!("{} started again: {adopted} tool(s)", new.server);
+    let mut said = format!("{} runs with {adopted} tool(s)", new.server);
     for notice in notices {
         said.push_str(&format!("; {notice}"));
     }
