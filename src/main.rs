@@ -171,6 +171,14 @@ struct Cli {
 enum Command {
     /// Serve an editor over the Agent Client Protocol, on standard input and output.
     Acp,
+    /// Draw a session of a running `lokode serve` in this terminal.
+    Attach {
+        /// The address lokode serve printed, with its token.
+        url: String,
+        /// The session to follow. The latest one open, or a new one, when not given.
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// Serve the project's sessions to a browser page, on this machine only.
     Serve {
         /// The port on 127.0.0.1. Any free one when not given.
@@ -240,6 +248,7 @@ fn main() -> Result<()> {
         Some(Command::Plugin { action }) => return plugin_command(action),
         Some(Command::Acp) => return acp_command(cli, None),
         Some(Command::Serve { port }) => return acp_command(cli, Some(port.unwrap_or(0))),
+        Some(Command::Attach { url, session }) => return attach_command(cli, url, session),
         None => {}
     }
 
@@ -431,6 +440,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
         approve: cli.approve,
         output: cli.output,
         app: app::AppConfig {
+            remote: false,
             model: cli
                 .model
                 .or_else(|| env_string("LOKODE_MODEL"))
@@ -517,6 +527,18 @@ fn acp_command(cli: Cli, port: Option<u16>) -> Result<()> {
         Some(port) => runtime.block_on(lokode::serve::run(config_for, root, port)),
         None => runtime.block_on(lokode::acp::run(config_for)),
     }
+}
+
+/// Draw a session of the `lokode serve` at `url` in this terminal.
+fn attach_command(cli: Cli, url: String, session: Option<String>) -> Result<()> {
+    let _log_guard = init_logging(cli.log_file.clone().or_else(|| env_path("LOKODE_LOG_FILE")))?;
+    let root = cli.root.canonicalize()?;
+    let config::Loaded { file, .. } = config::load(&root, false)?;
+    let resolved = resolve(cli, root, file)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(lokode::ui::app_loop::run_remote(resolved.app, url, session))
 }
 
 /// Install, update, remove or list plugins, saying what was done.

@@ -30,6 +30,8 @@ pub enum ApprovalScope {
     Host(String),
     /// Every call of a tool whose whole surface is the single action just approved.
     Tool(String),
+    /// What a session elsewhere said `Always` covers, in its own words.
+    Told(String),
 }
 
 impl ApprovalScope {
@@ -59,6 +61,7 @@ impl ApprovalScope {
             }
             ApprovalScope::Host(host) => format!("requests to {host}"),
             ApprovalScope::Tool(tool) => format!("every {tool} call"),
+            ApprovalScope::Told(said) => said.clone(),
         }
     }
 

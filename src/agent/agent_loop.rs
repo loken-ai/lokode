@@ -205,6 +205,8 @@ pub enum AgentEvent {
     Engine(Engine),
     /// A line the user typed while the turn was running, now in the conversation.
     Steered(String),
+    /// A question asked from another screen of the same session.
+    Asked(String),
     /// How tool calls travel, once something has found out what the backend does.
     Protocol(ToolProtocol),
     /// How full the window is, and with what, as of this step.

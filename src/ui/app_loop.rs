@@ -49,9 +49,9 @@ fn chosen_move(state: &mut UiState, by: isize) {
 ///
 /// The token is minted by the UI rather than the agent, because the side that has to
 /// react to `Esc` is the side that must already be holding it.
-struct TurnRequest {
-    text: String,
-    cancel: CancellationToken,
+pub(crate) struct TurnRequest {
+    pub(crate) text: String,
+    pub(crate) cancel: CancellationToken,
 }
 
 pub async fn run(mut cfg: AppConfig) -> Result<()> {
@@ -312,6 +312,121 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         );
     }
     result
+}
+
+/// Draw a session of the `lokode serve` at `url`, as `lokode attach` does: `session`, or
+/// the latest one open, or a new one.
+pub async fn run_remote(mut cfg: AppConfig, url: String, session: Option<String>) -> Result<()> {
+    use crate::ui::remote;
+    let server = remote::Remote::new(&url)?;
+    let hello = remote::hello(&server).await?;
+    cfg.root = hello.root.clone();
+    cfg.remote = true;
+    // The backend is the server's to know: what this screen talks to is the server.
+    cfg.backend_url = url.split('?').next().unwrap_or_default().to_string();
+    let shutdown = CancellationToken::new();
+
+    let (agent_evt_tx, mut agent_evt_rx) = mpsc::channel::<AgentEvent>(128);
+    let (approval_tx, mut approval_rx) = crate::sandbox::approval::channel();
+    let (questions_tx, mut questions) = mpsc::channel(4);
+    let tasks = Arc::new(crate::tools::plan::TaskList::default());
+    let following = {
+        let feeds = remote::Feeds {
+            events: agent_evt_tx.clone(),
+            approvals: approval_tx,
+            questions: questions_tx,
+            tasks: tasks.clone(),
+        };
+        let (server, notices) = (server.clone(), agent_evt_tx.clone());
+        tokio::spawn(async move {
+            if let Err(e) = remote::follow(server, &hello, session, feeds).await {
+                let _ = notices
+                    .send(AgentEvent::Notice(format!("the server: {e:#}")))
+                    .await;
+            }
+            let _ = notices
+                .send(AgentEvent::Notice("the server's stream ended".into()))
+                .await;
+        })
+    };
+    // Turns, and lines typed during one, go to the server as prompts.
+    let (input_tx, mut input_rx) = mpsc::channel::<TurnRequest>(4);
+    let (steer_tx, mut steer_rx) = mpsc::channel::<String>(8);
+    let (turn_tx, turn_rx) = mpsc::channel(8);
+    tokio::spawn(remote::send_turns(server.clone(), turn_rx));
+    {
+        let turn_tx = turn_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    turn = input_rx.recv() => match turn {
+                        Some(TurnRequest { text, cancel }) => { let _ = turn_tx.send((text, cancel)).await; }
+                        None => break,
+                    },
+                    line = steer_rx.recv() => match line {
+                        Some(text) => { let _ = turn_tx.send((text, CancellationToken::new())).await; }
+                        None => break,
+                    },
+                }
+            }
+        });
+    }
+    let (control_tx, control_rx) = mpsc::channel(4);
+    let model = format!(
+        "attached to {url}",
+        url = url.split('?').next().unwrap_or_default()
+    );
+    tokio::spawn(remote::answer_controls(
+        server.clone(),
+        control_rx,
+        model.clone(),
+    ));
+    let (_live_tx, mut live) = mpsc::channel(1);
+    let digest = Arc::new(tokio::sync::Mutex::new(crate::agent::digest::Digest::open(
+        crate::paths::state_dir(),
+        &cfg.root,
+    )));
+
+    term::install_panic_hook();
+    crate::ui::theme::set(crate::ui::theme::Theme::detect());
+    tokio::task::spawn_blocking(crate::ui::highlight::warm);
+    let guard = term::TerminalGuard::new()?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+    let result = run_ui(
+        &mut terminal,
+        &cfg,
+        &model,
+        ToolProtocol::Native,
+        None,
+        None,
+        vec![format!("following a session of {}", hello_root(&cfg))],
+        server.session.get().cloned().unwrap_or_default(),
+        Vec::new(),
+        &shutdown,
+        input_tx,
+        control_tx,
+        steer_tx,
+        Vec::new(),
+        tasks,
+        digest,
+        None,
+        crate::lsp::LspPool::new(cfg.root.clone()),
+        &mut live,
+        Default::default(),
+        Arc::new(crate::sandbox::approval::SessionApprovals::new()),
+        &mut agent_evt_rx,
+        &mut approval_rx,
+        &mut questions,
+    )
+    .await;
+    drop(guard);
+    shutdown.cancel();
+    following.abort();
+    result
+}
+
+fn hello_root(cfg: &AppConfig) -> String {
+    cfg.root.display().to_string()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -673,6 +788,7 @@ async fn run_ui(
                             },
                         );
                     }
+                    AgentEvent::Asked(s) => state.entries.push(Entry::User(s)),
                     AgentEvent::Steered(s) => state.entries.push(Entry::Notice(format!(
                         "handed to the model at step {}: {}",
                         state.step + 1,
@@ -1794,7 +1910,13 @@ async fn run_ui(
                                     continue;
                                 }
                                 let mut text = text;
-                                if let Some(command) = text.clone().strip_prefix('/') {
+                                // Attached to a server, a command runs where the session lives:
+                                // the line goes there as it is. What runs here stays here.
+                                if let Some(command) = text
+                                    .clone()
+                                    .strip_prefix('/')
+                                    .filter(|c| !cfg.remote || c.trim() == "jobs")
+                                {
                                     let verb = command.trim_start_matches('/').trim();
                                     if verb == "lsp" {
                                         state.sheet = Some(state.lsp_page());

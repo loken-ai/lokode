@@ -215,6 +215,7 @@ impl Translator {
                     "sessionUpdate": "tool_call",
                     "toolCallId": id,
                     "title": title(name, &args, &self.root),
+                    "name": name,
                     "kind": kind(name),
                     "status": "in_progress",
                     "locations": locations,

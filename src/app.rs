@@ -72,6 +72,8 @@ pub struct AppConfig {
     pub headless: bool,
     /// What confines the commands the agent runs, or `None` to leave them unconfined.
     pub sandbox: Option<crate::sandbox::confine::Sandbox>,
+    /// Whether the screen follows a session of a `lokode serve` rather than one of its own.
+    pub remote: bool,
 }
 
 /// How tools should be asked for.

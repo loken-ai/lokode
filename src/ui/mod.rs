@@ -10,6 +10,7 @@ mod listing;
 mod markdown;
 pub mod picker;
 mod rail;
+pub(crate) mod remote;
 pub mod sheet;
 mod state;
 pub mod status;

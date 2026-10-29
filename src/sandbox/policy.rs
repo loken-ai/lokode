@@ -179,6 +179,8 @@ fn matching(rules: &Rules, scope: &ApprovalScope, root: &Path, need: Need) -> Op
         }
         ApprovalScope::Host(host) => (&rules.egress, host.clone()),
         ApprovalScope::Tool(tool) => (&rules.tools, tool.clone()),
+        // Settled where the session runs, by its own rules.
+        ApprovalScope::Told(_) => return None,
         ApprovalScope::Path { tool, prefix } => {
             if rules.tools.iter().any(|t| t == tool) {
                 return Some(format!("tools = {tool}"));

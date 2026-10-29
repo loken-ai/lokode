@@ -949,6 +949,15 @@ lokode serve --port 8420
 - Another machine reaches it through an ssh tunnel: `ssh -L 8420:127.0.0.1:8420 host`.
 - The `Host` and `Origin` of every request are checked, so a page elsewhere cannot reach it.
 
+### In the terminal
+
+`lokode attach <address>` draws a session of a running `lokode serve` in this terminal, with the
+address it printed. It follows the latest session open, or `--session <id>`, or a new one.
+
+- The thread, the steps, the approvals and the forms are the terminal's own, answered here.
+- What is typed goes to the server, a `/command` included, so it runs where the session lives.
+- Several terminals and pages can follow one session at once.
+
 ## Without the interface
 
 `-p` runs one turn and exits.
