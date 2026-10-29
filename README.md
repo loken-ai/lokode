@@ -319,7 +319,13 @@ Commands of your own run side by side, each under its step, with their output as
 
 `/plan` refuses every tool that writes, runs a command or reaches the network, before it runs,
 and tells the model so. The model reads, searches and ends with numbered steps. `/act` leaves
-the mode. `--plan` starts in it, and `mode` in the configuration makes it a project's default.
+the mode.
+
+| Mode | Shift-Tab | Flag | `mode =` |
+|---|---|---|---|
+| act, every change asked | from plan | none | `"act"` |
+| write without asking, commands still asked | from act | `--accept-edits` | `"edits"` |
+| plan, nothing changes | from writing | `--plan` | `"plan"` |
 
 Nothing has to be declined while planning. A project can plan on its strongest model and act
 on a smaller one, with [roles](#one-model-per-kind-of-work).

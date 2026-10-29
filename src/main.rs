@@ -125,8 +125,13 @@ struct Cli {
     show_config: bool,
 
     /// Start planning: read and search, change nothing until /act.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "accept_edits")]
     plan: bool,
+
+    /// Start writing without asking. Commands and requests that leave the machine are
+    /// still asked about.
+    #[arg(long)]
+    accept_edits: bool,
 
     /// Look into the project while nobody is waiting, and remember what is found.
     #[arg(long)]
@@ -239,6 +244,12 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
         mut warnings,
     } = config::resolve_headers(&file, &cli.headers, &backend_url)?;
 
+    let starting_mode = match file.mode.as_deref() {
+        None | Some("act") => "act",
+        Some("plan") => "plan",
+        Some("edits") => "edits",
+        Some(other) => anyhow::bail!("mode must be plan, act or edits, got {other:?}"),
+    };
     let tool_protocol = match cli.tool_protocol {
         Some(p) => p,
         None => match file.tool_protocol.as_deref() {
@@ -342,11 +353,12 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             // a thing to opt into rather than to discover.
             discover: cli.discover || file.discover.unwrap_or(false),
             headless: cli.prompt.is_some(),
-            mode: if cli.plan || file.mode.as_deref() == Some("plan") {
+            mode: if cli.plan || (starting_mode == "plan" && !cli.accept_edits) {
                 lokode::agent::agent_loop::Mode::Plan
             } else {
                 lokode::agent::agent_loop::Mode::Act
             },
+            accept_writes: cli.accept_edits || (starting_mode == "edits" && !cli.plan),
             shell_writable,
         },
     })
@@ -403,7 +415,13 @@ fn print_config(cfg: &Resolved) {
         "  model              {}",
         a.model.as_deref().unwrap_or("(unset)")
     );
-    println!("  mode               {}", a.mode.label());
+    println!(
+        "  mode               {}",
+        match a.accept_writes {
+            true => "edits",
+            false => a.mode.label(),
+        }
+    );
     println!("  root               {}", a.root.display());
     println!("  backend-url        {}", a.backend_url);
     println!("  backend-kind       {}", a.backend_kind.label());

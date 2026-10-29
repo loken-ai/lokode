@@ -44,6 +44,8 @@ pub struct AppConfig {
     pub models: BTreeMap<String, crate::config::ModelSection>,
     /// Whether the session starts able to change things.
     pub mode: crate::agent::agent_loop::Mode,
+    /// Whether the session starts writing without asking.
+    pub accept_writes: bool,
     /// What is settled in advance about approvals.
     pub policy: crate::sandbox::policy::Policy,
     /// Commands to run at the edges of a tool call and a turn.

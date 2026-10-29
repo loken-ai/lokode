@@ -363,10 +363,12 @@ async fn run_ui(
         backend: cfg.backend_url.clone(),
         root: cfg.root.clone(),
         planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
+        accepting_writes: cfg.accept_writes,
         model: model.to_string(),
         protocol,
         ..Default::default()
     };
+    session_approvals.accept_writes(cfg.accept_writes);
     // The protocol is not stated here: it is settled by asking the backend, which has not
     // answered yet, and the status line carries whatever it turns out to be.
     // The keys live on their own line under the input, where they are always in view, so
