@@ -3739,9 +3739,11 @@ mod tests {
             grammar_enabled: false,
             max_steps: 16,
             slots: Arc::new(tokio::sync::Semaphore::new(2)),
+            parallel: 2,
             hooks: Default::default(),
             lsp: None,
             answers: None,
+            depth: 1,
         }))
     }
 
@@ -3828,9 +3830,11 @@ mod tests {
                     grammar_enabled: false,
                     max_steps: 4,
                     slots: Arc::new(tokio::sync::Semaphore::new(2)),
+                    parallel: 2,
                     hooks: Default::default(),
                     lsp: None,
                     answers: None,
+                    depth: 1,
                 },
             )));
             let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
@@ -3894,9 +3898,11 @@ mod tests {
                 grammar_enabled: false,
                 max_steps: 4,
                 slots: Arc::new(tokio::sync::Semaphore::new(2)),
+                parallel: 2,
                 hooks: Default::default(),
                 lsp: None,
                 answers: None,
+                depth: 1,
             },
         )));
         let mut agent = agent_with(&h, &here, ToolProtocol::Native, reg);
@@ -4049,9 +4055,11 @@ mod tests {
                 grammar_enabled: false,
                 max_steps: 4,
                 slots: Arc::new(tokio::sync::Semaphore::new(2)),
+                parallel: 2,
                 hooks: Default::default(),
                 lsp: None,
                 answers: Some(answers),
+                depth: 1,
             },
         )));
         let mut agent = agent_with(&h, &here, ToolProtocol::Native, reg);
@@ -4073,6 +4081,81 @@ mod tests {
             .expect("no answer came")
             .unwrap();
         assert!(later.contains("main is in src/main.rs"), "{later}");
+    }
+
+    /// With a depth of two, an agent that names delegate hands work on to another, and
+    /// the answer comes back up through it.
+    #[tokio::test]
+    async fn an_agent_hands_work_on_within_the_depth() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"delegate","arguments":"{\"agent\": \"lead\", \"task\": \"find it\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"l1","function":{"name":"delegate","arguments":"{\"task\": \"look deep\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"deep down"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"the lead says deep down"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut reg = crate::boot::build_registry(h.root.clone()).0;
+        let lead = crate::agent::agents::parse(
+            "lead",
+            "---\ntools: read_file, delegate\n---\nHand the search on.",
+            "test",
+        )
+        .unwrap();
+        reg.register(crate::tools::delegate::Delegate::new(Arc::new(
+            crate::tools::delegate::Delegation {
+                backend: Arc::new(crate::backend::client::BackendClient::new(
+                    backend.url.clone(),
+                )),
+                backends: Default::default(),
+                registry: Arc::new(reg.clone()),
+                agents: vec![crate::agent::agents::AgentSpec::explore(), lead],
+                search_model: "test".into(),
+                edit_model: "test".into(),
+                roles: Default::default(),
+                models: Default::default(),
+                context_tokens: 8192,
+                max_answer_tokens: 4096,
+                protocol: Default::default(),
+                grammar_enabled: false,
+                max_steps: 4,
+                slots: Arc::new(tokio::sync::Semaphore::new(1)),
+                parallel: 1,
+                hooks: Default::default(),
+                lsp: None,
+                answers: None,
+                depth: 2,
+            },
+        )));
+        let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+        let events =
+            tokio::time::timeout(std::time::Duration::from_secs(20), drive(&mut agent, "go"))
+                .await
+                .expect("the agents waited on each other");
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output, .. } if name == "delegate" => Some(output),
+                _ => None,
+            })
+            .expect("the delegation was never answered");
+        assert_eq!(result.content, "the lead says deep down");
     }
 
     /// A delegated session that runs out of steps says so, rather than handing back what

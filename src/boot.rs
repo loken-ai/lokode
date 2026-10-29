@@ -375,9 +375,11 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         grammar_enabled: cfg.grammar_enabled,
         max_steps: cfg.max_steps,
         slots: Arc::new(tokio::sync::Semaphore::new(cfg.parallel_delegates.max(1))),
+        parallel: cfg.parallel_delegates.max(1),
         hooks: cfg.hooks.clone(),
         lsp: Some(lsp.clone()),
         answers: Some(steer_tx.clone()),
+        depth: cfg.delegate_depth.max(1),
     });
     model_notes.extend(delegation.unknown());
     model_notes.extend(skill_warnings);

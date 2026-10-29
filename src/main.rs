@@ -384,6 +384,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
                 lokode::agent::agent_loop::Mode::Act
             },
             parallel_delegates: file.limits.delegates.unwrap_or(default::DELEGATES),
+            delegate_depth: file.limits.depth.unwrap_or(1),
             agents,
             backends,
             accept_writes: cli.accept_edits || (starting_mode == "edits" && !cli.plan),

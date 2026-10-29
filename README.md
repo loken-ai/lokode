@@ -638,7 +638,9 @@ api-key-env = "ANTHROPIC_API_KEY"
 ```
 
 - The project's agent takes the place of the user's of the same name.
-- An agent never has the task list or `delegate`.
+- An agent never has the task list or `submit_plan`. It has `delegate` when it names it and
+  `[limits] depth` leaves a level under it. The depth is 1 by default, so no agent hands work
+  on. Each level has its own `[limits] delegates` places.
 - What an agent changes is asked about like the session's own changes, checked by the language
   servers and run through the hooks. It is put back with the caller's turn by `/undo`.
 - While the session plans, an agent changes nothing.

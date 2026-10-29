@@ -48,6 +48,8 @@ pub struct AppConfig {
     pub accept_writes: bool,
     /// How many delegated turns run at once.
     pub parallel_delegates: usize,
+    /// How many levels of agents may hand work on.
+    pub delegate_depth: usize,
     /// The agents a turn can hand work to.
     pub agents: Vec<crate::agent::agents::AgentSpec>,
     /// The other backends an agent can run on, by name.

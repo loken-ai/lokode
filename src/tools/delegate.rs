@@ -22,6 +22,7 @@ use crate::tools::registry::{Registry, Tool, ToolCtx, ToolOutput};
 ///
 /// Held as a builder rather than as an `Agent`: a sub-session is made and dropped per
 /// call, and sharing one would share its history, which is the opposite of the point.
+#[derive(Clone)]
 pub struct Delegation {
     pub backend: Arc<dyn crate::backend::provider::Provider>,
     /// The other backends an agent can run on, by their name in `[backends]`.
@@ -47,12 +48,17 @@ pub struct Delegation {
     pub max_steps: usize,
     /// How many delegated turns run at once. The others wait for a place.
     pub slots: Arc<tokio::sync::Semaphore>,
+    /// How many places there are.
+    pub parallel: usize,
     /// The hooks an agent that may change things runs, as the session does.
     pub hooks: crate::config::HooksSection,
     /// The language servers that check what an agent writes.
     pub lsp: Option<Arc<crate::lsp::LspPool>>,
     /// Where the answer of an agent working in the background is handed to the session.
     pub answers: Option<tokio::sync::mpsc::Sender<String>>,
+    /// How many levels of agents may be under this one, itself included. An agent that
+    /// names `delegate` among its tools has it when there is a level under it.
+    pub depth: usize,
 }
 
 /// The tools a delegated session never has: the caller's task list and plan, and the
@@ -74,8 +80,21 @@ impl Delegation {
                         out.add(tool);
                     }
                 }
+                if self.depth > 1 && names.iter().any(|n| n == "delegate") {
+                    out.register(Delegate::new(Arc::new(self.under())));
+                }
                 out
             }
+        }
+    }
+
+    /// The delegation an agent hands work on with: one level less, and places of its own
+    /// so an agent waiting on its own agents never holds the place they wait for.
+    fn under(&self) -> Delegation {
+        Delegation {
+            depth: self.depth - 1,
+            slots: Arc::new(tokio::sync::Semaphore::new(self.parallel.max(1))),
+            ..self.clone()
         }
     }
 
@@ -95,6 +114,9 @@ impl Delegation {
                 _ => {}
             }
             for name in spec.tools.iter().flatten() {
+                if name == "delegate" && self.depth > 1 {
+                    continue;
+                }
                 if self.registry.get(name).is_none() || NEVER.contains(&name.as_str()) {
                     out.push(format!(
                         "the agent {} names a tool it cannot have: {name}",
