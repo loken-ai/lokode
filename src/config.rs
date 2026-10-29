@@ -305,6 +305,10 @@ pub struct ShellSection {
     /// project; see `resolve_sandbox`, which is where that has to happen.
     #[serde(default)]
     pub writable: Vec<PathBuf>,
+    /// Files and directories a confined command may not read, on top of the credentials
+    /// it never reads. Written like `writable`.
+    #[serde(default)]
+    pub hidden: Vec<PathBuf>,
 }
 
 impl ShellSection {
@@ -318,6 +322,28 @@ impl ShellSection {
         })
     }
 }
+
+/// The credentials below the home directory that a confined command may not read.
+const SECRETS: &[&str] = &[
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker/config.json",
+    ".netrc",
+    ".git-credentials",
+    ".npmrc",
+    ".pypirc",
+    ".vault-token",
+    ".password-store",
+    ".cargo/credentials",
+    ".cargo/credentials.toml",
+    ".config/gh",
+    ".config/gcloud",
+    ".local/share/keyrings",
+    ".terraform.d/credentials.tfrc.json",
+];
 
 /// The build caches below the home directory that a command confined to the workspace may
 /// write to, when they are there.
@@ -523,6 +549,11 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 let mut w = base.shell.writable;
                 w.extend(over.shell.writable);
                 w
+            },
+            hidden: {
+                let mut h = base.shell.hidden;
+                h.extend(over.shell.hidden);
+                h
             },
         },
         roles: crate::agent::roles::Roles::merge(base.roles, over.roles),
@@ -828,9 +859,24 @@ pub fn resolve_sandbox(
         Level::Workspace => resolve_shell_writable(cfg, root, warnings),
         Level::ReadOnly | Level::Off => Vec::new(),
     };
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut hidden: Vec<PathBuf> = home
+        .iter()
+        .flat_map(|h| SECRETS.iter().map(move |s| h.join(s)))
+        .chain(user_config_path().and_then(|p| p.parent().map(Path::to_path_buf)))
+        .chain(crate::paths::data_dir())
+        .filter(|p| p.exists())
+        .collect();
+    for named in &cfg.shell.hidden {
+        match expand_writable(named, root) {
+            Ok(path) => hidden.push(path),
+            Err(why) => warnings.push(why.replace("writable", "hidden")),
+        }
+    }
     Sandbox {
         level,
         writable,
+        hidden,
         unset,
     }
 }
@@ -975,6 +1021,10 @@ mod tests {
             assert_eq!(s.unset, ["LOKODE_API_KEY", "MY_KEY"]);
             let s = resolve_sandbox(&cfg, root.path(), Level::ReadOnly, &mut warnings);
             assert!(s.writable.is_empty());
+            std::fs::create_dir(home.path().join(".ssh")).unwrap();
+            let s = resolve_sandbox(&cfg, root.path(), Level::Workspace, &mut warnings);
+            assert!(s.hidden.contains(&home.path().join(".ssh")));
+            assert!(!s.hidden.contains(&home.path().join(".aws")));
         });
         let old = parse("[shell]\nconfine-writes = false\n");
         assert_eq!(old.shell.level(), Some(Level::Off));

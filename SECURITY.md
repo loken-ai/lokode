@@ -58,7 +58,7 @@ leaves the old contents or the new ones. A multi-file patch is applied wholly or
 ## What is not enforced
 
 **A command runs in a sandbox, on Linux.** `bash` and `run_tests` run their command under
-Landlock, which the command and everything it starts cannot undo. Reading is left as it is.
+Landlock, which the command and everything it starts cannot undo.
 
 | `[shell] sandbox` | What a command may write |
 |---|---|
@@ -68,7 +68,12 @@ Landlock, which the command and everything it starts cannot undo. Reading is lef
 
 - `LOKODE_API_KEY` and the variable named by `api-key-env` are taken out of the command's
   environment.
-- `rm -rf ~` fails. `cat ~/.ssh/id_rsa` still works.
+- At every level but `off`, the credentials below your home directory cannot be read: `.ssh`,
+  `.gnupg`, `.aws`, `.azure`, `.kube`, `.netrc`, `.git-credentials`, `.npmrc`, `.pypirc`,
+  `.docker/config.json`, `.cargo/credentials.toml`, `.config/gh`, `.config/gcloud`, the
+  keyrings, lokode's own configuration and its sessions. `[shell] hidden` adds to them. Their
+  names stay visible.
+- `rm -rf ~` fails, and so does `cat ~/.ssh/id_rsa`. Everything else may be read.
 - A `~` in `[shell] writable` is your home directory, and a relative name is in the project.
   A name that does not exist is reported at startup.
 - A sandbox asked for on a kernel without Landlock refuses the command rather than run it

@@ -100,6 +100,7 @@ impl Harness {
         h.ctx.sandbox = Some(Arc::new(crate::sandbox::confine::Sandbox {
             level: crate::sandbox::confine::Level::Workspace,
             writable: vec![h.root.clone()],
+            hidden: Vec::new(),
             unset: vec!["LOKODE_API_KEY".into()],
         }));
         h

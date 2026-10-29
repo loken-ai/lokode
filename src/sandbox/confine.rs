@@ -4,7 +4,7 @@
 //! approved command runs with the user's privileges. On Linux, Landlock lets a process give
 //! up access it will never need again, and a child cannot get it back. A confined command
 //! and everything it starts may write only beneath the directories its [`Sandbox`] names,
-//! and to the devices under `/dev`. Reading is left as it is.
+//! and to the devices under `/dev`. It may read everything but what the sandbox hides.
 
 use std::path::PathBuf;
 
@@ -36,6 +36,8 @@ pub struct Sandbox {
     pub level: Level,
     /// The directories and files it may write beneath, besides the devices.
     pub writable: Vec<PathBuf>,
+    /// The directories and files it may not read.
+    pub hidden: Vec<PathBuf>,
     /// The environment variables taken out of what it inherits.
     pub unset: Vec<String>,
 }
@@ -51,7 +53,7 @@ impl Sandbox {
         for var in &self.unset {
             cmd.env_remove(var);
         }
-        let fd = ruleset(&self.writable)?;
+        let fd = ruleset(&self.writable, &self.hidden)?;
         use std::os::fd::AsRawFd;
         let raw = fd.as_raw_fd();
         // SAFETY: `restrict_after_fork` makes two syscalls and nothing else, no allocation
@@ -88,8 +90,10 @@ mod linux {
     const CREATE_RULESET_VERSION: u32 = 1;
     const RULE_PATH_BENEATH: libc::c_int = 1;
 
-    // The write-shaped accesses, by the ABI that introduced each.
+    // The accesses, by the ABI that introduced each.
     const WRITE_FILE: u64 = 1 << 1;
+    const READ_FILE: u64 = 1 << 2;
+    const READ_DIR: u64 = 1 << 3;
     const REMOVE_DIR: u64 = 1 << 4;
     const REMOVE_FILE: u64 = 1 << 5;
     const MAKE_CHAR: u64 = 1 << 6;
@@ -156,12 +160,16 @@ mod linux {
     /// both allocate and open files, and doing that between `fork` and `exec` in a process
     /// with other threads can deadlock in the allocator. What is left for the child is two
     /// bare syscalls.
-    pub fn ruleset(writable: &[PathBuf]) -> io::Result<OwnedFd> {
+    pub fn ruleset(writable: &[PathBuf], hidden: &[PathBuf]) -> io::Result<OwnedFd> {
         let Some(abi) = abi() else {
             return Err(io::Error::other("this kernel has no Landlock"));
         };
+        let reads = match hidden.is_empty() {
+            true => 0,
+            false => READ_FILE | READ_DIR,
+        };
         let attr = RulesetAttr {
-            handled_access_fs: writes_for(abi),
+            handled_access_fs: writes_for(abi) | reads,
         };
         // SAFETY: `attr` is live for the call and its size is what the kernel is told.
         let fd = unsafe {
@@ -193,7 +201,59 @@ mod linux {
             _ => WRITE_FILE | TRUNCATE,
         };
         allow_beneath(&ruleset, Path::new("/dev"), devices)?;
+        if !hidden.is_empty() {
+            let hidden: Vec<PathBuf> = hidden
+                .iter()
+                .map(|h| h.canonicalize().unwrap_or_else(|_| h.clone()))
+                .collect();
+            for (path, whole) in readable(Path::new("/"), &hidden) {
+                let access = match (whole, path.is_dir()) {
+                    (true, true) => READ_FILE | READ_DIR,
+                    (true, false) => READ_FILE,
+                    (false, _) => READ_DIR,
+                };
+                allow_beneath(&ruleset, &path, access)?;
+            }
+        }
         Ok(ruleset)
+    }
+
+    /// What may be read beneath `dir` with `hidden` kept out: each path, and whether all
+    /// of it may be read or only the names in it. A directory with something hidden below
+    /// it has its names readable and is walked into. Names stay readable all the way down,
+    /// contents of hidden paths do not.
+    pub(super) fn readable(dir: &Path, hidden: &[PathBuf]) -> Vec<(PathBuf, bool)> {
+        let mut out = Vec::new();
+        walk(dir, hidden, &mut out);
+        out
+    }
+
+    fn walk(dir: &Path, hidden: &[PathBuf], out: &mut Vec<(PathBuf, bool)>) {
+        if hidden.iter().any(|h| h == dir) {
+            return;
+        }
+        if !hidden.iter().any(|h| h.starts_with(dir)) {
+            out.push((dir.to_path_buf(), true));
+            return;
+        }
+        out.push((dir.to_path_buf(), false));
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // A link is followed by the rule, so one that leads above a hidden path would
+            // open it again. Its name is enough to list it.
+            let is_link = entry.file_type().map(|t| t.is_symlink()).unwrap_or(false);
+            if is_link && hidden.iter().any(|h| h.starts_with(dir)) {
+                match path.canonicalize() {
+                    Ok(target) if hidden.iter().any(|h| h.starts_with(&target)) => continue,
+                    Ok(target) if hidden.iter().any(|h| target.starts_with(h)) => continue,
+                    _ => {}
+                }
+            }
+            walk(&path, hidden, out);
+        }
     }
 
     fn allow_beneath(ruleset: &OwnedFd, dir: &Path, access: u64) -> io::Result<()> {
@@ -202,9 +262,9 @@ mod linux {
         // SAFETY: a valid C string; O_PATH opens the directory as a reference only.
         let parent = unsafe { libc::open(c_path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
         if parent < 0 {
-            // A directory that is not there cannot be written to either, so this is not
-            // fatal - the point is what the command may reach, not what it was promised.
-            tracing::warn!(path = %dir.display(), "not adding a landlock rule for a path that does not open");
+            // A path that does not open cannot be reached through this rule either, so
+            // this is not fatal: the point is what the command may reach.
+            tracing::debug!(path = %dir.display(), "not adding a landlock rule for a path that does not open");
             return Ok(());
         }
         // SAFETY: owned so the descriptor is closed however this returns.
@@ -263,7 +323,7 @@ mod elsewhere {
         None
     }
 
-    pub fn ruleset(_writable: &[PathBuf]) -> io::Result<OwnedFd> {
+    pub fn ruleset(_writable: &[PathBuf], _hidden: &[PathBuf]) -> io::Result<OwnedFd> {
         Err(io::Error::other("shell confinement needs Linux"))
     }
 
@@ -289,7 +349,7 @@ mod tests {
             Some(v) => assert!(v >= 1, "an ABI of {v} is not a version"),
             None => {
                 // Then building a ruleset must fail rather than silently confine nothing.
-                assert!(ruleset(&[std::env::temp_dir()]).is_err());
+                assert!(ruleset(&[std::env::temp_dir()], &[]).is_err());
             }
         }
     }
@@ -301,7 +361,7 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        assert!(ruleset(&[dir.path().to_path_buf()]).is_ok());
+        assert!(ruleset(&[dir.path().to_path_buf()], &[]).is_ok());
     }
 
     /// A directory that is not there is not a reason to refuse to confine anything.
@@ -311,6 +371,62 @@ mod tests {
         if abi().is_none() {
             return;
         }
-        assert!(ruleset(&[std::path::PathBuf::from("/no/such/directory/anywhere")]).is_ok());
+        assert!(ruleset(
+            &[std::path::PathBuf::from("/no/such/directory/anywhere")],
+            &[]
+        )
+        .is_ok());
+    }
+
+    /// A hidden path is left out, the directories above it keep their names readable,
+    /// and everything beside them is readable whole.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn what_is_hidden_is_left_out_of_what_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(home.join("work")).unwrap();
+        std::fs::write(home.join(".netrc"), "machine x").unwrap();
+        std::os::unix::fs::symlink(&home, dir.path().join("link")).unwrap();
+        let hidden = [home.join(".ssh"), home.join(".netrc")];
+        let mut seen = linux::readable(dir.path(), &hidden);
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                (dir.path().to_path_buf(), false),
+                (home.clone(), false),
+                (home.join("work"), true),
+            ]
+        );
+    }
+
+    /// A confined command reads what is not hidden, and not what is.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_hidden_file_cannot_be_read() {
+        if abi().is_none() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("secret"), "hunter2").unwrap();
+        std::fs::write(dir.path().join("open"), "fine").unwrap();
+        let sandbox = Sandbox {
+            level: Level::Workspace,
+            writable: vec![dir.path().to_path_buf()],
+            hidden: vec![dir.path().join("secret")],
+            unset: Vec::new(),
+        };
+        let mut cmd = tokio::process::Command::new("/bin/sh");
+        cmd.arg("-c")
+            .arg("cat open; cat secret")
+            .current_dir(dir.path());
+        let fd = sandbox.confine(&mut cmd).unwrap();
+        let out = cmd.output().await.unwrap();
+        drop(fd);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("fine"), "{stdout}");
+        assert!(!stdout.contains("hunter2"), "{stdout}");
     }
 }
