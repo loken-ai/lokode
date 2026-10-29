@@ -35,6 +35,8 @@ pub struct Delegation {
     /// Fewer than a full turn's: a delegated piece of work that needs twenty steps was
     /// not self-contained, and the caller should have been told rather than waited.
     pub max_steps: usize,
+    /// How many delegated turns run at once. The others wait for a place.
+    pub slots: Arc<tokio::sync::Semaphore>,
 }
 
 pub struct Delegate {
@@ -61,7 +63,7 @@ impl Tool for Delegate {
     fn description(&self) -> &str {
         "Hand one self-contained question to a fresh session with its own context window, \
          and get back only its answer. Use it for a search that would read many files to \
-         answer one question."
+         answer one question. The session reads and searches and changes nothing."
     }
 
     fn args_schema(&self) -> Value {
@@ -79,8 +81,14 @@ impl Tool for Delegate {
             return Ok(ToolOutput::err("say what to delegate"));
         }
         let w = &self.what;
-        // Its own history, its own budget, and the same tools: a sub-session that could
-        // not read the project could not answer anything about it.
+        // A place among those that run at once, given up if the call is stopped first.
+        let _slot = tokio::select! {
+            biased;
+            _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
+            slot = w.slots.acquire() => slot?,
+        };
+        // Its own history, its own budget, and the tools that read: a sub-session that
+        // could not read the project could not answer anything about it.
         let system = crate::agent::agent_loop::Agent::build_system_prompt(
             &w.registry,
             w.protocol.get(),
@@ -125,7 +133,9 @@ impl Tool for Delegate {
                 preload: false,
                 guess_with: None,
                 roles: w.roles.clone(),
-                mode: crate::agent::agent_loop::Mode::Act,
+                // Its registry holds no tool that changes anything, and the mode refuses
+                // one should it be asked for all the same.
+                mode: crate::agent::agent_loop::Mode::Plan,
                 hooks: Default::default(),
                 instructions: None,
                 remember_model_in: None,
@@ -137,10 +147,15 @@ impl Tool for Delegate {
                 protocol: w.protocol.get(),
                 allow_fallback: false,
                 shared_protocol: None,
+                delegated: true,
             },
             // The caller's context, so its approvals, its cancellation and its root are
-            // the sub-session's too: this is the same user's work, delegated.
-            ctx: ctx.clone(),
+            // the sub-session's too: this is the same user's work, delegated. Its own count
+            // of what a policy granted, so its turn does not restart the caller's.
+            ctx: crate::tools::registry::ToolCtx {
+                auto_used: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                ..ctx.clone()
+            },
             checkpoints: None,
             turn: 0,
         };
@@ -195,15 +210,20 @@ impl Tool for Delegate {
         if let Err(e) = outcome {
             return Ok(ToolOutput::err(format!("the delegated turn failed: {e:#}")));
         }
+        // The answer is what it said last with nothing called after it. What it said
+        // before a call is narration, and is returned as such when nothing came after.
         let mut answer = String::new();
+        let mut called_after = false;
         let mut notices = Vec::new();
         for event in events {
             match event {
                 crate::agent::agent_loop::AgentEvent::AssistantText(s) => {
                     if !s.trim().is_empty() {
                         answer = s;
+                        called_after = false;
                     }
                 }
+                crate::agent::agent_loop::AgentEvent::ToolCall { .. } => called_after = true,
                 crate::agent::agent_loop::AgentEvent::Notice(s) => notices.push(s),
                 _ => {}
             }
@@ -223,6 +243,16 @@ impl Tool for Delegate {
             answer_chars = answer.len(),
             "delegated turn finished"
         );
+        if called_after {
+            return Ok(ToolOutput::ok(ctx.clamp(format!(
+                "It did not finish{}. What it said last, which may be partial:\n{answer}",
+                if notices.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", notices.join("; "))
+                }
+            ))));
+        }
         Ok(ToolOutput::ok(ctx.clamp(answer)))
     }
 }

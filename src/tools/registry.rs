@@ -449,6 +449,18 @@ impl Registry {
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
+
+    /// The tools that change nothing, without those named in `except`.
+    pub fn read_only(&self, except: &[&str]) -> Registry {
+        Registry {
+            tools: self
+                .tools
+                .iter()
+                .filter(|(name, tool)| !tool.mutates() && !except.contains(&name.as_str()))
+                .map(|(name, tool)| (name.clone(), tool.clone()))
+                .collect(),
+        }
+    }
 }
 
 impl Default for Registry {

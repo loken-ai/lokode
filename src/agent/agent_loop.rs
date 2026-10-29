@@ -650,6 +650,9 @@ pub struct AgentConfig {
     /// Which protocol works is the backend's property, so a session that finds out has to
     /// put the answer somewhere the sessions started after it will look.
     pub shared_protocol: Option<crate::agent::protocol::SharedProtocol>,
+    /// Whether the turn was handed over by another session. Its question is taken as
+    /// written: no file named in it is attached and the project is not searched for it.
+    pub delegated: bool,
 }
 
 /// What one turn did, for the line that closes it.
@@ -1635,8 +1638,17 @@ impl Agent {
         // A file the person named travels with the question rather than being fetched
         // after it: they have already decided it is relevant, and on a local model the
         // round trip that would fetch it costs seconds.
-        let expanded =
-            crate::agent::mentions::expand(&user_input, &self.ctx.root, self.ctx.max_output_chars);
+        let expanded = match self.cfg.delegated {
+            true => crate::agent::mentions::Expanded {
+                text: user_input.clone(),
+                attached: Vec::new(),
+            },
+            false => crate::agent::mentions::expand(
+                &user_input,
+                &self.ctx.root,
+                self.ctx.max_output_chars,
+            ),
+        };
         if !expanded.attached.is_empty() {
             let _ = events
                 .send(AgentEvent::Notice(format!(
@@ -1654,7 +1666,7 @@ impl Agent {
         // Not when files were named: the person has already said what is relevant, and
         // guessing over the top of that is guessing against them.
         let mut text = expanded.text;
-        if expanded.attached.is_empty() && asks_about_the_project(&asked) {
+        if !self.cfg.delegated && expanded.attached.is_empty() && asks_about_the_project(&asked) {
             if let Some(found) =
                 crate::agent::retrieve::passages(&asked, &self.ctx.root, self.ctx.max_output_chars)
             {
@@ -3221,6 +3233,7 @@ mod tests {
                 protocol,
                 allow_fallback: true,
                 shared_protocol: None,
+                delegated: false,
             },
             ctx: h.ctx.clone(),
             checkpoints: None,
@@ -3403,6 +3416,7 @@ mod tests {
                 protocol: Default::default(),
                 grammar_enabled: false,
                 max_steps: 4,
+                slots: Arc::new(tokio::sync::Semaphore::new(2)),
             }),
         });
         let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
@@ -3428,6 +3442,104 @@ mod tests {
             !history.contains("the answer is forty two"),
             "the search came back with the answer"
         );
+    }
+
+    /// The delegation of the tests: the given tools, the test backend, `max_steps` steps.
+    fn delegation(
+        backend: &str,
+        registry: crate::tools::registry::Registry,
+        max_steps: usize,
+    ) -> crate::tools::delegate::Delegate {
+        crate::tools::delegate::Delegate {
+            what: Arc::new(crate::tools::delegate::Delegation {
+                backend: Arc::new(crate::backend::client::BackendClient::new(
+                    backend.to_string(),
+                )),
+                registry: Arc::new(registry),
+                model: "test".into(),
+                roles: Default::default(),
+                context_tokens: 8192,
+                max_answer_tokens: 4096,
+                protocol: Default::default(),
+                grammar_enabled: false,
+                max_steps,
+                slots: Arc::new(tokio::sync::Semaphore::new(2)),
+            }),
+        }
+    }
+
+    /// A delegated session changes nothing, even when it asks to and is given the tool.
+    #[tokio::test]
+    async fn a_delegated_session_cannot_write() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"delegate","arguments":"{\"task\": \"make b.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"s1","function":{"name":"write_file","arguments":"{\"path\": \"b.txt\", \"content\": \"x\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"could not write it"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut reg = crate::boot::build_registry(h.root.clone()).0;
+        reg.register(delegation(&backend.url, reg.clone(), 4));
+        let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+        drive(&mut agent, "go").await;
+        assert!(
+            !h.path("b.txt").exists(),
+            "a delegated session wrote a file"
+        );
+    }
+
+    /// A delegated session that runs out of steps says so, rather than handing back what
+    /// it was about to do as its answer.
+    #[tokio::test]
+    async fn a_delegated_session_out_of_steps_says_it_did_not_finish() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "forty two");
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"delegate","arguments":"{\"task\": \"what is in a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"let me look at a.txt"}}]}"#,
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"s1","function":{"name":"read_file","arguments":"{\"path\": \"a.txt\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut reg = crate::boot::build_registry(h.root.clone()).0;
+        reg.register(delegation(&backend.url, reg.read_only(&[]), 1));
+        let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+        let events = drive(&mut agent, "go").await;
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output, .. } if name == "delegate" => Some(output),
+                _ => None,
+            })
+            .expect("the delegation was never answered");
+        assert!(
+            result.content.starts_with("It did not finish"),
+            "{}",
+            result.content
+        );
+        assert!(result.content.contains("let me look"), "{}", result.content);
     }
 
     #[test]
@@ -4008,6 +4120,7 @@ mod tests {
                 protocol: Default::default(),
                 grammar_enabled: false,
                 max_steps: 4,
+                slots: Arc::new(tokio::sync::Semaphore::new(2)),
             }),
         });
         let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);

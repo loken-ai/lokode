@@ -80,10 +80,10 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // Third-party tools go in after the built-ins, so a server cannot take a name the agent
     // already relies on.
     let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root).await;
-    // What a delegated turn gets: everything this session has except the delegation
-    // itself. A sub-session that could delegate again would recurse, and one that could
-    // not read the project could answer nothing about it.
-    let registry_for_delegation = Arc::new(registry.clone());
+    // What a delegated turn gets: the tools that change nothing, without the task list,
+    // which is the caller's. The delegation itself is registered later, so it is not
+    // among them and a delegated turn cannot delegate again.
+    let registry_for_delegation = Arc::new(registry.read_only(&["update_plan"]));
     let registry = Arc::new(registry);
     // Registered last, because it hands work to a session built like this one. The
     // delegation is added to the shared registry below, once the backend is known.
@@ -323,22 +323,29 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         rows
     };
     // A turn of its own, with its own window, for a question whose search would
-    // otherwise fill this one. The sub-session takes the same tools minus this one.
+    // otherwise fill this one. The sub-session reads and changes nothing.
     let mut registry = Arc::try_unwrap(registry).unwrap_or_else(|shared| (*shared).clone());
+    // A delegated question is a search: its own model when the project names one, and
+    // the session's otherwise, with the window that model takes.
+    let search_model = cfg
+        .roles
+        .get(crate::agent::roles::Role::Search)
+        .map(str::to_string)
+        .unwrap_or_else(|| model.clone());
+    let search_window = cfg
+        .models
+        .get(&search_model)
+        .and_then(|m| m.context_tokens)
+        .unwrap_or(context_tokens);
     registry.register(crate::tools::delegate::Delegate {
         what: Arc::new(crate::tools::delegate::Delegation {
             backend: backend.clone(),
             registry: registry_for_delegation.clone(),
-            // A delegated question is a search: its own model when the project names one,
-            // and the session's otherwise.
-            model: cfg
-                .roles
-                .get(crate::agent::roles::Role::Search)
-                .map(str::to_string)
-                .unwrap_or_else(|| model.clone()),
+            model: search_model,
             roles: cfg.roles.clone(),
-            context_tokens,
+            context_tokens: search_window,
             max_answer_tokens,
+            slots: Arc::new(tokio::sync::Semaphore::new(cfg.parallel_delegates.max(1))),
             protocol: protocol_cell.clone(),
             grammar_enabled: cfg.grammar_enabled,
             // More than this and the work was not self-contained, which is worth saying
@@ -418,16 +425,13 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             protocol,
             allow_fallback: cfg.tool_protocol == ProtocolChoice::Auto,
             shared_protocol: Some(protocol_cell.clone()),
+            delegated: false,
         },
         ctx,
         checkpoints: checkpoints.clone(),
         turn: 0,
     };
 
-    // Registered after the rest: it hands work to a session built the same way, so it
-    // needs what this one was built from. The registry is shared, and the sub-session is
-    // given the same tools, this one included - a delegated turn that delegates again is
-    // bounded by its own step limit.
     Ok(Booted {
         session_approvals,
         protocol_cell,

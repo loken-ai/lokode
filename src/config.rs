@@ -448,6 +448,8 @@ pub struct LimitsSection {
     pub max_steps: Option<usize>,
     pub context_tokens: Option<usize>,
     pub max_answer_tokens: Option<usize>,
+    /// How many delegated turns run at once.
+    pub delegates: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -531,6 +533,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 .limits
                 .max_answer_tokens
                 .or(base.limits.max_answer_tokens),
+            delegates: over.limits.delegates.or(base.limits.delegates),
         },
         web: WebSection {
             allow_hosts: {

@@ -9,6 +9,9 @@ use lokode::{app, config};
 mod default {
     pub const BACKEND_URL: &str = "http://127.0.0.1:11435";
     pub const MAX_STEPS: usize = 16;
+    /// Delegated turns at once. A local server answers them one after another, so more
+    /// than this only holds windows open while they wait.
+    pub const DELEGATES: usize = 2;
     /// The window to ask a local backend for.
     ///
     /// Large, and for a reason that is not the obvious one. A conversation that outgrows
@@ -376,6 +379,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             } else {
                 lokode::agent::agent_loop::Mode::Act
             },
+            parallel_delegates: file.limits.delegates.unwrap_or(default::DELEGATES),
             accept_writes: cli.accept_edits || (starting_mode == "edits" && !cli.plan),
             sandbox,
         },

@@ -587,14 +587,23 @@ Every step is written to the transcript with what was known before it and what i
 ## Handing off a search
 
 `delegate` gives one self-contained question a session of its own, with its own window and the
-same tools, and returns only its answer. The search does not fill the conversation's window.
+tools that read, and returns only its answer. The search does not fill the conversation's
+window.
 
 Its steps stay under its own step, folded into a count once it ends. `Space` unfolds them, and
 `Enter` opens a page with each step, its evidence and the answer. `Ctrl-C` on its step stops it
 alone.
 
-The sub-session cannot delegate again, and its step limit is lower than a turn's. It runs under
-the caller's approvals.
+| | |
+|---|---|
+| Tools | those that change nothing, without the task list and without `delegate` |
+| Model | the `search` role, with the window `[models]` gives it |
+| Steps | at most 8 |
+| At once | `[limits] delegates`, 2 by default. The others wait |
+| Out of steps | says it did not finish, with what it said last |
+
+The question is taken as written: no file is attached for it and the project is not searched
+for it.
 
 ## Work of several steps
 

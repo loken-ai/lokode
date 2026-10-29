@@ -235,6 +235,7 @@ impl Discovery {
                 protocol: self.protocol.get(),
                 allow_fallback: false,
                 shared_protocol: None,
+                delegated: false,
             },
             ctx: self.ctx.clone(),
             checkpoints: None,
