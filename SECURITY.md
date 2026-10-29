@@ -60,11 +60,15 @@ leaves the old contents or the new ones. A multi-file patch is applied wholly or
 **A command runs in a sandbox, on Linux.** `bash` and `run_tests` run their command under
 Landlock, which the command and everything it starts cannot undo.
 
-| `[shell] sandbox` | What a command may write |
-|---|---|
-| `workspace` (default) | the project, `/tmp`, `$TMPDIR`, the build caches below your home directory that exist, and `[shell] writable` |
-| `read-only` | nothing but the devices under `/dev` |
-| `off` | anything you may write |
+| `[shell] sandbox` | What a command may write | Network |
+|---|---|---|
+| `workspace` (default) | the project, `/tmp`, `$TMPDIR`, the build caches below your home directory that exist, and `[shell] writable` | yes |
+| `read-only` | nothing but the devices under `/dev` | no |
+| `off` | anything you may write | yes |
+
+- `[shell] network` changes the network of a sandboxed command. Without it, the command can
+  neither bind nor connect a TCP socket, on this machine included. UDP is not cut. The kernel
+  needs Landlock ABI 4.
 
 - `LOKODE_API_KEY` and the variable named by `api-key-env` are taken out of the command's
   environment.

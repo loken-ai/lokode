@@ -4,7 +4,8 @@
 //! approved command runs with the user's privileges. On Linux, Landlock lets a process give
 //! up access it will never need again, and a child cannot get it back. A confined command
 //! and everything it starts may write only beneath the directories its [`Sandbox`] names,
-//! and to the devices under `/dev`. It may read everything but what the sandbox hides.
+//! and to the devices under `/dev`. It may read everything but what the sandbox hides, and
+//! open TCP connections only when the sandbox lets it.
 
 use std::path::PathBuf;
 
@@ -38,6 +39,8 @@ pub struct Sandbox {
     pub writable: Vec<PathBuf>,
     /// The directories and files it may not read.
     pub hidden: Vec<PathBuf>,
+    /// Whether it may bind and connect TCP sockets.
+    pub network: bool,
     /// The environment variables taken out of what it inherits.
     pub unset: Vec<String>,
 }
@@ -53,7 +56,7 @@ impl Sandbox {
         for var in &self.unset {
             cmd.env_remove(var);
         }
-        let fd = ruleset(&self.writable, &self.hidden)?;
+        let fd = ruleset(&self.writable, &self.hidden, self.network)?;
         use std::os::fd::AsRawFd;
         let raw = fd.as_raw_fd();
         // SAFETY: `restrict_after_fork` makes two syscalls and nothing else, no allocation
@@ -67,12 +70,15 @@ impl Sandbox {
 
     /// What a command that failed in it is told about it.
     pub fn note(&self) -> String {
-        match self.level {
-            Level::ReadOnly => "It ran in a read-only sandbox: it may not write any file.".into(),
-            _ => "It ran in a sandbox: it may write only in the project, the temporary \
-                  directory and the build caches."
-                .into(),
-        }
+        let writes = match self.level {
+            Level::ReadOnly => "may not write any file",
+            _ => "may write only in the project, the temporary directory and the build caches",
+        };
+        let network = match self.network {
+            true => "",
+            false => ", and may not open a network connection",
+        };
+        format!("It ran in a sandbox: it {writes}{network}.")
     }
 }
 
@@ -111,7 +117,12 @@ mod linux {
     #[repr(C)]
     struct RulesetAttr {
         handled_access_fs: u64,
+        /// ABI 4. Left out of the size given to the kernel when no network is handled.
+        handled_access_net: u64,
     }
+
+    const BIND_TCP: u64 = 1 << 0;
+    const CONNECT_TCP: u64 = 1 << 1;
 
     #[repr(C, packed)]
     struct PathBeneathAttr {
@@ -160,7 +171,7 @@ mod linux {
     /// both allocate and open files, and doing that between `fork` and `exec` in a process
     /// with other threads can deadlock in the allocator. What is left for the child is two
     /// bare syscalls.
-    pub fn ruleset(writable: &[PathBuf], hidden: &[PathBuf]) -> io::Result<OwnedFd> {
+    pub fn ruleset(writable: &[PathBuf], hidden: &[PathBuf], network: bool) -> io::Result<OwnedFd> {
         let Some(abi) = abi() else {
             return Err(io::Error::other("this kernel has no Landlock"));
         };
@@ -168,15 +179,22 @@ mod linux {
             true => 0,
             false => READ_FILE | READ_DIR,
         };
+        // With no rule for a port, every TCP bind and connect is refused.
+        let cut = !network && abi >= 4;
         let attr = RulesetAttr {
             handled_access_fs: writes_for(abi) | reads,
+            handled_access_net: if cut { BIND_TCP | CONNECT_TCP } else { 0 },
         };
-        // SAFETY: `attr` is live for the call and its size is what the kernel is told.
+        let size = match cut {
+            true => std::mem::size_of::<RulesetAttr>(),
+            false => std::mem::size_of::<u64>(),
+        };
+        // SAFETY: `attr` is live for the call and holds at least the size the kernel is told.
         let fd = unsafe {
             libc::syscall(
                 SYS_CREATE_RULESET,
                 &attr as *const RulesetAttr,
-                std::mem::size_of::<RulesetAttr>(),
+                size,
                 0usize,
             )
         };
@@ -323,7 +341,11 @@ mod elsewhere {
         None
     }
 
-    pub fn ruleset(_writable: &[PathBuf], _hidden: &[PathBuf]) -> io::Result<OwnedFd> {
+    pub fn ruleset(
+        _writable: &[PathBuf],
+        _hidden: &[PathBuf],
+        _network: bool,
+    ) -> io::Result<OwnedFd> {
         Err(io::Error::other("shell confinement needs Linux"))
     }
 
@@ -349,7 +371,7 @@ mod tests {
             Some(v) => assert!(v >= 1, "an ABI of {v} is not a version"),
             None => {
                 // Then building a ruleset must fail rather than silently confine nothing.
-                assert!(ruleset(&[std::env::temp_dir()], &[]).is_err());
+                assert!(ruleset(&[std::env::temp_dir()], &[], true).is_err());
             }
         }
     }
@@ -361,7 +383,7 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        assert!(ruleset(&[dir.path().to_path_buf()], &[]).is_ok());
+        assert!(ruleset(&[dir.path().to_path_buf()], &[], true).is_ok());
     }
 
     /// A directory that is not there is not a reason to refuse to confine anything.
@@ -373,7 +395,8 @@ mod tests {
         }
         assert!(ruleset(
             &[std::path::PathBuf::from("/no/such/directory/anywhere")],
-            &[]
+            &[],
+            true
         )
         .is_ok());
     }
@@ -416,6 +439,7 @@ mod tests {
             level: Level::Workspace,
             writable: vec![dir.path().to_path_buf()],
             hidden: vec![dir.path().join("secret")],
+            network: true,
             unset: Vec::new(),
         };
         let mut cmd = tokio::process::Command::new("/bin/sh");
@@ -428,5 +452,40 @@ mod tests {
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(stdout.contains("fine"), "{stdout}");
         assert!(!stdout.contains("hunter2"), "{stdout}");
+    }
+
+    /// A command in a sandbox without the network cannot connect, even to this machine.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_command_without_the_network_cannot_connect() {
+        if abi().is_none_or(|v| v < 4) {
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let run = |network: bool| {
+            let sandbox = Sandbox {
+                level: Level::Workspace,
+                writable: Vec::new(),
+                hidden: Vec::new(),
+                network,
+                unset: Vec::new(),
+            };
+            async move {
+                let mut cmd = tokio::process::Command::new("/bin/bash");
+                cmd.arg("-c").arg(format!(
+                    "exec 3<>/dev/tcp/127.0.0.1/{port} && echo connected"
+                ));
+                let fd = sandbox.confine(&mut cmd).unwrap();
+                let out = cmd.output().await.unwrap();
+                drop(fd);
+                String::from_utf8_lossy(&out.stdout).contains("connected")
+            }
+        };
+        if !std::path::Path::new("/bin/bash").exists() {
+            return;
+        }
+        assert!(run(true).await);
+        assert!(!run(false).await);
     }
 }

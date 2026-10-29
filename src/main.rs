@@ -453,10 +453,15 @@ fn print_config(cfg: &Resolved) {
         "  sandbox            {}",
         match &a.sandbox {
             None => "off".to_string(),
-            Some(s) if s.writable.is_empty() => s.level.label().to_string(),
-            Some(s) => format!(
-                "{}, writes in {}",
+            Some(s) if s.writable.is_empty() => format!(
+                "{}, network {}",
                 s.level.label(),
+                if s.network { "on" } else { "off" }
+            ),
+            Some(s) => format!(
+                "{}, network {}, writes in {}",
+                s.level.label(),
+                if s.network { "on" } else { "off" },
                 s.writable
                     .iter()
                     .map(|d| d.display().to_string())

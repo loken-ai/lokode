@@ -101,6 +101,7 @@ impl Harness {
             level: crate::sandbox::confine::Level::Workspace,
             writable: vec![h.root.clone()],
             hidden: Vec::new(),
+            network: true,
             unset: vec!["LOKODE_API_KEY".into()],
         }));
         h

@@ -309,6 +309,9 @@ pub struct ShellSection {
     /// it never reads. Written like `writable`.
     #[serde(default)]
     pub hidden: Vec<PathBuf>,
+    /// Whether a confined command may open TCP connections. Yes in the workspace, no in
+    /// read-only, when not given.
+    pub network: Option<bool>,
 }
 
 impl ShellSection {
@@ -555,6 +558,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 h.extend(over.shell.hidden);
                 h
             },
+            network: over.shell.network.or(base.shell.network),
         },
         roles: crate::agent::roles::Roles::merge(base.roles, over.roles),
         preload: over.preload.or(base.preload),
@@ -873,10 +877,17 @@ pub fn resolve_sandbox(
             Err(why) => warnings.push(why.replace("writable", "hidden")),
         }
     }
+    let network = cfg.shell.network.unwrap_or(level != Level::ReadOnly);
+    if !network && crate::sandbox::confine::abi().is_some_and(|v| v < 4) {
+        warnings.push(
+            "this kernel's Landlock cannot cut the network, so sandboxed commands keep it".into(),
+        );
+    }
     Sandbox {
         level,
         writable,
         hidden,
+        network,
         unset,
     }
 }
@@ -1021,6 +1032,7 @@ mod tests {
             assert_eq!(s.unset, ["LOKODE_API_KEY", "MY_KEY"]);
             let s = resolve_sandbox(&cfg, root.path(), Level::ReadOnly, &mut warnings);
             assert!(s.writable.is_empty());
+            assert!(!s.network);
             std::fs::create_dir(home.path().join(".ssh")).unwrap();
             let s = resolve_sandbox(&cfg, root.path(), Level::Workspace, &mut warnings);
             assert!(s.hidden.contains(&home.path().join(".ssh")));
