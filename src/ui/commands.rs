@@ -767,30 +767,7 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
             "## Plugins\n\n| Plugin | Version | What it is for | Brings | State |\n|---|---|---|---|---|\n",
         );
         for p in &plugins {
-            let count = |kind: &str| {
-                std::fs::read_dir(p.dir_of(kind))
-                    .map(|e| e.flatten().count())
-                    .unwrap_or(0)
-            };
-            let h = &p.file.hooks;
-            let hooks = h.session_start.len()
-                + h.prompt.len()
-                + h.pre_tool.len()
-                + h.post_tool.len()
-                + h.turn_end.len()
-                + h.agent_end.len()
-                + h.compact.len();
-            let brings: Vec<String> = [
-                ("command", count("commands")),
-                ("agent", count("agents")),
-                ("skill", count("skills")),
-                ("hook", hooks),
-                ("server", p.file.mcp.servers.len()),
-            ]
-            .into_iter()
-            .filter(|(_, n)| *n > 0)
-            .map(|(what, n)| format!("{n} {what}{}", if n > 1 { "s" } else { "" }))
-            .collect();
+            let brings = p.brings();
             out.push_str(&format!(
                 "| `{}` | {} | {} | {} | {} |\n",
                 p.name,
@@ -807,8 +784,9 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
             out.push_str(&format!("\n{w}\n"));
         }
         out.push_str(
-            "\nA plugin is a directory with a `plugin.toml` in `~/.config/lokode/plugins/`. \
-             `[plugins] disabled` turns one off. A change is taken at the next session.\n",
+            "\nA plugin is a directory with a `plugin.toml` in `~/.config/lokode/plugins/`, \
+             installed with `lokode plugin install <git url>`. `[plugins] disabled` turns one \
+             off. A change is taken at the next session.\n",
         );
         return Ran::Said(out);
     }

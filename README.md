@@ -798,6 +798,18 @@ command = "tracker-mcp"
 
 `/plugins` lists them, what each brings, and which are off.
 
+A plugin kept in git is installed and kept up to date from the command line:
+
+| Command | What it does |
+|---|---|
+| `lokode plugin install <git url>` | Clones it under the end of the url, or under `--name` |
+| `lokode plugin update [name...]` | Brings the named plugins, or all of them, up to their source |
+| `lokode plugin remove <name>` | Takes it out |
+| `lokode plugin list` | Lists what is installed and what each brings |
+
+A plugin whose hooks or servers run programs shows them and asks before it is installed. An
+update that changes what runs asks again. `--yes` takes it without asking, which a script needs.
+
 ## Tools from elsewhere
 
 A Model Context Protocol server you configure adds its tools, named `<server>__<tool>`.

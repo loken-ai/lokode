@@ -157,10 +157,51 @@ struct Cli {
     /// `json` writes one object to stdout at the end.
     #[arg(long, value_enum, default_value = "text", requires = "prompt")]
     output: lokode::headless::OutputFormat,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Install, update, remove or list plugins.
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum PluginAction {
+    /// Install a plugin from a git repository.
+    Install {
+        /// Where to clone it from.
+        source: String,
+        /// The name to install it under. The end of the source when not given.
+        #[arg(long)]
+        name: Option<String>,
+        /// Install it without asking, even when it runs programs.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Bring plugins up to their source: those named, or every one installed from git.
+    Update {
+        names: Vec<String>,
+        /// Take an update without asking, even when it runs new programs.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Take a plugin out.
+    Remove { name: String },
+    /// List the plugins installed.
+    List,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Command::Plugin { action }) = cli.command {
+        return plugin_command(action);
+    }
 
     let root = cli.root.canonicalize().map_err(|e| {
         anyhow::anyhow!(
@@ -395,6 +436,126 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
 
 /// Ask on the terminal whether to trust the project's guarded settings. No when there is
 /// no terminal to ask on.
+/// Install, update, remove or list plugins, saying what was done.
+fn plugin_command(action: PluginAction) -> Result<()> {
+    use lokode::plugins;
+    let home = plugins::home().context("there is no configuration directory")?;
+    std::fs::create_dir_all(&home)?;
+    match action {
+        PluginAction::Install { source, name, yes } => {
+            let name = name
+                .or_else(|| plugins::name_for(&source))
+                .context("no name can be read off the source: give one with --name")?;
+            match plugins::install(&home, &source, &name, |p| {
+                agree_plugin(p, yes, "Install it?")
+            })? {
+                Some(p) => println!(
+                    "installed {} in {}: {}",
+                    p.name,
+                    p.dir.display(),
+                    brought(&p)
+                ),
+                None => println!("{name} was not installed"),
+            }
+        }
+        PluginAction::Update { names, yes } => {
+            let names = match names.is_empty() {
+                false => names,
+                true => plugins::load_from(&home, &[])
+                    .0
+                    .into_iter()
+                    .filter(|p| p.dir.join(".git").exists())
+                    .map(|p| p.name)
+                    .collect(),
+            };
+            if names.is_empty() {
+                println!("no plugin was installed from git");
+            }
+            for name in names {
+                match plugins::update(&home, &name, |p| {
+                    agree_plugin(p, yes, "It runs something new. Take the update?")
+                }) {
+                    Ok(said) => println!("{said}"),
+                    Err(e) => eprintln!("{name}: {e:#}"),
+                }
+            }
+        }
+        PluginAction::Remove { name } => {
+            plugins::remove(&home, &name)?;
+            println!("removed {name}");
+        }
+        PluginAction::List => {
+            let disabled = config::user_config_path()
+                .and_then(|p| config::read(&p).ok().flatten())
+                .map(|c| c.plugins.disabled)
+                .unwrap_or_default();
+            let (installed, warnings) = plugins::load_from(&home, &disabled);
+            if installed.is_empty() {
+                println!("no plugin is installed in {}", home.display());
+            }
+            for p in installed {
+                println!(
+                    "{}{}  {}  {}",
+                    p.name,
+                    if p.disabled { " (off)" } else { "" },
+                    p.file.description,
+                    brought(&p)
+                );
+            }
+            for w in warnings {
+                eprintln!("{w}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn brought(p: &lokode::plugins::Plugin) -> String {
+    match p.brings() {
+        b if b.is_empty() => "nothing yet".to_string(),
+        b => b.join(", "),
+    }
+}
+
+/// Whether to take the plugin `p`: at once when it runs nothing or `yes` was given, by
+/// asking on a terminal otherwise, and never without one.
+fn agree_plugin(p: &lokode::plugins::Plugin, yes: bool, question: &str) -> bool {
+    use std::io::{BufRead, IsTerminal, Write};
+    let runs = p.file.runs();
+    if runs.is_empty() || yes {
+        return true;
+    }
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(
+        err,
+        "{}: {}
+
+It runs, with your rights:
+",
+        p.name, p.file.description
+    );
+    for line in &runs {
+        let _ = writeln!(err, "    {line}");
+    }
+    if !std::io::stdin().is_terminal() {
+        let _ = writeln!(
+            err,
+            "
+Nobody is here to agree to it: run again with --yes to take it."
+        );
+        return false;
+    }
+    let _ = write!(
+        err,
+        "
+{question} [y/N] "
+    );
+    let _ = err.flush();
+    let mut answer = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut answer);
+    matches!(answer.trim(), "y" | "Y" | "yes")
+}
+
 fn ask_trust(untrusted: &config::Untrusted) -> Result<bool> {
     use std::io::{BufRead, IsTerminal, Write};
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
