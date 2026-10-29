@@ -207,6 +207,9 @@ pub struct PluginsSection {
     /// The plugins installed and turned off, by name.
     #[serde(default)]
     pub disabled: Vec<String>,
+    /// The values a plugin asks for, by plugin and then by option.
+    #[serde(default)]
+    pub options: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -272,6 +275,10 @@ pub struct HooksSection {
     pub agent_end: Vec<Hook>,
     #[serde(default, deserialize_with = "one_or_many")]
     pub compact: Vec<Hook>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub session_end: Vec<Hook>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub notification: Vec<Hook>,
 }
 
 impl HooksSection {
@@ -284,6 +291,8 @@ impl HooksSection {
         self.turn_end.extend(over.turn_end);
         self.agent_end.extend(over.agent_end);
         self.compact.extend(over.compact);
+        self.session_end.extend(over.session_end);
+        self.notification.extend(over.notification);
         self
     }
 }
@@ -697,6 +706,11 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 d.extend(over.plugins.disabled);
                 d
             },
+            options: {
+                let mut o = base.plugins.options;
+                o.extend(over.plugins.options);
+                o
+            },
         },
         approve: crate::sandbox::policy::Policy {
             // Added to rather than replaced, on both sides: a project stating what is
@@ -769,10 +783,13 @@ pub fn load(root: &Path, trust: bool) -> Result<Loaded> {
     // The plugins come after the user's file and before the project's: they are the
     // user's, and the project still has the last word on its own settings.
     let (plugins, _) = crate::plugins::load();
-    let (hooks, servers) = crate::plugins::sections(&plugins);
-    cfg.hooks = cfg.hooks.after(hooks);
-    for (name, server) in servers {
+    let added = crate::plugins::sections(&plugins);
+    cfg.hooks = cfg.hooks.after(added.hooks);
+    for (name, server) in added.servers {
         cfg.mcp.servers.entry(name).or_insert(server);
+    }
+    for (name, server) in added.lsp {
+        cfg.lsp.servers.entry(name).or_insert(server);
     }
     let path = project_config_path(root);
     let mut untrusted = None;

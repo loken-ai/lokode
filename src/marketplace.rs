@@ -55,6 +55,13 @@ pub enum Source {
         url: String,
         path: String,
     },
+    /// A zip archive downloaded over HTTPS.
+    Archive(String),
+    /// A package of the npm registry, at a version when one is named.
+    Npm {
+        package: String,
+        version: Option<String>,
+    },
     /// A directory of the marketplace's own clone.
     Dir(PathBuf),
 }

@@ -87,6 +87,8 @@ pub struct ToolCtx {
     pub holder: Option<(u64, String)>,
     /// The work agents did in their own copies, waiting for the session to bring it in.
     pub works: crate::tools::worktree::Pending,
+    /// The hooks told when the session waits for the person.
+    pub notify: Arc<Vec<crate::config::Hook>>,
     /// What the person asked this session, in order: the project's objectives when an
     /// agent's work is reconciled with it.
     pub asked: Arc<std::sync::Mutex<Vec<String>>>,
@@ -360,6 +362,11 @@ impl ToolCtx {
             tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by an earlier agreement");
             return Approval::Proceed;
         }
+        crate::agent::hooks::notify(
+            &self.notify,
+            &self.root,
+            &format!("{} waits for you: {}", req.tool, req.summary),
+        );
         let tool = req.tool.clone();
         let scope = req.scope.clone();
         let decision = tokio::select! {

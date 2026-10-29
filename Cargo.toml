@@ -60,6 +60,8 @@ ignore = "0.4"
 regex = "1"
 
 uuid = { version = "1", features = ["v4"] }
+# A plugin offered as a zip archive
+zip = { version = "9", default-features = false, features = ["deflate"] }
 # Language server client: types only, the stdio JSON-RPC client is in-crate.
 # Pinned to 0.94, which still re-exports `Url`; 0.95 swapped it for `Uri`.
 lsp-types = "0.94"

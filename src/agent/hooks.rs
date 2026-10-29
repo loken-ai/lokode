@@ -55,6 +55,10 @@ pub enum Event {
     AgentEnd,
     /// When the oldest steps of the session have left the window.
     Compact,
+    /// When the session ends.
+    SessionEnd,
+    /// When the session waits for the person: a question to answer, a change to approve.
+    Notification,
 }
 
 impl Event {
@@ -67,6 +71,8 @@ impl Event {
             Event::TurnEnd => "turn-end",
             Event::AgentEnd => "agent-end",
             Event::Compact => "compact",
+            Event::SessionEnd => "session-end",
+            Event::Notification => "notification",
         }
     }
 }
@@ -95,6 +101,24 @@ pub fn applies(hook: &Hook, tool: Option<(&str, bool)>) -> bool {
             .split('|')
             .any(|p| crate::sandbox::policy::glob_matches(p.trim(), name)),
     }
+}
+
+/// Tell the hooks of `event` that the session waits for the person, and go on without waiting
+/// for them: what they do is the person's to be told, and the turn is not held up.
+pub fn notify(hooks: &std::sync::Arc<Vec<Hook>>, root: &Path, message: &str) {
+    if hooks.is_empty() {
+        return;
+    }
+    let (hooks, root) = (hooks.clone(), root.to_path_buf());
+    let input = serde_json::json!({
+        "event": Event::Notification.label(),
+        "root": root,
+        "message": message,
+        "hook_event_name": "Notification",
+    });
+    tokio::spawn(async move {
+        run_all(&hooks, Event::Notification, &root, None, input).await;
+    });
 }
 
 /// Run each of `hooks` that applies, in order, and gather what they said. A pre-tool

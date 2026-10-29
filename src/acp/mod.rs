@@ -602,6 +602,7 @@ async fn open(
                     }
                 }
             }
+            agent.end_session().await;
         }));
     }
     // The updates, in the order the engine said them.

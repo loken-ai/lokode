@@ -20,7 +20,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::config::{Hook, HooksSection, McpServer};
+use crate::config::{Hook, HooksSection, LspServer, McpServer};
 
 /// The directory a Claude Code plugin keeps its manifest and its marketplace in.
 pub const DIR: &str = ".claude-plugin";
@@ -169,6 +169,8 @@ pub fn hooks_from(value: &Value, root: &Path) -> (HooksSection, Vec<String>) {
             "Stop" => &mut out.turn_end,
             "SubagentStop" => &mut out.agent_end,
             "PreCompact" => &mut out.compact,
+            "SessionEnd" => &mut out.session_end,
+            "Notification" => &mut out.notification,
             other => {
                 warnings.push(format!("the hook event {other} is not one lokode has"));
                 continue;
@@ -275,12 +277,64 @@ pub fn servers_from(value: &Value, root: &Path) -> (BTreeMap<String, McpServer>,
     (out, warnings)
 }
 
+/// The language servers a `.lsp.json` holds, or an inline object of the manifest.
+pub fn lsp_from(value: &Value, root: &Path) -> (BTreeMap<String, LspServer>, Vec<String>) {
+    let mut out = BTreeMap::new();
+    let mut warnings = Vec::new();
+    let Some(named) = value.as_object() else {
+        return (out, warnings);
+    };
+    for (name, spec) in named {
+        let Some(command) = spec.get("command").and_then(|c| c.as_str()) else {
+            warnings.push(format!("the language server {name} has no command"));
+            continue;
+        };
+        let extensions: Vec<String> = spec
+            .get("extensionToLanguage")
+            .and_then(|e| e.as_object())
+            .map(|e| {
+                e.keys()
+                    .map(|k| k.trim_start_matches('.').to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if extensions.is_empty() {
+            warnings.push(format!("the language server {name} names no extension"));
+            continue;
+        }
+        out.insert(
+            name.clone(),
+            LspServer {
+                command: Some(with_root(command, root)),
+                args: spec.get("args").and_then(|a| a.as_array()).map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| with_root(s, root)))
+                        .collect()
+                }),
+                extensions: Some(extensions),
+                init: spec.get("initializationOptions").cloned(),
+                settings: spec.get("settings").cloned(),
+                env: spec
+                    .get("env")
+                    .and_then(|e| e.as_object())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(k, v)| Some((k.clone(), with_root(v.as_str()?, root))))
+                    .collect(),
+                enabled: None,
+            },
+        );
+    }
+    (out, warnings)
+}
+
 /// What the manifest of a plugin says, and what the files beside it add.
 pub struct Read {
     pub description: String,
     pub version: Option<String>,
     pub hooks: HooksSection,
     pub servers: BTreeMap<String, McpServer>,
+    pub lsp: BTreeMap<String, LspServer>,
     pub warnings: Vec<String>,
 }
 
@@ -290,13 +344,61 @@ pub fn is_plugin(dir: &Path) -> bool {
     dir.join(DIR).join("plugin.json").is_file()
         || dir.join("hooks").join("hooks.json").is_file()
         || dir.join(".mcp.json").is_file()
+        || dir.join(".lsp.json").is_file()
         || ["commands", "agents", "skills"]
             .iter()
             .any(|d| dir.join(d).is_dir())
 }
 
-/// Read the plugin in `dir`.
-pub fn read_plugin(dir: &Path) -> Result<Read, String> {
+/// `text` with each `${user_config.KEY}` put as the value of the option `KEY`.
+fn with_options(text: &str, values: &BTreeMap<String, String>) -> String {
+    let mut out = text.to_string();
+    for (key, value) in values {
+        out = out.replace(&format!("${{user_config.{key}}}"), value);
+    }
+    out
+}
+
+/// The values of the options a manifest asks for: what the user gave in `given`, or in the
+/// variable `CLAUDE_PLUGIN_OPTION_<KEY>`, or the option's default. Says what is missing.
+fn option_values(
+    manifest: &Value,
+    plugin: &str,
+    given: &BTreeMap<String, String>,
+) -> (BTreeMap<String, String>, Vec<String>) {
+    let mut values = BTreeMap::new();
+    let mut missing = Vec::new();
+    let Some(asked) = manifest.get("userConfig").and_then(|u| u.as_object()) else {
+        return (values, missing);
+    };
+    for (key, spec) in asked {
+        let from_env = std::env::var(format!("CLAUDE_PLUGIN_OPTION_{}", key.to_uppercase())).ok();
+        let default = spec.get("default").map(|d| match d {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        });
+        match given.get(key).cloned().or(from_env).or(default) {
+            Some(value) => {
+                values.insert(key.clone(), value);
+            }
+            None if spec
+                .get("required")
+                .and_then(|r| r.as_bool())
+                .unwrap_or(false) =>
+            {
+                missing.push(format!(
+                    "it needs the option {key}: set it in [plugins.options.{plugin}] or in CLAUDE_PLUGIN_OPTION_{}",
+                    key.to_uppercase()
+                ));
+            }
+            None => {}
+        }
+    }
+    (values, missing)
+}
+
+/// Read the plugin in `dir`, the options the user gave it in `given`.
+pub fn read_plugin(dir: &Path, given: &BTreeMap<String, String>) -> Result<Read, String> {
     let manifest: Value = match std::fs::read_to_string(dir.join(DIR).join("plugin.json")) {
         Ok(text) => serde_json::from_str(&text).map_err(|e| format!("plugin.json: {e}"))?,
         Err(_) => Value::Null,
@@ -313,6 +415,7 @@ pub fn read_plugin(dir: &Path) -> Result<Read, String> {
             .map(str::to_string),
         hooks: HooksSection::default(),
         servers: BTreeMap::new(),
+        lsp: BTreeMap::new(),
         warnings: Vec::new(),
     };
     // A file the manifest names, or the object itself, or the default place.
@@ -353,6 +456,22 @@ pub fn read_plugin(dir: &Path) -> Result<Read, String> {
             Err(why) => read.warnings.push(why),
         }
     }
+    let plugin = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let (values, missing) = option_values(&manifest, &plugin, given);
+    read.warnings.extend(missing);
+    for value in sources("lspServers", ".lsp.json") {
+        match value {
+            Ok(value) => {
+                let (servers, warnings) = lsp_from(&value, dir);
+                read.lsp.extend(servers);
+                read.warnings.extend(warnings);
+            }
+            Err(why) => read.warnings.push(why),
+        }
+    }
     for value in sources("mcpServers", ".mcp.json") {
         match value {
             Ok(value) => {
@@ -362,6 +481,29 @@ pub fn read_plugin(dir: &Path) -> Result<Read, String> {
                 read.warnings.extend(warnings);
             }
             Err(why) => read.warnings.push(why),
+        }
+    }
+    // The options go in what runs: a token in a server's environment or its headers.
+    for server in read.servers.values_mut() {
+        server.command = server.command.take().map(|c| with_options(&c, &values));
+        server.url = server.url.take().map(|u| with_options(&u, &values));
+        for arg in &mut server.args {
+            *arg = with_options(arg, &values);
+        }
+        for value in server.env.values_mut() {
+            *value = with_options(value, &values);
+        }
+        for value in server.headers.values_mut() {
+            *value = with_options(value, &values);
+        }
+    }
+    for server in read.lsp.values_mut() {
+        server.command = server.command.take().map(|c| with_options(&c, &values));
+        for arg in server.args.iter_mut().flatten() {
+            *arg = with_options(arg, &values);
+        }
+        for value in server.env.values_mut() {
+            *value = with_options(value, &values);
         }
     }
     Ok(read)
@@ -392,6 +534,13 @@ pub fn source_of(entry: &Value) -> Result<crate::marketplace::Source, String> {
                     path: text(object, "path").ok_or("a git-subdir source has no path")?,
                 })
             }
+            Some("archive") => Ok(Source::Archive(
+                text(object, "url").ok_or("an archive source has no url")?,
+            )),
+            Some("npm") => Ok(Source::Npm {
+                package: text(object, "package").ok_or("an npm source has no package")?,
+                version: text(object, "version"),
+            }),
             other => Err(format!(
                 "a source of kind {other:?} is not one lokode reads"
             )),
@@ -455,6 +604,8 @@ pub fn hook_fields(event: &str, facts: &Value) -> Value {
             "turn-end" => "Stop",
             "agent-end" => "SubagentStop",
             "compact" => "PreCompact",
+            "session-end" => "SessionEnd",
+            "notification" => "Notification",
             other => other,
         },
     });
@@ -484,7 +635,8 @@ mod tests {
                     {"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/fmt.sh", "timeout": 10}]}],
                 "PreToolUse": [{"hooks": [{"type": "command", "command": "guard"}]}],
                 "Stop": [{"hooks": [{"type": "command", "command": "done"}]}],
-                "Notification": [{"hooks": [{"type": "command", "command": "x"}]}]
+                "Elicitation": [{"hooks": [{"type": "command", "command": "x"}]}],
+                "SessionEnd": [{"hooks": [{"type": "command", "command": "bye"}]}]
             }}),
             Path::new("/p/plug"),
         );
@@ -496,6 +648,7 @@ mod tests {
         assert_eq!(hooks.post_tool[0].timeout, Some(10));
         assert_eq!(hooks.pre_tool[0].matches.as_deref(), Some("*"));
         assert_eq!(hooks.turn_end.len(), 1);
+        assert_eq!(hooks.session_end.len(), 1);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
     }
 
@@ -535,15 +688,69 @@ mod tests {
         );
     }
 
+    /// A language server comes over with its extensions without the dot.
+    #[test]
+    fn language_servers_are_read() {
+        let (servers, warnings) = lsp_from(
+            &json!({
+                "go": {"command": "gopls", "args": ["serve"], "extensionToLanguage": {".go": "go"}},
+                "bare": {"command": "x"}
+            }),
+            Path::new("/p"),
+        );
+        assert_eq!(
+            servers["go"].extensions.as_deref(),
+            Some(&["go".to_string()][..])
+        );
+        assert_eq!(
+            servers["go"].args.as_deref(),
+            Some(&["serve".to_string()][..])
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+    }
+
     /// A hooks file that is not JSON is said, not skipped.
     #[test]
     fn an_unreadable_file_is_said() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("hooks")).unwrap();
         std::fs::write(dir.path().join("hooks/hooks.json"), "{not json").unwrap();
-        let read = read_plugin(dir.path()).unwrap();
+        let read = read_plugin(dir.path(), &BTreeMap::new()).unwrap();
         assert_eq!(read.warnings.len(), 1, "{:?}", read.warnings);
         assert!(read.hooks.post_tool.is_empty());
+    }
+
+    /// An option the user gave, or the manifest defaults, goes in what runs, and one that
+    /// is required and missing is said.
+    #[test]
+    fn options_go_in_what_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(DIR)).unwrap();
+        std::fs::write(
+            dir.path().join(DIR).join("plugin.json"),
+            r#"{"name": "t", "userConfig": {
+                "token": {"type": "string", "title": "t", "description": "d", "required": true},
+                "region": {"type": "string", "title": "r", "description": "d", "default": "eu"}},
+               "mcpServers": {"api": {"url": "https://x/${user_config.region}",
+                   "headers": {"Authorization": "Bearer ${user_config.token}"}}}}"#,
+        )
+        .unwrap();
+        let none = read_plugin(dir.path(), &BTreeMap::new()).unwrap();
+        assert!(
+            none.warnings
+                .iter()
+                .any(|w| w.contains("needs the option token")),
+            "{:?}",
+            none.warnings
+        );
+        assert_eq!(none.servers["api"].url.as_deref(), Some("https://x/eu"));
+        let given = BTreeMap::from([("token".to_string(), "s3cret".to_string())]);
+        let with = read_plugin(dir.path(), &given).unwrap();
+        assert!(with.warnings.is_empty(), "{:?}", with.warnings);
+        assert_eq!(
+            with.servers["api"].headers["Authorization"],
+            "Bearer s3cret"
+        );
     }
 
     /// The four forms of a source are read.
@@ -555,7 +762,9 @@ mod tests {
                 {"name": "b", "source": {"source": "github", "repo": "o/b"}},
                 {"name": "c", "source": {"source": "url", "url": "https://h/c.git"}},
                 {"name": "d", "source": {"source": "git-subdir", "url": "o/mono", "path": "tools/d"}},
-                {"name": "e", "source": {"source": "npm", "package": "e"}}
+                {"name": "e", "source": {"source": "npm", "package": "e", "version": "1.2.0"}},
+                {"name": "f", "source": {"source": "archive", "url": "https://h/f.zip"}},
+                {"name": "g", "source": {"source": "command", "command": "make"}}
             ]}"#,
         )
         .unwrap();
@@ -574,6 +783,17 @@ mod tests {
                 path: "tools/d".into()
             })
         );
-        assert!(plugins[4].source.is_err());
+        assert_eq!(
+            plugins[4].source,
+            Ok(Source::Npm {
+                package: "e".into(),
+                version: Some("1.2.0".into())
+            })
+        );
+        assert_eq!(
+            plugins[5].source,
+            Ok(Source::Archive("https://h/f.zip".into()))
+        );
+        assert!(plugins[6].source.is_err());
     }
 }

@@ -172,7 +172,11 @@ pub async fn run(
     }
 
     let cancel = shutdown.child_token();
-    let driver = tokio::spawn(async move { agent.run_user_turn(prompt, cancel, tx).await });
+    let driver = tokio::spawn(async move {
+        let done = agent.run_user_turn(prompt, cancel, tx).await;
+        agent.end_session().await;
+        done
+    });
 
     let mut report = Report {
         session: session_id,

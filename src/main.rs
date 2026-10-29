@@ -573,14 +573,9 @@ fn plugin_command(action: PluginAction) -> Result<()> {
                         marketplace::Source::Dir(dir) => {
                             plugins::install_dir(&home, dir, &listing.market, &name, agree)?
                         }
-                        marketplace::Source::Subdir { url, path } => plugins::install_subdir(
-                            &home,
-                            url,
-                            path,
-                            &listing.market,
-                            &name,
-                            agree,
-                        )?,
+                        other => {
+                            plugins::install_source(&home, other, &listing.market, &name, agree)?
+                        }
                     }
                 }
             };
@@ -633,9 +628,15 @@ fn plugin_command(action: PluginAction) -> Result<()> {
                                     source: marketplace::Source::Dir(dir),
                                     ..
                                 }) => plugins::update_from_dir(&home, &dir, &name, agree),
-                                Ok(_) => Err(anyhow::anyhow!(
+                                Ok(marketplace::Listing {
+                                    source: marketplace::Source::Git(_),
+                                    ..
+                                }) => Err(anyhow::anyhow!(
                                     "{market} now lists {name} from git: remove it and install it again"
                                 )),
+                                Ok(listing) => {
+                                    plugins::update_source(&home, &listing.source, &name, agree)
+                                }
                                 Err(e) => Err(e),
                             },
                         }

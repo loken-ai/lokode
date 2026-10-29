@@ -2834,6 +2834,23 @@ impl Agent {
         }
     }
 
+    /// Tell the session-end hooks the session is over. What they say is not kept: nobody
+    /// is left to read it in the conversation.
+    pub async fn end_session(&self) {
+        if self.cfg.delegated || self.cfg.hooks.session_end.is_empty() {
+            return;
+        }
+        use crate::agent::hooks::{run_all, Event};
+        run_all(
+            &self.cfg.hooks.session_end,
+            Event::SessionEnd,
+            &self.ctx.root,
+            None,
+            self.hook_input(Event::SessionEnd, serde_json::json!({})),
+        )
+        .await;
+    }
+
     /// What a hook is given: the event, the session and the project, with `facts`.
     fn hook_input(&self, event: crate::agent::hooks::Event, facts: Value) -> Value {
         let mut input = serde_json::json!({

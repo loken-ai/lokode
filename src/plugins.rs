@@ -38,6 +38,8 @@ pub struct PluginFile {
     pub hooks: crate::config::HooksSection,
     #[serde(default)]
     pub mcp: crate::config::McpSection,
+    #[serde(default)]
+    pub lsp: crate::config::LspSection,
 }
 
 /// One plugin.
@@ -89,6 +91,8 @@ impl PluginFile {
             ("turn-end", &h.turn_end),
             ("agent-end", &h.agent_end),
             ("compact", &h.compact),
+            ("session-end", &h.session_end),
+            ("notification", &h.notification),
         ]
         .into_iter()
         .flat_map(|(event, hooks)| {
@@ -182,25 +186,32 @@ pub fn dirs(kind: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The hooks and the tool servers of the plugins turned on, as one section of each. A
-/// server keeps the name its plugin gave it, and the first plugin to use a name keeps it.
-pub fn sections(
-    plugins: &[Plugin],
-) -> (
-    crate::config::HooksSection,
-    BTreeMap<String, crate::config::McpServer>,
-) {
-    let mut hooks = crate::config::HooksSection::default();
-    let mut servers = BTreeMap::new();
+/// What the plugins turned on add to the configuration.
+#[derive(Default)]
+pub struct Sections {
+    pub hooks: crate::config::HooksSection,
+    pub servers: BTreeMap<String, crate::config::McpServer>,
+    pub lsp: BTreeMap<String, crate::config::LspServer>,
+}
+
+/// The hooks, the tool servers and the language servers of the plugins turned on. A server
+/// keeps the name its plugin gave it, and the first plugin to use a name keeps it.
+pub fn sections(plugins: &[Plugin]) -> Sections {
+    let mut out = Sections::default();
     for p in plugins.iter().filter(|p| !p.disabled) {
-        hooks = hooks.after(p.file.hooks.clone());
+        out.hooks = out.hooks.after(p.file.hooks.clone());
         for (name, server) in &p.file.mcp.servers {
-            servers
+            out.servers
+                .entry(name.clone())
+                .or_insert_with(|| server.clone());
+        }
+        for (name, server) in &p.file.lsp.servers {
+            out.lsp
                 .entry(name.clone())
                 .or_insert_with(|| server.clone());
         }
     }
-    (hooks, servers)
+    out
 }
 
 /// Where a plugin is fetched before it is installed: inside the plugins' directory, so it
@@ -247,7 +258,15 @@ fn file_of(dir: &Path) -> std::result::Result<(PluginFile, Vec<String>), String>
     if !crate::claude::is_plugin(dir) {
         return Err("it has no plugin.toml and holds nothing lokode reads".into());
     }
-    let read = crate::claude::read_plugin(dir)?;
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let given = crate::config::user_config_path()
+        .and_then(|p| crate::config::read(&p).ok().flatten())
+        .and_then(|c| c.plugins.options.get(&name).cloned())
+        .unwrap_or_default();
+    let read = crate::claude::read_plugin(dir, &given)?;
     Ok((
         PluginFile {
             description: read.description,
@@ -255,6 +274,10 @@ fn file_of(dir: &Path) -> std::result::Result<(PluginFile, Vec<String>), String>
             hooks: read.hooks,
             mcp: crate::config::McpSection {
                 servers: read.servers,
+            },
+            lsp: crate::config::LspSection {
+                enabled: None,
+                servers: read.lsp,
             },
         },
         read.warnings,
@@ -291,50 +314,6 @@ pub fn install(
 
 /// The file a plugin copied from a marketplace keeps its marketplace in.
 pub const FROM_MARKET: &str = ".marketplace";
-
-/// Install the plugin kept in the directory `path` of the git repository at `url`, under
-/// `home`, named `name`. It keeps the name of `market`.
-pub fn install_subdir(
-    home: &Path,
-    url: &str,
-    path: &str,
-    market: &str,
-    name: &str,
-    agree: impl FnOnce(&Plugin) -> bool,
-) -> Result<Option<Plugin>> {
-    if path.split('/').any(|p| p == "..") || path.starts_with('/') {
-        bail!("{path} leaves the repository");
-    }
-    land(home, name, agree, |fetching| {
-        let source = fetching.join(format!("{name}-source"));
-        let _ = std::fs::remove_dir_all(&source);
-        let cloned = git(
-            fetching,
-            &[
-                "clone",
-                "--quiet",
-                "--depth",
-                "1",
-                "--",
-                url,
-                &format!("{name}-source"),
-            ],
-        );
-        let copied = cloned.and_then(|_| {
-            let inside = source.join(path);
-            // Inside the clone, after links are resolved.
-            let real = inside.canonicalize()?;
-            if !real.starts_with(source.canonicalize()?) {
-                bail!("{path} leaves the repository");
-            }
-            copy_tree(&real, &fetching.join(name))?;
-            std::fs::write(fetching.join(name).join(FROM_MARKET), market)?;
-            Ok(())
-        });
-        let _ = std::fs::remove_dir_all(&source);
-        copied
-    })
-}
 
 /// Install the plugin in the marketplace directory `dir` under `home`, named `name`, as
 /// `install` does from git. It keeps the name of `market`, to be updated from it.
@@ -420,12 +399,215 @@ pub fn market_of(home: &Path, name: &str) -> Option<String> {
         .map(|m| m.trim().to_string())
 }
 
+/// Put the plugin `source` names in `landing`, a directory that is not there yet.
+pub fn fetch_into(source: &crate::marketplace::Source, landing: &Path) -> Result<()> {
+    use crate::marketplace::Source;
+    let beside = landing.parent().unwrap_or(landing);
+    std::fs::create_dir_all(beside)?;
+    let leaf = landing
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let scratch_name = format!("{leaf}-source");
+    let scratch = beside.join(&scratch_name);
+    let _ = std::fs::remove_dir_all(&scratch);
+    let done = (|| -> Result<()> {
+        match source {
+            Source::Dir(dir) => copy_tree(dir, landing),
+            Source::Git(url) => {
+                git(
+                    beside,
+                    &["clone", "--quiet", "--depth", "1", "--", url, &leaf],
+                )?;
+                Ok(())
+            }
+            Source::Subdir { url, path } => {
+                if path.split('/').any(|p| p == "..") || path.starts_with('/') {
+                    bail!("{path} leaves the repository");
+                }
+                git(
+                    beside,
+                    &["clone", "--quiet", "--depth", "1", "--", url, &scratch_name],
+                )?;
+                let real = scratch.join(path).canonicalize()?;
+                if !real.starts_with(scratch.canonicalize()?) {
+                    bail!("{path} leaves the repository");
+                }
+                copy_tree(&real, landing)
+            }
+            Source::Archive(url) => {
+                let bytes = download(url)?;
+                unpack(&bytes, &scratch)?;
+                copy_tree(&single_root(&scratch), landing)
+            }
+            Source::Npm { package, version } => {
+                std::fs::create_dir_all(&scratch)?;
+                let spec = match version {
+                    Some(v) => format!("{package}@{v}"),
+                    None => package.clone(),
+                };
+                let packed = std::process::Command::new("npm")
+                    .args(["pack", "--silent", "--pack-destination"])
+                    .arg(&scratch)
+                    .arg(&spec)
+                    .current_dir(&scratch)
+                    .output()
+                    .context("running npm, which an npm plugin needs")?;
+                if !packed.status.success() {
+                    bail!(
+                        "npm pack {spec}: {}",
+                        String::from_utf8_lossy(&packed.stderr).trim()
+                    );
+                }
+                let file = String::from_utf8_lossy(&packed.stdout)
+                    .lines()
+                    .last()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                let out = scratch.join("unpacked");
+                std::fs::create_dir_all(&out)?;
+                let extracted = std::process::Command::new("tar")
+                    .arg("-xzf")
+                    .arg(scratch.join(&file))
+                    .arg("-C")
+                    .arg(&out)
+                    .output()?;
+                if !extracted.status.success() {
+                    bail!(
+                        "tar {file}: {}",
+                        String::from_utf8_lossy(&extracted.stderr).trim()
+                    );
+                }
+                copy_tree(&single_root(&out), landing)
+            }
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    done
+}
+
+/// The bytes at `url`, over HTTPS.
+fn download(url: &str) -> Result<Vec<u8>> {
+    // Over https, or over http to this machine, which nobody can listen in on.
+    let local = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h == "localhost" || h == "127.0.0.1"))
+        .unwrap_or(false);
+    if !url.starts_with("https://") && !(local && url.starts_with("http://")) {
+        bail!("{url} is not an https address");
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let resp = reqwest::get(url).await.with_context(|| url.to_string())?;
+        if !resp.status().is_success() {
+            bail!("{url} answered {}", resp.status());
+        }
+        Ok(resp.bytes().await?.to_vec())
+    })
+}
+
+/// Unpack a zip archive into `to`, refusing any name that would leave it.
+fn unpack(bytes: &[u8], to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+    for at in 0..archive.len() {
+        let mut entry = archive.by_index(at)?;
+        // Ordinary files and directories only, named inside `to`: a link or a name that
+        // leaves it is not a part of a plugin.
+        let Some(name) = entry.enclosed_name() else {
+            continue;
+        };
+        if entry.is_symlink() {
+            continue;
+        }
+        let target = to.join(name);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&target)?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        std::fs::write(&target, bytes)?;
+        // Readable, and runnable when the archive says so: never the special bits it may carry.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let runnable = entry.unix_mode().is_some_and(|m| m & 0o111 != 0);
+            std::fs::set_permissions(
+                &target,
+                std::fs::Permissions::from_mode(if runnable { 0o755 } else { 0o644 }),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// The directory a tree is really kept in: the one entry beneath `dir` when that is all
+/// there is, as in an archive of a repository, and `dir` itself otherwise.
+fn single_root(dir: &Path) -> PathBuf {
+    let entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    match entries.as_slice() {
+        [one] if one.is_dir() => one.clone(),
+        _ => dir.to_path_buf(),
+    }
+}
+
+/// Install the plugin `source` names under `home`, named `name`. It keeps the name of
+/// `market`, to be updated from it.
+pub fn install_source(
+    home: &Path,
+    source: &crate::marketplace::Source,
+    market: &str,
+    name: &str,
+    agree: impl FnOnce(&Plugin) -> bool,
+) -> Result<Option<Plugin>> {
+    land(home, name, agree, |fetching| {
+        let landing = fetching.join(name);
+        fetch_into(source, &landing)?;
+        std::fs::write(landing.join(FROM_MARKET), market)?;
+        Ok(())
+    })
+}
+
+/// Bring the plugin `name` under `home` to what `source` holds now, asking `agree` as
+/// `update` does. Says what changed.
+pub fn update_source(
+    home: &Path,
+    source: &crate::marketplace::Source,
+    name: &str,
+    agree: impl FnOnce(&Plugin) -> bool,
+) -> Result<String> {
+    update_with(home, name, |landing| fetch_into(source, landing), agree)
+}
+
 /// Bring the plugin `name` under `home` to what the marketplace directory `dir` holds now,
 /// asking `agree` as `update` does. Says what changed.
 pub fn update_from_dir(
     home: &Path,
     dir: &Path,
     name: &str,
+    agree: impl FnOnce(&Plugin) -> bool,
+) -> Result<String> {
+    update_with(home, name, |landing| copy_tree(dir, landing), agree)
+}
+
+fn update_with(
+    home: &Path,
+    name: &str,
+    fetch: impl FnOnce(&Path) -> Result<()>,
     agree: impl FnOnce(&Plugin) -> bool,
 ) -> Result<String> {
     let installed = home.join(name);
@@ -436,7 +618,11 @@ pub fn update_from_dir(
     if landing.exists() {
         std::fs::remove_dir_all(&landing)?;
     }
-    copy_tree(dir, &landing)?;
+    if let Err(e) = fetch(&landing) {
+        let _ = std::fs::remove_dir_all(&landing);
+        let _ = std::fs::remove_dir(&fetching);
+        return Err(e);
+    }
     std::fs::write(landing.join(FROM_MARKET), &market)?;
     let after = read_plugin(&landing, name)?;
     if same_tree(&installed, &landing) {
@@ -570,10 +756,10 @@ mod tests {
             .collect();
         assert_eq!(names, [("noisy", true), ("release", false)]);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        let (hooks, servers) = sections(&plugins);
-        assert_eq!(hooks.turn_end.len(), 1);
-        assert!(hooks.prompt.is_empty());
-        assert!(servers.contains_key("tracker"));
+        let added = sections(&plugins);
+        assert_eq!(added.hooks.turn_end.len(), 1);
+        assert!(added.hooks.prompt.is_empty());
+        assert!(added.servers.contains_key("tracker"));
     }
 
     /// The name comes from the end of the source, without `.git`.
@@ -586,6 +772,43 @@ mod tests {
         assert_eq!(name_for("git@example.com:team/fmt").as_deref(), Some("fmt"));
         assert_eq!(name_for("/srv/plugins/lint/").as_deref(), Some("lint"));
         assert_eq!(name_for("https://example.com/a b"), None);
+    }
+
+    /// An archive is unpacked as ordinary files: a link and a name that leaves the directory
+    /// are left out, and the special permission bits are not kept.
+    #[test]
+    fn an_archive_is_unpacked_safely() {
+        use std::io::Write;
+        let mut bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bytes));
+            let plain = zip::write::SimpleFileOptions::default();
+            zip.start_file("plug/plugin.toml", plain).unwrap();
+            zip.write_all(b"description = \"z\"\n").unwrap();
+            zip.start_file("plug/run.sh", plain.unix_permissions(0o4755))
+                .unwrap();
+            zip.write_all(b"#!/bin/sh\n").unwrap();
+            zip.start_file("../escape.txt", plain).unwrap();
+            zip.write_all(b"out").unwrap();
+            zip.add_symlink("plug/link", "/etc/passwd", plain).unwrap();
+            zip.finish().unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("out");
+        unpack(&bytes, &to).unwrap();
+        assert!(to.join("plug/plugin.toml").is_file());
+        assert!(!dir.path().join("escape.txt").exists());
+        assert!(!to.join("plug/link").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(to.join("plug/run.sh"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o7777, 0o755, "{mode:o}");
+        }
+        assert_eq!(single_root(&to), to.join("plug"));
     }
 
     /// A plugin is installed from git when agreed to, not otherwise, updated when its

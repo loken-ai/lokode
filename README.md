@@ -731,6 +731,8 @@ user's hooks and the project's both run, the user's first.
 | `turn-end` | when the model has answered, or the turn ended otherwise | hands the reason to the model and the turn goes on, twice at most |
 | `agent-end` | when an agent has answered | nothing. What it says goes with the answer |
 | `compact` | when the oldest steps have left the window | nothing. What it says goes to you |
+| `session-end` | when the session ends | nothing |
+| `notification` | when the session waits for you, as for an approval | nothing. It does not hold the session up |
 
 A tool hook without `match` runs around the tools that change something.
 
@@ -883,10 +885,12 @@ that lists it in `.claude-plugin/marketplace.json`. lokode reads what it has a p
 | In the plugin | In lokode |
 |---|---|
 | `skills/`, `commands/`, `agents/` | Loaded. Settings lokode does not use are ignored |
-| `hooks/hooks.json`, the manifest's `hooks` | `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SubagentStop` and `PreCompact` |
+| `hooks/hooks.json`, the manifest's `hooks` | `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, `Notification`, `SubagentStop` and `PreCompact` |
 | `.mcp.json`, the manifest's `mcpServers` | Tool servers, over a command or HTTP |
+| `.lsp.json`, the manifest's `lspServers` | Language servers, by their extensions |
+| `userConfig` | Values for `${user_config.KEY}` in servers: `[plugins.options.<plugin>]`, or `CLAUDE_PLUGIN_OPTION_<KEY>`, or the default |
 | `${CLAUDE_PLUGIN_ROOT}` | The plugin's directory, in commands, agents, skills, hooks and servers |
-| A marketplace source | A path, `github`, `url` or `git-subdir`. Other kinds are not listed |
+| A marketplace source | A path, `github`, `url`, `git-subdir`, `archive` or `npm`, each updated from where it came |
 
 - A hook's matcher names tools as Claude Code does, `Write`, `Edit`, `Bash`, `Read`, `Grep`,
   `Glob`, `WebFetch`, `Task` and `mcp__server__tool`, and lokode matches its own tools by them.
@@ -895,8 +899,11 @@ that lists it in `.claude-plugin/marketplace.json`. lokode reads what it has a p
   does `permissionDecision` `deny`.
 - An agent's `tools` and a hook's `matcher` are translated. Its `model`, when it is `sonnet`,
   `opus`, `haiku` or `inherit`, is ignored, so the agent runs on the models you configured.
-- What lokode has no place for is said when the plugin is listed: a hook event it does not
-  have, a hook that is not a command, a server with neither command nor url.
+- An option a plugin requires and nobody gave is said when the plugin is listed, with where to
+  set it. An archive is unpacked as ordinary files, without links or special permission bits.
+- Output styles, themes and monitors have no counterpart in lokode and are not read. What else
+  a plugin holds that lokode cannot use is said when the plugin is listed: a hook event it does
+  not have, a hook that is not a command, a server with neither command nor url.
 
 ## Tools from elsewhere
 

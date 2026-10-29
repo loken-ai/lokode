@@ -249,6 +249,7 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
                 }
             }
         }
+        agent.end_session().await;
     });
 
     let startup_notices = [instruction_notes, mcp.notices.clone()].concat();

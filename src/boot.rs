@@ -119,6 +119,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         holder: None,
         works: Default::default(),
         asked: Default::default(),
+        notify: Arc::new(cfg.hooks.notification.clone()),
         policy: Arc::new(cfg.policy.clone()),
         auto_used: auto_used.clone(),
         honour_allow: !cfg.headless,
