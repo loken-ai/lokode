@@ -323,6 +323,17 @@ impl ToolCtx {
         self.tell(tool, Live::Stop(self.cancel.clone())).await;
     }
 
+    /// Tell the screen about work this call leaves running: `doing` while it runs, `None`
+    /// once it is over.
+    pub async fn left_running(
+        &self,
+        tool: &str,
+        id: u64,
+        doing: Option<(String, CancellationToken)>,
+    ) {
+        self.tell(tool, Live::Aside { id, doing }).await;
+    }
+
     async fn tell(&self, tool: &str, what: Live) {
         if let Some(live) = &self.live {
             let _ = live
@@ -395,6 +406,12 @@ pub enum Live {
     Sub(SubEvent),
     /// What stops this call alone.
     Stop(CancellationToken),
+    /// Work the call left running after it answered, numbered `id`: what it is and what
+    /// stops it, or `None` once it is over.
+    Aside {
+        id: u64,
+        doing: Option<(String, CancellationToken)>,
+    },
 }
 
 /// What a session run by a call did: a step asked for, a step settled, its answer.

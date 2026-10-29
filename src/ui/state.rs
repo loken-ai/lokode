@@ -91,6 +91,8 @@ pub(crate) enum AsideKind {
     Warm,
     /// A question about the project looked into.
     Discover,
+    /// An agent working in the background, by its number.
+    Agent(u64),
 }
 
 /// What a click lands on.

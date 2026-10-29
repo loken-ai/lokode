@@ -648,7 +648,7 @@ api-key-env = "ANTHROPIC_API_KEY"
 - An agent out of steps says it did not finish, with what it said last.
 - With `background`, an agent that changes nothing works while the turn goes on. Its answer is
   handed to the session at its next step, in this turn or the next. Stopping the turn does not
-  stop it.
+  stop it. It is listed in the rail and in `/jobs`, where enter stops it alone.
 - The task is taken as written: no file is attached for it and the project is not searched
   for it.
 

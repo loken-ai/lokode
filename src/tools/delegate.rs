@@ -18,6 +18,9 @@ use serde_json::{json, Value};
 
 use crate::tools::registry::{Registry, Tool, ToolCtx, ToolOutput};
 
+/// Numbers the agents left running in the background, for the screen to tell apart.
+static BACKGROUND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// Everything a delegated turn needs to be built, kept from the session that owns it.
 ///
 /// Held as a builder rather than as an `Agent`: a sub-session is made and dropped per
@@ -343,22 +346,37 @@ impl Tool for Delegate {
         let task = a.task.clone();
         if a.background {
             // A job of its own: the turn does not wait for it and stopping the turn does
-            // not stop it. Its answer is handed to the session when it comes.
+            // not stop it. The screen lists it with what stops it, and its answer is
+            // handed to the session when it comes.
+            let stop = tokio_util::sync::CancellationToken::new();
             let ctx = crate::tools::registry::ToolCtx {
-                cancel: tokio_util::sync::CancellationToken::new(),
+                cancel: stop.clone(),
                 ..ctx.clone()
             };
+            let id = BACKGROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let short: String = task.chars().take(60).collect();
+            ctx.left_running(
+                self.name(),
+                id,
+                Some((format!("{name} in the background: {short}"), stop.clone())),
+            )
+            .await;
             let (answers, hooks, agent) = (w.answers.clone(), w.hooks.clone(), name.to_string());
             tokio::spawn(async move {
                 let _slot = slot;
-                let out = finish(sub, task.clone(), agent.clone(), ctx, hooks).await;
+                let out = finish(sub, task.clone(), agent.clone(), ctx.clone(), hooks).await;
+                ctx.left_running("delegate", id, None).await;
+                let said = match stop.is_cancelled() {
+                    true => format!(
+                        "The agent {agent}, started in the background on \"{task}\", was stopped by the user."
+                    ),
+                    false => format!(
+                        "The agent {agent}, started in the background on \"{task}\", answered:\n{}",
+                        out.content
+                    ),
+                };
                 if let Some(tx) = answers {
-                    let _ = tx
-                        .send(format!(
-                            "The agent {agent}, started in the background on \"{task}\", answered:\n{}",
-                            out.content
-                        ))
-                        .await;
+                    let _ = tx.send(said).await;
                 }
             });
             return Ok(ToolOutput::ok(format!(

@@ -610,6 +610,18 @@ async fn run_ui(
                             state.stops.insert(id, stop);
                         }
                     }
+                    crate::tools::registry::Live::Aside { id, doing } => {
+                        use crate::ui::state::{Aside, AsideKind};
+                        state.aside.retain(|a| a.kind != AsideKind::Agent(id));
+                        if let Some((what, stop)) = doing {
+                            state.aside.push(Aside {
+                                kind: AsideKind::Agent(id),
+                                what,
+                                since: Instant::now(),
+                                stop,
+                            });
+                        }
+                    }
                 }
             }
 
