@@ -58,6 +58,11 @@ impl Chooser {
         out
     }
 
+    /// What is being chosen, in a word or two.
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
     pub fn verb(&self) -> &str {
         &self.verb
     }

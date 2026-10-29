@@ -188,6 +188,38 @@ pub fn fields(schema: &Value) -> Result<Vec<Field>, String> {
     Ok(out)
 }
 
+/// The schema `fields` were read from, for handing the form on to another client.
+pub fn schema(fields: &[Field]) -> Value {
+    let mut properties = Map::new();
+    for f in fields {
+        let mut p = Map::new();
+        let kind = match &f.kind {
+            Kind::Text | Kind::Choice(_) => "string",
+            Kind::Number => "number",
+            Kind::Integer => "integer",
+            Kind::Bool => "boolean",
+        };
+        p.insert("type".into(), json!(kind));
+        if let Kind::Choice(values) = &f.kind {
+            p.insert("enum".into(), json!(values));
+        }
+        p.insert("title".into(), json!(f.title));
+        if !f.description.is_empty() {
+            p.insert("description".into(), json!(f.description));
+        }
+        if let Some(d) = &f.default {
+            p.insert("default".into(), d.clone());
+        }
+        properties.insert(f.name.clone(), Value::Object(p));
+    }
+    let required: Vec<&str> = fields
+        .iter()
+        .filter(|f| f.required)
+        .map(|f| f.name.as_str())
+        .collect();
+    json!({"type": "object", "properties": properties, "required": required})
+}
+
 impl Host {
     /// Put a server's form to the person, and say how they answered.
     pub async fn elicit(&self, server: &str, params: &Value) -> Result<Value, Refusal> {

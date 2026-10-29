@@ -13,6 +13,7 @@
 //!
 //! # The parts
 //!
+//! - [`acp`] - lokode as the agent of an editor, over the Agent Client Protocol.
 //! - [`agent`] - the loop, the conversation and what it is written to.
 //! - [`backend`] - the providers, the wire types, and the repair pass for the JSON a model
 //!   gets slightly wrong. [`backend::provider::Provider`] is the seam: everything about
@@ -34,6 +35,7 @@
 //! [`sandbox::confine`] can make everything outside the root read-only for one, but that is
 //! off unless asked for. See `SECURITY.md`.
 
+pub mod acp;
 pub mod agent;
 pub mod app;
 pub mod backend;

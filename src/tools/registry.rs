@@ -249,7 +249,7 @@ impl ToolCtx {
                 tracing::info!(%tool, "approval abandoned with the turn");
                 return Approval::Interrupted;
             }
-            d = approval::ask(&self.approval, req) => d,
+            d = approval::ask_for(&self.approval, req, self.call.clone()) => d,
         };
         // Worth recording at every session: what the user agreed to, and how widely, is
         // the first question anyone asks about a run that did something unexpected.

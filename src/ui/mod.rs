@@ -2,7 +2,7 @@ pub mod app_loop;
 pub mod chat;
 pub mod chooser;
 pub mod clipboard;
-mod commands;
+pub(crate) mod commands;
 mod diff;
 mod highlight;
 mod input;

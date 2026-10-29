@@ -868,6 +868,38 @@ spaces, and an argument the prompt needs is asked for before the server is.
 - The server starts once you are signed in, a server that would not start included.
 - `/mcp logout <server>` forgets the token.
 
+## In an editor
+
+`lokode acp` serves an editor over the Agent Client Protocol, on its standard input and output.
+Zed, the JetBrains IDEs, Neovim, Emacs and VS Code with the ACP Client extension can run it. In
+Zed:
+
+```json
+"agent_servers": {
+  "lokode": { "command": "lokode", "args": ["acp"] }
+}
+```
+
+Flags go before `acp`: `lokode --tool-protocol native acp`.
+
+| In the editor | What lokode does |
+|---|---|
+| A new session | Opens a session for the editor's project, configured as the terminal would be |
+| A recorded session | Comes back to it, replays the conversation, in the mode it was left in |
+| A prompt | Runs a turn. A file the editor links is read as an `@` mention |
+| `/` | Offers the terminal's commands and the project's, and runs them |
+| A tool call | Shows it with its file, and an edit with its diff |
+| A change | Asks first, with what `Always` would cover |
+| A mode | Act, accept edits or plan |
+| Stop | Stops the turn |
+
+- The commands the model runs are run by lokode, in its sandbox, never in a terminal of the
+  editor's.
+- The tool servers the editor names join those of the configuration.
+- A tool server's form is put to the editor when it can show one, and declined otherwise.
+- A project's settings that wait for trust stay out, since nobody can be asked. Run `lokode`
+  once in the project to trust them, or give the editor `--trust-project`.
+
 ## Without the interface
 
 `-p` runs one turn and exits.

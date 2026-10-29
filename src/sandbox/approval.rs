@@ -153,6 +153,8 @@ pub fn denial(why: Denial) -> String {
 pub struct ApprovalPrompt {
     pub req: ApprovalRequest,
     pub reply: oneshot::Sender<ApprovalDecision>,
+    /// The tool call asking, when a call asks.
+    pub call: Option<String>,
 }
 
 /// Sent from the agent loop to the UI to ask for approval.
@@ -288,9 +290,22 @@ fn read_kept() -> std::collections::BTreeMap<String, Vec<ApprovalScope>> {
 /// Convenience: ask the UI for approval and wait for a decision. Returns
 /// `Deny` if the UI channel is closed (e.g. user quit the app).
 pub async fn ask(sender: &ApprovalSender, req: ApprovalRequest) -> ApprovalDecision {
+    ask_for(sender, req, None).await
+}
+
+/// The same, for the tool call `call`.
+pub async fn ask_for(
+    sender: &ApprovalSender,
+    req: ApprovalRequest,
+    call: Option<String>,
+) -> ApprovalDecision {
     let (tx, rx) = oneshot::channel();
     if sender
-        .send(ApprovalPrompt { req, reply: tx })
+        .send(ApprovalPrompt {
+            req,
+            reply: tx,
+            call,
+        })
         .await
         .is_err()
     {

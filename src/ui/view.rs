@@ -820,6 +820,7 @@ mod tests {
                 scope: crate::sandbox::approval::ApprovalScope::Command("x".into()),
             },
             reply,
+            call: None,
         });
         let mut long = Step::called("40".into(), "read_file".into(), r#"{"path":"a.rs"}"#);
         long.outcome = Some(Outcome {

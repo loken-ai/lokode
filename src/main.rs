@@ -36,7 +36,7 @@ mod default {
 // A flag with a `default_value` cannot be told apart from one the user did not pass, and
 // a setting that is always "specified" can never be overridden by a config file. The
 // defaults live above and are applied last, once everything else has had its say.
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "lokode", version, about = "Local-first code agent TUI")]
 struct Cli {
     /// Model name as known to the backend (e.g. qwen3-coder:latest).
@@ -162,8 +162,10 @@ struct Cli {
     command: Option<Command>,
 }
 
-#[derive(clap::Subcommand, Debug)]
+#[derive(clap::Subcommand, Debug, Clone)]
 enum Command {
+    /// Serve an editor over the Agent Client Protocol, on standard input and output.
+    Acp,
     /// Install, update, remove or list plugins.
     Plugin {
         #[command(subcommand)]
@@ -171,7 +173,7 @@ enum Command {
     },
 }
 
-#[derive(clap::Subcommand, Debug)]
+#[derive(clap::Subcommand, Debug, Clone)]
 enum PluginAction {
     /// Install a plugin from a git repository.
     Install {
@@ -198,9 +200,11 @@ enum PluginAction {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    if let Some(Command::Plugin { action }) = cli.command {
-        return plugin_command(action);
+    let mut cli = Cli::parse();
+    match cli.command.take() {
+        Some(Command::Plugin { action }) => return plugin_command(action),
+        Some(Command::Acp) => return acp_command(cli),
+        None => {}
     }
 
     let root = cli.root.canonicalize().map_err(|e| {
@@ -436,6 +440,28 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
 
 /// Ask on the terminal whether to trust the project's guarded settings. No when there is
 /// no terminal to ask on.
+/// Serve an editor: each session it opens is configured for its project as the terminal
+/// would be. A project's guarded settings wait for trust, since nobody can be asked here.
+fn acp_command(cli: Cli) -> Result<()> {
+    let _log_guard = init_logging(cli.log_file.clone().or_else(|| env_path("LOKODE_LOG_FILE")))?;
+    let config_for: lokode::acp::ConfigFor = std::sync::Arc::new(move |root: &std::path::Path| {
+        let config::Loaded { file, untrusted } = config::load(root, cli.trust_project)?;
+        let mut resolved = resolve(cli.clone(), root.to_path_buf(), file)?;
+        if let Some(untrusted) = untrusted {
+            resolved.app.warnings.push(format!(
+                "{} Run lokode in a terminal in this project once to trust them, or give the \
+                 editor --trust-project.",
+                untrusted.warning()
+            ));
+        }
+        Ok(resolved.app)
+    });
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(lokode::acp::run(config_for))
+}
+
 /// Install, update, remove or list plugins, saying what was done.
 fn plugin_command(action: PluginAction) -> Result<()> {
     use lokode::plugins;

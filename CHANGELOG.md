@@ -37,6 +37,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Hooks: run hooks at every edge of a session, and read their decision.
 - MCP: reach servers over HTTP, sign in, restart them, and let them ask the model or the user.
 - Sandbox: confine the commands on macOS with Seatbelt, as Landlock does on Linux.
+- Editors: serve Zed, JetBrains, Neovim, Emacs and VS Code over ACP with lokode acp.
 
 ### Changed
 

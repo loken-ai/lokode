@@ -1136,7 +1136,7 @@ fn is_builtin(name: &str) -> bool {
 }
 
 /// The commands written as files that a built-in does not hide.
-fn written_commands(root: &std::path::Path) -> Vec<crate::commands::Command> {
+pub(crate) fn written_commands(root: &std::path::Path) -> Vec<crate::commands::Command> {
     crate::commands::load(&crate::commands::dirs(root))
         .0
         .into_iter()
