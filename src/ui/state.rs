@@ -56,8 +56,37 @@ pub(crate) struct Job {
     pub entry: Option<usize>,
     /// The call a delegated session is on.
     pub doing: Option<String>,
+    /// Its place among the work aside, when it is some.
+    pub aside: Option<usize>,
     /// Whether it can be stopped alone.
     pub stoppable: bool,
+}
+
+/// What an item of the list of running things leads to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JobTarget {
+    /// The step at this entry, to point at.
+    Step(usize),
+    /// Work aside, to stop.
+    Aside(AsideKind),
+}
+
+/// Work done for the session outside any turn.
+#[derive(Debug, Clone)]
+pub(crate) struct Aside {
+    pub kind: AsideKind,
+    pub what: String,
+    pub since: Instant,
+    pub stop: tokio_util::sync::CancellationToken,
+}
+
+/// Which work aside it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsideKind {
+    /// The model held ready on the backend.
+    Warm,
+    /// A question about the project looked into.
+    Discover,
 }
 
 /// What a click lands on.
@@ -120,10 +149,14 @@ pub(crate) struct UiState {
     pub(crate) rate: Option<f64>,
     /// A line cleared off the input, kept for the up arrow to offer back.
     pub(crate) draft: Option<String>,
-    /// What is being done for this session outside any turn, and since when.
-    pub(crate) background: Option<(String, Instant)>,
+    /// What is being done for this session outside any turn.
+    pub(crate) aside: Vec<Aside>,
+    /// Whether the person stopped looking into the project for this session.
+    pub(crate) discovery_stopped: bool,
     /// What stops each call of the turn alone, by the id of its call.
     pub(crate) stops: std::collections::HashMap<String, tokio_util::sync::CancellationToken>,
+    /// What the list of running things offered, in its order, while it is open.
+    pub(crate) jobs_offered: Vec<JobTarget>,
     /// Whether the mouse belongs to this program or to the terminal.
     ///
     /// Taking it buys the wheel and a selection that can scroll past the edge of the
@@ -239,7 +272,7 @@ impl UiState {
         let mut sooner = |after: Duration| {
             wake = Some(wake.map_or(after, |w| w.min(after)));
         };
-        if self.busy || self.background.is_some() {
+        if self.busy || !self.aside.is_empty() {
             sooner(TICK_EVERY);
         }
         if self.drag_edge.is_some() {
@@ -487,21 +520,78 @@ impl UiState {
                         .rev()
                         .find(|c| c.outcome.is_none())
                         .map(|c| format!("{}  {}", c.name, c.subject)),
+                    aside: None,
                     stoppable: self.stop_for(&step.id).is_some(),
                 }),
                 _ => None,
             })
             .collect();
-        if let Some((what, since)) = &self.background {
+        for (i, aside) in self.aside.iter().enumerate() {
             out.push(Job {
-                what: what.clone(),
-                took: since.elapsed(),
+                what: aside.what.clone(),
+                took: aside.since.elapsed(),
                 entry: None,
                 doing: None,
-                stoppable: false,
+                aside: Some(i),
+                stoppable: true,
             });
         }
         out
+    }
+
+    /// Open the list of running things, the highlight on the `at`th. False when nothing
+    /// runs.
+    pub(crate) fn open_jobs(&mut self, at: Option<usize>) -> bool {
+        let jobs = self.jobs();
+        if jobs.is_empty() {
+            return false;
+        }
+        self.jobs_offered = jobs
+            .iter()
+            .map(|job| match (job.entry, job.aside) {
+                (Some(entry), _) => JobTarget::Step(entry),
+                (None, Some(i)) => JobTarget::Aside(self.aside[i].kind),
+                (None, None) => unreachable!("a job is a step or work aside"),
+            })
+            .collect();
+        let choices = jobs
+            .iter()
+            .enumerate()
+            .map(|(i, job)| {
+                let took = match job.took >= crate::ui::chat::SHOWN_FROM {
+                    true => format!("  {}", crate::ui::chat::how_long(job.took)),
+                    false => String::new(),
+                };
+                let does = match job.aside {
+                    Some(_) => "  enter stops it",
+                    None => "",
+                };
+                crate::ui::chooser::Choice::new(
+                    (i + 1).to_string(),
+                    format!("{}{took}{does}", job.what),
+                )
+            })
+            .collect();
+        let mut chooser = crate::ui::chooser::Chooser::new("jobs", "what runs", choices, None);
+        if let Some(at) = at {
+            chooser.set_at(at);
+        }
+        self.choosing = Some(chooser);
+        true
+    }
+
+    /// Act on the `n`th item the list of running things offered: point at its step, or
+    /// stop the work aside.
+    pub(crate) fn take_job(&mut self, n: usize) {
+        let offered = std::mem::take(&mut self.jobs_offered);
+        match n.checked_sub(1).and_then(|i| offered.get(i)) {
+            Some(JobTarget::Step(at)) if *at < self.entries.len() => {
+                self.at_entry = Some(*at);
+                self.show_entry(*at);
+            }
+            Some(JobTarget::Aside(kind)) => self.stop_aside(*kind),
+            _ => {}
+        }
     }
 
     /// What stops the call whose step has the id `id`, while it runs.
@@ -519,6 +609,19 @@ impl UiState {
         match self.at_entry.and_then(|i| self.entries.get(i)) {
             Some(Entry::Step(step)) if step.outcome.is_none() => self.stop_for(&step.id),
             _ => None,
+        }
+    }
+
+    /// Stop the work aside of `kind`. Looking into the project stays stopped for the
+    /// session.
+    pub(crate) fn stop_aside(&mut self, kind: AsideKind) {
+        if let Some(at) = self.aside.iter().position(|a| a.kind == kind) {
+            let aside = self.aside.remove(at);
+            aside.stop.cancel();
+            if kind == AsideKind::Discover {
+                self.discovery_stopped = true;
+            }
+            self.said = Some((format!("stopped: {}", aside.what), Instant::now()));
         }
     }
 
@@ -903,6 +1006,38 @@ mod tests {
         };
         assert_eq!(live(0), "read_file  src/x.rs");
         assert_eq!(live(1), "grep  timeout");
+    }
+
+    /// The list of running things points at a step when one is chosen, and stops work
+    /// aside when it is chosen, looking into the project staying stopped.
+    #[test]
+    fn the_list_of_running_things_points_and_stops() {
+        let mut state = UiState::default();
+        state
+            .entries
+            .push(Entry::Step(Step::called("7".into(), "bash".into(), "{}")));
+        let stop = tokio_util::sync::CancellationToken::new();
+        state.stops.insert("7".into(), stop.clone());
+        let looking = tokio_util::sync::CancellationToken::new();
+        state.aside.push(Aside {
+            kind: AsideKind::Discover,
+            what: "looking into: how is it tested".into(),
+            since: Instant::now(),
+            stop: looking.clone(),
+        });
+        let jobs = state.jobs();
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs.iter().all(|j| j.stoppable));
+        assert!(state.open_jobs(None));
+        state.take_job(1);
+        assert_eq!(state.at_entry, Some(0));
+        assert!(state.pointed_stop().is_some());
+        assert!(state.open_jobs(None));
+        state.take_job(2);
+        assert!(looking.is_cancelled());
+        assert!(state.discovery_stopped);
+        assert!(state.aside.is_empty());
+        assert!(!stop.is_cancelled());
     }
 
     /// An idle screen sets no timer; work, a held drag and a fresh remark each set one.

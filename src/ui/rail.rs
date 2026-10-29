@@ -452,6 +452,7 @@ mod tests {
                 took: std::time::Duration::from_secs(12),
                 entry: Some(3),
                 doing: Some("read_file  src/config.rs".into()),
+                aside: None,
                 stoppable: true,
             },
             crate::ui::state::Job {
@@ -459,6 +460,7 @@ mod tests {
                 took: std::time::Duration::from_secs(75),
                 entry: Some(5),
                 doing: None,
+                aside: None,
                 stoppable: true,
             },
         ];

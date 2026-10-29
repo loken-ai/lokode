@@ -212,7 +212,7 @@ pub enum AgentEvent {
     /// Work that belongs to no turn still takes time - holding a model ready is a minute
     /// on a cold server - and a screen that says nothing about it is a screen that looks
     /// broken.
-    Background(Option<String>),
+    Background(Option<(String, CancellationToken)>),
     /// What the backend serves, for completing the name of one that is being typed.
     Models(Vec<String>),
     TurnDone,

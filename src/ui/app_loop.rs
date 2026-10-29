@@ -146,13 +146,16 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
                 // Only where the weights are near: a hosted endpoint has nothing to hold
                 // ready and would bill the attempt.
                 if said.is_none() && nearby && !token.is_cancelled() {
+                    // Its own stop, so stopping it leaves the rest of this to finish.
+                    let warm = token.child_token();
                     let _ = events
-                        .send(AgentEvent::Background(Some(format!(
-                            "holding {model_asked} ready on the backend"
+                        .send(AgentEvent::Background(Some((
+                            format!("holding {model_asked} ready on the backend"),
+                            warm.clone(),
                         ))))
                         .await;
                     let warmed = tokio::select! {
-                        _ = token.cancelled() => None,
+                        _ = warm.cancelled() => None,
                         done = backend.warm(&model_asked) => Some(done),
                     };
                     let _ = events.send(AgentEvent::Background(None)).await;
@@ -455,12 +458,18 @@ async fn run_ui(
         // Nothing is happening, there is something to find out, and nobody is waiting:
         // the three conditions together are what makes this free. One question at a time,
         // so the machine is never given more than it was idle for.
-        if !state.busy && discovering.is_none() {
+        if !state.busy && discovering.is_none() && !state.discovery_stopped {
             if let Some(worker) = &discovery {
-                let has_questions = !digest.lock().await.questions.is_empty();
-                if has_questions && !worker.stalled() {
+                let next = digest.lock().await.questions.first().cloned();
+                if let (Some(question), false) = (next, worker.stalled()) {
                     let token = shutdown.child_token();
                     discovering = Some(token.clone());
+                    state.aside.push(crate::ui::state::Aside {
+                        kind: crate::ui::state::AsideKind::Discover,
+                        what: format!("looking into: {question}"),
+                        since: Instant::now(),
+                        stop: token.clone(),
+                    });
                     let worker = worker.clone();
                     let tx = learn_tx.clone();
                     tokio::spawn(async move {
@@ -562,6 +571,7 @@ async fn run_ui(
 
             Some(learned) = learn_rx.recv() => {
                 discovering = None;
+                state.aside.retain(|a| a.kind != crate::ui::state::AsideKind::Discover);
                 // Said once, in a line: what was found is worth knowing, and a paragraph
                 // about it in the middle of somebody's work is not.
                 if let Some(text) = learned {
@@ -623,7 +633,16 @@ async fn run_ui(
                     AgentEvent::Window(window) => state.window = window,
                     AgentEvent::Rate(tokens_a_second) => state.note_rate(tokens_a_second),
                     AgentEvent::Background(doing) => {
-                        state.background = doing.map(|what| (what, Instant::now()))
+                        use crate::ui::state::{Aside, AsideKind};
+                        state.aside.retain(|a| a.kind != AsideKind::Warm);
+                        if let Some((what, stop)) = doing {
+                            state.aside.push(Aside {
+                                kind: AsideKind::Warm,
+                                what,
+                                since: Instant::now(),
+                                stop,
+                            });
+                        }
                     }
                     AgentEvent::Models(models) => state.models = models,
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
@@ -1081,15 +1100,12 @@ async fn run_ui(
                                 // is done does nothing.
                                 let taken = taken.filter(|(_, value)| value != "no");
                                 // A job chosen: its step pointed at, where enter opens it and
-                                // ctrl-c stops a command of the person's own.
-                                if let Some(("jobs", at)) =
+                                // ctrl-c stops it, or work aside stopped.
+                                if let Some(("jobs", n)) =
                                     taken.as_ref().map(|(v, a)| (v.as_str(), a.as_str()))
                                 {
-                                    if let Ok(at) = at.parse::<usize>() {
-                                        if at < state.entries.len() {
-                                            state.at_entry = Some(at);
-                                            state.show_entry(at);
-                                        }
+                                    if let Ok(n) = n.parse::<usize>() {
+                                        state.take_job(n);
                                     }
                                     continue;
                                 }
@@ -1677,36 +1693,8 @@ async fn run_ui(
                                     let verb = command.trim_start_matches('/').trim();
                                     // What runs is the screen's to know, so its list is made here.
                                     if verb == "jobs" {
-                                        let jobs = state.jobs();
-                                        let choices: Vec<_> = jobs
-                                            .iter()
-                                            .filter_map(|job| {
-                                                let at = job.entry?;
-                                                let took = match job.took >= crate::ui::chat::SHOWN_FROM {
-                                                    true => format!("  {}", crate::ui::chat::how_long(job.took)),
-                                                    false => String::new(),
-                                                };
-                                                Some(crate::ui::chooser::Choice::new(
-                                                    at.to_string(),
-                                                    format!("{}{took}", job.what),
-                                                ))
-                                            })
-                                            .collect();
-                                        match (choices.is_empty(), jobs.first()) {
-                                            (true, None) => {
-                                                state.said = Some(("nothing is running".into(), Instant::now()))
-                                            }
-                                            (true, Some(job)) => {
-                                                state.said = Some((job.what.clone(), Instant::now()))
-                                            }
-                                            (false, _) => {
-                                                state.choosing = Some(crate::ui::chooser::Chooser::new(
-                                                    "jobs",
-                                                    "go to what runs",
-                                                    choices,
-                                                    None,
-                                                ))
-                                            }
+                                        if !state.open_jobs(None) {
+                                            state.said = Some(("nothing is running".into(), Instant::now()));
                                         }
                                         continue;
                                     }
@@ -1810,6 +1798,7 @@ async fn run_ui(
                                 if let Some(token) = discovering.take() {
                                     token.cancel();
                                 }
+                                state.aside.retain(|a| a.kind != crate::ui::state::AsideKind::Discover);
                                 state.busy = true;
                                 state.step = 0;
                                 state.rate = None;

@@ -275,9 +275,9 @@ pub(crate) fn draw(
         queued: state.queued.len(),
         rate: state.rate,
         background: state
-            .background
-            .as_ref()
-            .map(|(what, since)| (what.clone(), since.elapsed())),
+            .aside
+            .first()
+            .map(|a| (a.what.clone(), a.since.elapsed())),
         pointed_stoppable: state.pointed_stop().is_some(),
         finding: state
             .finding
