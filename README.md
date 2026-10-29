@@ -706,11 +706,32 @@ model and `args` for the arguments a `pre-tool` hook wants the call made with. A
 outlives its timeout, 30 seconds by default, is stopped with everything it started. Its output
 is bounded.
 
-## Commands a project ships
+## Commands written as files
 
-A Markdown file under `.lokode/commands` is a command: `review.md` makes `/review`, and its
-text becomes the prompt. What is typed after the name replaces `$ARGS`, or is appended when the
-file has none. `/help` lists them with the built-ins.
+A Markdown file is a command, named by its file: `review.md` makes `/review`, and
+`git/commit.md` makes `/git:commit`. Its text becomes the prompt.
+
+```text
+.lokode/commands/git/commit.md   (or ~/.config/lokode/commands/git/commit.md)
+
+---
+description: commit what is staged, in the project's style
+argument-hint: [scope]
+agent: scribe
+---
+Write a commit message for what is staged, scoped to $1.
+```
+
+| Setting | What it does |
+|---|---|
+| `description` | what `/help` and the list of commands say of it. The first line of the prompt without it |
+| `argument-hint` | what it takes, shown beside it |
+| `agent` | the agent the prompt is handed to |
+
+- What is typed after the name replaces `$ARGUMENTS`, and its words replace `$1` to `$9`. A
+  word in double quotes keeps its spaces. A command that names none of them has it appended.
+- The project's command takes the place of the user's of the same name.
+- A built-in keeps its name: a file named after one is not read.
 
 ## Tools from elsewhere
 

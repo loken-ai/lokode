@@ -428,20 +428,11 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         Some((v, r)) => (v, r.trim()),
         None => (command, ""),
     };
-    // A project's own commands, under any name the built-ins leave free.
-    if let Some(text) = (!is_builtin(verb))
-        .then(|| crate::config::user_command(root, verb))
-        .flatten()
-    {
-        // What follows the command name is handed to it, which is how one command serves
-        // a family of tasks. A command that names no argument still gets it, appended,
-        // so nothing a user typed is silently dropped.
-        let text = match (rest.is_empty(), text.contains("$ARGS")) {
-            (true, _) => text.replace("$ARGS", ""),
-            (false, true) => text.replace("$ARGS", rest),
-            (false, false) => format!("{text}\n\n{rest}"),
-        };
-        return Ran::Prompt(text);
+    // The commands written as files, under any name the built-ins leave free. What
+    // follows the name is handed to the command, which is how one command serves a family
+    // of tasks.
+    if let Some(c) = written_commands(root).into_iter().find(|c| c.name == verb) {
+        return Ran::Prompt(c.prompt(rest));
     }
     if verb == "digest" {
         // Asked first, because this throws away everything a session worked out about the
@@ -895,11 +886,16 @@ pub(crate) fn help(root: &std::path::Path) -> String {
         }
     }
     out.push('\n');
-    let mine = project_commands(root);
+    let mine = written_commands(root);
     if !mine.is_empty() {
-        out.push_str("## This project's commands\n\n");
-        for name in mine {
-            out.push_str(&format!("- `/{name}`\n"));
+        out.push_str("## Commands written as files\n\n| Command | What it does |\n|---|---|\n");
+        for c in mine {
+            out.push_str(&format!(
+                "| `/{}{}` | {} |\n",
+                c.name,
+                c.argument_hint.map(|h| format!(" {h}")).unwrap_or_default(),
+                c.description.replace('|', "/")
+            ));
         }
     }
     out.push_str("\n## Keys\n\n| Key | What it does |\n|---|---|\n");
@@ -974,8 +970,12 @@ pub(crate) fn command_choices(root: &std::path::Path) -> Vec<crate::ui::picker::
             None => crate::ui::picker::Choice::new(l.trim(), ""),
         })
         .collect();
-    for name in project_commands(root) {
-        out.push(crate::ui::picker::Choice::new(name, "this project's own"));
+    for c in written_commands(root) {
+        let about = match c.argument_hint {
+            Some(hint) => format!("{hint}  {}", c.description),
+            None => c.description,
+        };
+        out.push(crate::ui::picker::Choice::new(c.name, about));
     }
     out.sort_by(|a, b| a.value.cmp(&b.value));
     out
@@ -988,11 +988,12 @@ fn is_builtin(name: &str) -> bool {
         .any(|l| l.split_whitespace().next() == Some(name))
 }
 
-/// The project's own commands that a built-in does not hide.
-fn project_commands(root: &std::path::Path) -> Vec<String> {
-    crate::config::user_commands(root)
+/// The commands written as files that a built-in does not hide.
+fn written_commands(root: &std::path::Path) -> Vec<crate::commands::Command> {
+    crate::commands::load(&crate::commands::dirs(root))
+        .0
         .into_iter()
-        .filter(|name| !is_builtin(name))
+        .filter(|c| !is_builtin(&c.name))
         .collect()
 }
 
@@ -1044,7 +1045,11 @@ mod help_tests {
         std::fs::write(commands.join("approve.md"), "say yes").unwrap();
         std::fs::write(commands.join("ship.md"), "ship it").unwrap();
         assert!(is_builtin("approve"));
-        assert_eq!(project_commands(dir.path()), ["ship"]);
+        let names: Vec<_> = written_commands(dir.path())
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["ship"]);
     }
 
     /// Every command the help text names is listed under one group.

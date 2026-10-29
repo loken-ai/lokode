@@ -86,11 +86,7 @@ pub fn load(dirs: &[PathBuf]) -> (Vec<AgentSpec>, Vec<String>) {
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            if name.is_empty()
-                || !name
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-            {
+            if !crate::frontmatter::is_name(&name) {
                 warnings.push(format!(
                     "the agent {} is not named with letters, digits, - and _ only",
                     path.display()
@@ -114,37 +110,19 @@ pub fn load(dirs: &[PathBuf]) -> (Vec<AgentSpec>, Vec<String>) {
 
 /// Read an agent's file.
 pub fn parse(name: &str, text: &str, from: &str) -> Result<AgentSpec, String> {
-    let text = text.replace("\r\n", "\n");
-    let (head, body) = match text.strip_prefix("---\n") {
-        Some(rest) => match rest.split_once("\n---\n") {
-            Some((head, body)) => (head.to_string(), body.to_string()),
-            None => match rest.strip_suffix("\n---") {
-                Some(head) => (head.to_string(), String::new()),
-                None => return Err("its settings have no closing ---".into()),
-            },
-        },
-        None => (String::new(), text.clone()),
-    };
+    let (settings, prompt) = crate::frontmatter::split(text)?;
     let mut spec = AgentSpec {
         name: name.into(),
         description: String::new(),
-        prompt: body.trim().to_string(),
+        prompt,
         tools: None,
         model: None,
         backend: None,
         max_steps: None,
         from: from.into(),
     };
-    for line in head
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-    {
-        let (key, value) = line
-            .split_once(':')
-            .ok_or_else(|| format!("the line {line:?} is not key: value"))?;
-        let value = value.trim().trim_matches('"').to_string();
-        match key.trim() {
+    for (key, value) in settings {
+        match key.as_str() {
             "description" => spec.description = value,
             "tools" => {
                 spec.tools = Some(
