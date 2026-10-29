@@ -251,7 +251,12 @@ pub(crate) fn accept_choice(
 ) -> Option<String> {
     use crate::ui::picker::Kind;
     let line = input.lines().join("\n");
-    let chosen = picker?.chosen()?;
+    let picker = picker?;
+    let chosen = picker.chosen()?;
+    let is_agent = picker
+        .shown()
+        .iter()
+        .any(|c| c.value == chosen && c.about.starts_with(AGENT));
     let (kind, at, _) = crate::ui::picker::token_at(&line)?;
     // A command is the whole line and is ready to send; an argument finishes one; a file
     // is one word in a sentence and the sentence carries on after it.
@@ -262,9 +267,14 @@ pub(crate) fn accept_choice(
         }
         Kind::Command => format!("/{chosen}"),
         Kind::Argument(_) => format!("{}{chosen}", &line[..at]),
+        // An agent is followed by what it is to do.
+        Kind::Path if is_agent => format!("{}@{chosen} ", &line[..at]),
         Kind::Path => format!("{}@{chosen}", &line[..at]),
     })
 }
+
+/// What the list says before an agent's description.
+const AGENT: &str = "agent: ";
 
 /// The files and directories under the root, for naming one with `@`.
 ///
@@ -272,7 +282,12 @@ pub(crate) fn accept_choice(
 /// choosing from, and a list of every file in a large repository is for scrolling through.
 pub(crate) fn path_choices(root: &std::path::Path) -> Vec<crate::ui::picker::Choice> {
     const MOST: usize = 400;
-    let mut out = Vec::new();
+    // The agents first: a line that opens on one hands the rest to it.
+    let (agents, _) = crate::agent::agents::load(&crate::agent::agents::dirs(root));
+    let mut out: Vec<crate::ui::picker::Choice> = agents
+        .into_iter()
+        .map(|a| crate::ui::picker::Choice::new(a.name, format!("{AGENT}{}", a.description)))
+        .collect();
     for entry in ignore::WalkBuilder::new(root)
         .git_ignore(true)
         .require_git(false)

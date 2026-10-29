@@ -637,6 +637,9 @@ api-key-env = "ANTHROPIC_API_KEY"
 - The task is taken as written: no file is attached for it and the project is not searched
   for it.
 
+A line that opens on `@` and an agent's name hands the rest of the line to that agent. `@`
+offers the agents before the files.
+
 `/agents` lists the agents, what each may use and where it was read from.
 
 ## Work of several steps

@@ -1639,6 +1639,13 @@ impl Agent {
         // A file the person named travels with the question rather than being fetched
         // after it: they have already decided it is relevant, and on a local model the
         // round trip that would fetch it costs seconds.
+        // A line that opens on an agent's name hands the rest to that agent.
+        let user_input = match self.agent_named(&user_input) {
+            Some((agent, rest)) => format!(
+                "Hand this to the agent {agent} with delegate, then report what it said: {rest}"
+            ),
+            None => user_input,
+        };
         let expanded = match self.cfg.delegated {
             true => crate::agent::mentions::Expanded {
                 text: user_input.clone(),
@@ -2572,6 +2579,22 @@ impl Agent {
         // The hook runs here too: an abandoned turn can have changed files, and that is
         // exactly when a formatter or a test suite is worth running.
         self.end_turn(events).await;
+    }
+
+    /// The agent a line opens on with `@`, and the rest of the line, when the agent is one
+    /// the delegation knows and no file of the project has that name.
+    fn agent_named<'a>(&self, line: &'a str) -> Option<(&'a str, &'a str)> {
+        let rest = line.trim_start().strip_prefix('@')?;
+        let (name, task) = rest.split_once(char::is_whitespace)?;
+        if self.cfg.delegated || self.ctx.root.join(name).exists() {
+            return None;
+        }
+        let schema = self.registry.get("delegate")?.args_schema();
+        let known = schema["properties"]["agent"]["enum"]
+            .as_array()?
+            .iter()
+            .any(|n| n.as_str() == Some(name));
+        known.then_some((name, task.trim()))
     }
 
     /// Commit what a tool just changed, if a history is being kept.
@@ -3635,6 +3658,25 @@ mod tests {
             })
             .expect("the delegation was never answered");
         assert_eq!(result.content, "from elsewhere");
+    }
+
+    /// A line that opens on an agent's name is for that agent, unless a file of the
+    /// project has the name.
+    #[tokio::test]
+    async fn a_line_opening_on_an_agent_is_for_it() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![]).await;
+        let mut reg = crate::boot::build_registry(h.root.clone()).0;
+        reg.register(delegation(&backend.url, reg.read_only(&[]), 4));
+        let agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+        assert_eq!(
+            agent.agent_named("@explore where is main"),
+            Some(("explore", "where is main"))
+        );
+        assert_eq!(agent.agent_named("@nobody where is main"), None);
+        assert_eq!(agent.agent_named("look at @explore"), None);
+        h.write("explore", "a file");
+        assert_eq!(agent.agent_named("@explore where is main"), None);
     }
 
     /// A delegated session that runs out of steps says so, rather than handing back what
