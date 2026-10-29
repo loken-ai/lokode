@@ -71,6 +71,9 @@ impl Tool for WriteFile {
         }
         let diff = unified_diff(&before, &a.content, &ctx.short(&target));
 
+        if let Err(why) = ctx.may_write(&target) {
+            return Ok(ToolOutput::err(why));
+        }
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),
@@ -170,6 +173,9 @@ impl Tool for EditFile {
         let after = before.replacen(&a.old_string, &a.new_string, 1);
         let diff = unified_diff(&before, &after, &ctx.short(&target));
 
+        if let Err(why) = ctx.may_write(&target) {
+            return Ok(ToolOutput::err(why));
+        }
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),
@@ -289,6 +295,9 @@ impl Tool for EditLines {
         }
         let diff = unified_diff(&before, &after, &ctx.short(&target));
 
+        if let Err(why) = ctx.may_write(&target) {
+            return Ok(ToolOutput::err(why));
+        }
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),
@@ -399,6 +408,11 @@ impl Tool for ApplyPatch {
         }
 
         let targets: Vec<&std::path::Path> = staged.iter().map(|s| s.target.as_path()).collect();
+        for s in &staged {
+            if let Err(why) = ctx.may_write(&s.target) {
+                return Ok(ToolOutput::err(why));
+            }
+        }
         match ctx
             .approve(ApprovalRequest {
                 tool: self.name().into(),

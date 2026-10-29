@@ -841,11 +841,19 @@ async fn run_ui(
                         state.phase = None;
                         state.prefill = None;
                         state.turn_cancel = None;
-                        // A turn only ends while a prompt is up if it was abandoned: the
-                        // tool that asked has already given up waiting, so the modal is
-                        // asking about something that will not happen either way.
-                        state.pending_approval = None;
-                        state.waiting_since = None;
+                        // A question whose asker gave up waiting goes with the turn: it
+                        // asks about something that will not happen either way. One an
+                        // agent working in the background still waits on stays up.
+                        if state
+                            .pending_approval
+                            .as_ref()
+                            .is_some_and(|p| p.reply.is_closed())
+                        {
+                            state.pending_approval = None;
+                        }
+                        if state.pending_approval.is_none() {
+                            state.waiting_since = None;
+                        }
                         // What was typed while it ran and held back for now. One at a
                         // time: each is a turn, and the ones after it wait as they were.
                         if !state.queued.is_empty() {

@@ -149,8 +149,8 @@ impl Delegate {
             "Hand one self-contained task to an agent, in a session with its own context \
              window, and get back only its answer. Use it for a search that would read many \
              files, or for work an agent is named for. agent is one of: {}. Without agent, {}. \
-             With background, an agent that changes nothing works while the turn goes on, and \
-             its answer comes later.",
+             With background, the agent works while the turn goes on and its answer comes \
+             later. A file it changes is its own until it answers.",
             agents.join("; "),
             crate::agent::agents::DEFAULT
         );
@@ -248,12 +248,6 @@ impl Tool for Delegate {
         };
         let registry = Arc::new(w.tools_of(spec));
         let writes = registry.iter().any(|(_, t)| t.mutates());
-        if a.background && writes {
-            return Ok(ToolOutput::err(format!(
-                "only an agent that changes nothing works in the background, and {name} may \
-                 change things: hand it the task without background"
-            )));
-        }
         // A place among those that run at once, given up if the call is stopped first.
         let slot = tokio::select! {
             biased;
@@ -349,11 +343,16 @@ impl Tool for Delegate {
             // not stop it. The screen lists it with what stops it, and its answer is
             // handed to the session when it comes.
             let stop = tokio_util::sync::CancellationToken::new();
+            let id = BACKGROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let ctx = crate::tools::registry::ToolCtx {
                 cancel: stop.clone(),
+                holder: Some((id, name.to_string())),
                 ..ctx.clone()
             };
-            let id = BACKGROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // The agent's own tools write as it, so what it changes is held for it.
+            let mut sub = sub;
+            sub.ctx.holder = ctx.holder.clone();
+            sub.ctx.cancel = stop.clone();
             let short: String = task.chars().take(60).collect();
             ctx.left_running(
                 self.name(),
@@ -365,6 +364,8 @@ impl Tool for Delegate {
             tokio::spawn(async move {
                 let _slot = slot;
                 let out = finish(sub, task.clone(), agent.clone(), ctx.clone(), hooks).await;
+                // What it changed is free again for the session and the other agents.
+                ctx.claims.release(id);
                 ctx.left_running("delegate", id, None).await;
                 let said = match stop.is_cancelled() {
                     true => format!(

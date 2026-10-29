@@ -477,6 +477,8 @@ mod tests {
         });
         ToolCtx {
             editor: None,
+            claims: Default::default(),
+            holder: None,
             policy: Arc::new(Default::default()),
             auto_used: Arc::new(Default::default()),
             honour_allow: true,

@@ -80,6 +80,62 @@ pub struct ToolCtx {
     pub known: Arc<std::sync::Mutex<HashMap<PathBuf, u64>>>,
     /// The end of what the call has printed, which the screen reads when told it changed.
     pub tail: Arc<Tail>,
+    /// The files agents working in the background are changing, shared by the session.
+    pub claims: Arc<Claims>,
+    /// The agent working in the background this context belongs to, by number and name,
+    /// `None` for the session and the agents it waits for.
+    pub holder: Option<(u64, String)>,
+}
+
+/// The files each agent working in the background has written, held until it answers so
+/// nothing else writes them under it.
+#[derive(Default)]
+pub struct Claims {
+    held: std::sync::Mutex<HashMap<PathBuf, (u64, String)>>,
+}
+
+impl Claims {
+    /// Take `path` for `holder`, the agent `agent`, or say who holds it. `None` stands for
+    /// the session, which takes nothing and may write what nobody holds.
+    pub fn take(&self, path: &Path, holder: Option<(u64, &str)>) -> Result<(), String> {
+        let Ok(mut held) = self.held.lock() else {
+            return Ok(());
+        };
+        match (held.get(path), holder) {
+            (Some((by, agent)), mine) if mine.map(|(id, _)| id) != Some(*by) => Err(format!(
+                "the agent {agent}, working in the background, is changing {}: leave it to \
+                 that agent, or wait for its answer",
+                path.display()
+            )),
+            (_, Some((id, agent))) => {
+                held.insert(path.to_path_buf(), (id, agent.to_string()));
+                Ok(())
+            }
+            (_, None) => Ok(()),
+        }
+    }
+
+    /// Whether `holder` may write `path`, without taking it.
+    pub fn check(&self, path: &Path, holder: Option<u64>) -> Result<(), String> {
+        let Ok(held) = self.held.lock() else {
+            return Ok(());
+        };
+        match held.get(path) {
+            Some((by, agent)) if holder != Some(*by) => Err(format!(
+                "the agent {agent}, working in the background, is changing {}: leave it to \
+                 that agent, or wait for its answer",
+                path.display()
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Give back everything `holder` held.
+    pub fn release(&self, holder: u64) {
+        if let Ok(mut held) = self.held.lock() {
+            held.retain(|_, (by, _)| *by != holder);
+        }
+    }
 }
 
 /// How many of the last lines a call printed are kept for the screen.
@@ -183,9 +239,19 @@ impl ToolCtx {
         }
     }
 
+    /// Whether this context may write `path`, asked before the person is: a write that
+    /// would be refused is not worth a question.
+    pub fn may_write(&self, path: &Path) -> Result<(), String> {
+        self.claims
+            .check(path, self.holder.as_ref().map(|(id, _)| *id))
+    }
+
     /// Hand `contents` of `path` to the editor, when there is one, and make sure the disk
     /// holds them: the shell, the tests and the change history read the disk.
     pub async fn write_text(&self, path: &Path, contents: &str) -> anyhow::Result<()> {
+        self.claims
+            .take(path, self.holder.as_ref().map(|(id, a)| (*id, a.as_str())))
+            .map_err(anyhow::Error::msg)?;
         if let Some(editor) = &self.editor {
             if editor.write(path, contents).await
                 && tokio::fs::read_to_string(path).await.ok().as_deref() == Some(contents)
@@ -551,6 +617,23 @@ impl Default for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file an agent in the background wrote is its own until it is released: the
+    /// session and the other agents are refused, the agent itself is not.
+    #[test]
+    fn a_file_is_held_by_the_agent_writing_it() {
+        let claims = Claims::default();
+        let path = Path::new("/p/notes.md");
+        assert!(claims.take(path, None).is_ok());
+        assert!(claims.take(path, Some((1, "scribe"))).is_ok());
+        assert!(claims.take(path, Some((1, "scribe"))).is_ok());
+        let refused = claims.take(path, None).unwrap_err();
+        assert!(refused.contains("scribe"), "{refused}");
+        assert!(claims.check(path, Some(2)).is_err());
+        assert!(claims.check(path, Some(1)).is_ok());
+        claims.release(1);
+        assert!(claims.take(path, None).is_ok());
+    }
     use crate::tools::harness::{Answer, Harness};
 
     /// The harness is returned rather than dropped, because the context it hands out

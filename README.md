@@ -646,9 +646,11 @@ api-key-env = "ANTHROPIC_API_KEY"
 - While the session plans, an agent changes nothing.
 - At most `[limits] delegates` agents run at once, 2 by default. The others wait.
 - An agent out of steps says it did not finish, with what it said last.
-- With `background`, an agent that changes nothing works while the turn goes on. Its answer is
-  handed to the session at its next step, in this turn or the next. Stopping the turn does not
-  stop it. It is listed in the rail and in `/jobs`, where enter stops it alone.
+- With `background`, an agent works while the turn goes on. Its answer is handed to the session
+  at its next step, in this turn or the next. Stopping the turn does not stop it. It is listed in
+  the rail and in `/jobs`, where enter stops it alone.
+- A file such an agent writes is its own until it answers. The session and the other agents are
+  refused it, before anyone is asked. Its changes are approved like any other.
 - The task is taken as written: no file is attached for it and the project is not searched
   for it.
 
