@@ -213,6 +213,7 @@ pub(crate) fn draw(
             _ => None,
         },
         rail_offered: !wide,
+        on_receipt: state.receipt_here().is_some(),
         attaching: {
             let line = input.lines().join("\n");
             match line.contains('@') {
@@ -426,6 +427,7 @@ mod tests {
                 scope: "src/mcp/".into(),
             },
             Entry::Receipt(crate::agent::agent_loop::Receipt {
+                turn: 2,
                 took: std::time::Duration::from_secs(38),
                 steps: 7,
                 tokens_in: 8400,

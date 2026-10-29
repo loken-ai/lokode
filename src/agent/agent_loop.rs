@@ -671,6 +671,8 @@ pub struct TurnTally {
     pub started: Option<std::time::Instant>,
     /// What the backend's measurements stood at when the turn began.
     pub energy_from: crate::backend::meter::Totals,
+    /// The turn's number, as the change history counts turns.
+    pub turn: u32,
 }
 
 impl TurnTally {
@@ -698,6 +700,7 @@ impl TurnTally {
         }
         let energy = self.energy().sum();
         Some(Receipt {
+            turn: self.turn,
             took,
             steps: self.steps,
             tokens_in: self.tokens_in,
@@ -731,6 +734,8 @@ pub struct Engine {
 /// What a turn came to: how long, how many steps, what it read and wrote, what it changed.
 #[derive(Debug, Clone)]
 pub struct Receipt {
+    /// The turn's number, as the change history counts turns.
+    pub turn: u32,
     pub took: std::time::Duration,
     pub steps: u32,
     pub tokens_in: u64,
@@ -1585,6 +1590,7 @@ impl Agent {
 
         self.ctx.cancel = cancel.clone();
         self.turn += 1;
+        self.this_turn.turn = self.turn;
         tracing::info!(
             session = %self.session.id,
             chars = user_input.len(),

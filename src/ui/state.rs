@@ -136,7 +136,7 @@ pub(crate) struct UiState {
     pub(crate) rates: std::collections::VecDeque<f64>,
     /// The files this session changed, as the change history last said.
     pub(crate) changes: Vec<crate::ui::rail::FileChange>,
-    /// The turns that can be put back, oldest first.
+    /// The turns that can be put back, newest first.
     pub(crate) turns: Vec<crate::checkpoint::Turn>,
     /// Whether the rail is shown: `None` follows the width of the screen, and a key sets
     /// it either way.
@@ -416,6 +416,14 @@ impl UiState {
         self.entries
             .iter()
             .rposition(|e| matches!(e, Entry::Step(s) if s.name == tool && s.outcome.is_none()))
+    }
+
+    /// The turn of the receipt being pointed at, when it changed files.
+    pub(crate) fn receipt_here(&self) -> Option<u32> {
+        match self.at_entry.and_then(|i| self.entries.get(i)) {
+            Some(Entry::Receipt(r)) if !r.files.is_empty() => Some(r.turn),
+            _ => None,
+        }
     }
 
     /// Where the running step of the call `id` sits, if one is.

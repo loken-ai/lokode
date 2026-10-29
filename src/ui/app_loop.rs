@@ -1204,6 +1204,53 @@ async fn run_ui(
                                 }
                                 continue;
                             }
+                            // A receipt pointed at: its turn put back, or what it changed
+                            // shown.
+                            KeyCode::Char(c @ ('u' | 'd'))
+                                if !state.busy && state.receipt_here().is_some() =>
+                            {
+                                let turn = state.receipt_here().unwrap_or_default();
+                                match c {
+                                    'u' => {
+                                        let ran = run_command(
+                                            &format!("undo {turn}"),
+                                            CommandCtx {
+                                                checkpoints: checkpoints.as_deref(),
+                                                root: &cfg.root,
+                                                control: &control_tx,
+                                                policy: &cfg.policy,
+                                                tools: &tools,
+                                                digest: &digest,
+                                                mcp: &mcp,
+                                                mcp_summary: &mcp_summary,
+                                                session_id: &session_id,
+                                                approvals: &session_approvals,
+                                                busy: state.busy,
+                                            },
+                                        )
+                                        .await;
+                                        if let Ran::Said(said) = ran {
+                                            show(&mut state, "undo", said);
+                                        }
+                                        state.at_entry = None;
+                                        refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
+                                    }
+                                    _ => {
+                                        let said = match checkpoints.as_deref() {
+                                            None => "no change history for this session".to_string(),
+                                            Some(cp) => match cp.diff_turn(turn).await {
+                                                Err(e) => format!("diff failed: {e:#}"),
+                                                Ok(d) if d.trim().is_empty() => {
+                                                    format!("turn {turn} changed nothing that is still there")
+                                                }
+                                                Ok(d) => d,
+                                            },
+                                        };
+                                        show(&mut state, "diff", said);
+                                    }
+                                }
+                                continue;
+                            }
                             // What was counted, shown whole, and back again.
                             KeyCode::Char(' ') if state.at_entry.is_some() => {
                                 if let Some(i) = state.at_entry {

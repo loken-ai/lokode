@@ -147,7 +147,7 @@ impl Entry {
     pub fn render_within(&self, open: bool, here: bool, width: usize) -> Vec<Line<'static>> {
         let mut lines = match self {
             Entry::Step(step) => step_lines(step, open, width),
-            Entry::Receipt(r) => receipt_lines(r, width),
+            Entry::Receipt(r) => receipt_lines(r, width, here),
             Entry::Assistant(s) | Entry::AssistantStreaming(s) => {
                 let mut out = crate::ui::markdown::render(s, width);
                 out.push(Line::from(""));
@@ -203,7 +203,7 @@ impl Entry {
                 out
             }
             Entry::Step(step) => step_lines(step, open, 0),
-            Entry::Receipt(r) => receipt_lines(r, 0),
+            Entry::Receipt(r) => receipt_lines(r, 0, false),
             // `/diff` answers through a notice, and a wall of uncoloured diff is the thing
             // it is least useful as.
             Entry::Reasoning(s) => s
@@ -547,7 +547,7 @@ fn step_lines(step: &Step, open: bool, width: usize) -> Vec<Line<'static>> {
 
 /// The line that closes a turn: how long, how many steps, what was read and written, and
 /// what changed, with the commands that look at a change at the right edge when there is one.
-fn receipt_lines(r: &Receipt, width: usize) -> Vec<Line<'static>> {
+fn receipt_lines(r: &Receipt, width: usize, here: bool) -> Vec<Line<'static>> {
     let t = theme();
     let mut said = vec![how_long(r.took)];
     if r.steps > 0 {
@@ -573,9 +573,17 @@ fn receipt_lines(r: &Receipt, width: usize) -> Vec<Line<'static>> {
         Span::styled("✓", Style::default().fg(t.good)),
         Span::styled(format!(" {}", said.join(" · ")), t.dim),
     ];
-    let right = match r.files.is_empty() {
-        true => Vec::new(),
-        false => vec![
+    // Pointed at, the receipt is acted on by a key: put the turn back, or see what it
+    // changed. Otherwise it names the commands that do the same.
+    let right = match (r.files.is_empty(), here) {
+        (true, _) => Vec::new(),
+        (false, true) => vec![
+            Span::styled("u", t.key),
+            Span::styled(" put this turn back  ", t.dim),
+            Span::styled("d", t.key),
+            Span::styled(" see its diff", t.dim),
+        ],
+        (false, false) => vec![
             Span::styled("/undo", t.key),
             Span::styled(" put back  ", t.dim),
             Span::styled("/diff", t.key),
@@ -940,6 +948,7 @@ mod tests {
     #[test]
     fn a_receipt_closes_a_turn_on_one_row() {
         let mut r = Receipt {
+            turn: 3,
             took: Duration::from_secs(38),
             steps: 7,
             tokens_in: 8400,
@@ -947,14 +956,14 @@ mod tests {
             files: vec!["src/a.rs".into()],
             energy: None,
         };
-        let head = line_text(&receipt_lines(&r, 110)[0]);
+        let head = line_text(&receipt_lines(&r, 110, false)[0]);
         assert!(
             head.starts_with(" ✓ 38.0s · 7 step(s) · 8.4k read, 940 written · changed src/a.rs"),
             "{head}"
         );
         assert!(head.ends_with("/diff see it"), "{head}");
         r.files.clear();
-        let head = line_text(&receipt_lines(&r, 110)[0]);
+        let head = line_text(&receipt_lines(&r, 110, false)[0]);
         assert!(head.ends_with("nothing changed"), "{head}");
         assert_eq!(tokens(1_250_000), "1.2M");
     }

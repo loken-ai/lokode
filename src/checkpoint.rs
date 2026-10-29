@@ -156,6 +156,22 @@ impl Checkpoints {
         Ok(out)
     }
 
+    /// What `turn` itself changed, as a unified diff. Empty when it changed nothing or is
+    /// not a turn the history holds.
+    pub async fn diff_turn(&self, turn: u32) -> Result<String> {
+        self.commit("before diff", 0).await?;
+        let entries = self.entries().await?;
+        let Some(target) = Self::before(&entries, turn) else {
+            return Ok(String::new());
+        };
+        let last = entries
+            .iter()
+            .find(|(_, s)| turn_of(s) == turn)
+            .map(|(sha, _)| sha.clone())
+            .unwrap_or_else(|| "HEAD".to_string());
+        self.git(&["diff", &target, &last]).await
+    }
+
     /// Put the project back to how it stood before `turn`.
     pub async fn undo_turn(&self, turn: u32) -> Result<Option<Undone>> {
         self.commit("before undo", 0).await?;
@@ -380,6 +396,28 @@ mod tests {
         assert!(!root.join("b.txt").exists(), "everything after it goes too");
         // And it is not offered again.
         assert!(cp.turns().await.unwrap().iter().all(|t| t.turn != 1));
+    }
+
+    /// A turn's own diff is what that turn changed, whatever came after it.
+    #[tokio::test]
+    async fn a_turns_diff_is_what_it_changed() {
+        let f = fixture();
+        let root = f.root.path().canonicalize().unwrap();
+        write(&root, "a.txt", "original\n");
+        let cp = f.open().await;
+        write(&root, "a.txt", "turn one\n");
+        cp.snapshot("write_file", 1).await.unwrap();
+        write(&root, "b.txt", "turn two\n");
+        cp.snapshot("write_file", 2).await.unwrap();
+
+        let one = cp.diff_turn(1).await.unwrap();
+        assert!(
+            one.contains("-original") && one.contains("+turn one"),
+            "{one}"
+        );
+        assert!(!one.contains("b.txt"), "{one}");
+        assert!(cp.diff_turn(2).await.unwrap().contains("+turn two"));
+        assert!(cp.diff_turn(9).await.unwrap().is_empty());
     }
 
     /// Undoing must not be able to lose a change somebody made by hand in between. The

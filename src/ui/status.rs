@@ -22,6 +22,8 @@ pub struct Status {
     /// because the first elision is the moment a session starts forgetting what it was
     /// told.
     pub context_percent: u8,
+    /// Whether the entry pointed at is a receipt whose turn changed files.
+    pub on_receipt: bool,
     /// The files the line being typed names with `@`, and the characters they hold.
     pub attaching: Option<(usize, u64)>,
     /// The plan's tasks done and in all, said here when the rail is not on screen.
@@ -258,6 +260,10 @@ impl Status {
             spans.extend(key("alt-enter", "queue"));
         } else if self.pointing {
             spans.extend(key("alt-↑↓", "steps"));
+            if self.on_receipt {
+                spans.extend(key("u", "put back"));
+                spans.extend(key("d", "diff"));
+            }
             spans.extend(key("space", "unfold"));
             spans.extend(key("esc", "back"));
         } else {
@@ -332,6 +338,7 @@ mod tests {
             plan: None,
             rail_offered: false,
             attaching: None,
+            on_receipt: false,
             step: 2,
             max_steps: 16,
             busy,
