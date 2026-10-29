@@ -657,6 +657,11 @@ offers the agents before the files.
 `update_plan` is a tool the model calls to keep a task list: done, in progress, left. The rail
 shows it under PLAN with how far it has got. It writes nothing and needs no approval.
 
+- A resumed session comes back with its task list, and planning if it was planning.
+- When the oldest steps leave the window, the note left in their place carries the list as it
+  stood, so the model keeps the goal.
+- `/clear` empties the list.
+
 ## Hooks
 
 ```toml

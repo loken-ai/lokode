@@ -231,7 +231,16 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         &cfg.root,
         crate::agent::session::instruction_chars(context_tokens, max_answer_tokens),
     );
-    let mode = cfg.mode;
+    // A resumed session comes back in the mode it was in, with its task list.
+    let mode = match &earlier {
+        Some(e) if e.planning => crate::agent::agent_loop::Mode::Plan,
+        Some(_) => crate::agent::agent_loop::Mode::Act,
+        None => cfg.mode,
+    };
+    if let Some(e) = &earlier {
+        tasks.set(e.tasks.clone()).await;
+    }
+    ctx.planning = mode == crate::agent::agent_loop::Mode::Plan;
     // The standing instructions a person wrote, then what the background work has found
     // out: the cheaper half of what a session used to spend its first minutes
     // rediscovering, in a paragraph rather than in a dozen searches.
@@ -279,6 +288,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
                 model: model.clone(),
                 started_at: transcript::now_secs(),
             });
+            if mode == crate::agent::agent_loop::Mode::Plan {
+                transcript.append(Record::Mode { planning: true });
+            }
             session = session.with_transcript(transcript, id.clone());
             id
         }
@@ -438,6 +450,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         },
         ctx,
         checkpoints: checkpoints.clone(),
+        tasks: Some(tasks.clone()),
         turn: 0,
     };
 

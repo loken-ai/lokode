@@ -790,6 +790,8 @@ pub struct Resumed {
     pub messages: Vec<Message>,
     /// What the model was changed to, when the session was last using another one.
     pub model: Option<String>,
+    /// Whether it was planning.
+    pub planning: bool,
 }
 
 /// What could be answering, and what is.
@@ -903,6 +905,9 @@ pub struct Agent {
     pub ctx: ToolCtx,
     /// Records what the agent changes, so a turn can be shown or taken back.
     pub checkpoints: Option<Arc<Checkpoints>>,
+    /// The task list the model keeps, when this session keeps one, so it outlives a resume
+    /// and an elision.
+    pub tasks: Option<Arc<crate::tools::plan::TaskList>>,
     /// Which turn this is, counted from one. Checkpoints are labelled with it, which is
     /// what lets `/undo` take back a turn rather than a single tool call.
     pub turn: u32,
@@ -1018,6 +1023,11 @@ impl Agent {
         }
         self.cfg.mode = mode;
         self.ctx.planning = mode == Mode::Plan;
+        if let Some(t) = self.session.transcript() {
+            t.append(crate::agent::transcript::Record::Mode {
+                planning: mode == Mode::Plan,
+            });
+        }
         self.rebuild_preamble();
         // Planning is where reasoning is worth paying for and acting is where being over
         // quickly is, so the mode carries its model with it when the project named one.
@@ -1221,6 +1231,9 @@ impl Agent {
             }
             Control::Clear { reply } => {
                 let dropped = self.session.clear();
+                if let Some(list) = &self.tasks {
+                    list.set(Vec::new()).await;
+                }
                 tracing::info!(dropped, "conversation cleared");
                 let _ = reply.send(match dropped {
                     0 => "nothing had been said yet".to_string(),
@@ -1265,6 +1278,7 @@ impl Agent {
             }
             Control::Compact { reply } => {
                 let before = self.session.size_chars();
+                self.carry_tasks().await;
                 let dropped = self.session.compact_now();
                 let after = self.session.size_chars();
                 let _ = reply.send(if dropped == 0 {
@@ -1419,6 +1433,16 @@ impl Agent {
         let messages = replayed.messages.clone();
         self.session
             .adopt(transcript, replayed.id.clone(), replayed.messages);
+        if let Some(list) = &self.tasks {
+            list.set(replayed.tasks.clone()).await;
+        }
+        let mode = match replayed.planning {
+            true => Mode::Plan,
+            false => Mode::Act,
+        };
+        if mode != self.cfg.mode {
+            self.set_mode(mode);
+        }
         let model = match replayed.model.is_empty() || replayed.model == self.cfg.model {
             true => None,
             false => {
@@ -1431,6 +1455,7 @@ impl Agent {
             id: replayed.id,
             messages,
             model,
+            planning: replayed.planning,
         })
     }
 
@@ -1715,6 +1740,7 @@ impl Agent {
                 let _ = events.send(AgentEvent::Steered(said)).await;
             }
             let _ = events.send(AgentEvent::Phase(Phase::Preparing)).await;
+            self.carry_tasks().await;
             let dropped = self.session.compact();
             if dropped > 0 {
                 tracing::warn!(
@@ -2174,6 +2200,16 @@ impl Agent {
                             .registry
                             .get(&call.name)
                             .is_some_and(|t| t.may_change());
+                    // The list as it now stands, so a resumed session comes back to it.
+                    if matches!(call.name.as_str(), "update_plan" | "submit_plan")
+                        && !result.is_error
+                    {
+                        if let (Some(t), Some(list)) = (self.session.transcript(), &self.tasks) {
+                            t.append(crate::agent::transcript::Record::Tasks {
+                                tasks: list.get().await,
+                            });
+                        }
+                    }
                     // An approved plan ends planning, and the turn carries on acting on it.
                     if call.name == "submit_plan"
                         && !result.is_error
@@ -2592,6 +2628,24 @@ impl Agent {
         // The hook runs here too: an abandoned turn can have changed files, and that is
         // exactly when a formatter or a test suite is worth running.
         self.end_turn(events).await;
+    }
+
+    /// Have the note left where steps are elided carry the task list, so the model keeps
+    /// the goal when the call that set it is elided.
+    async fn carry_tasks(&mut self) {
+        let carry = match &self.tasks {
+            Some(list) => {
+                let tasks = list.get().await;
+                (!tasks.is_empty()).then(|| {
+                    format!(
+                        "The task list as it stood:\n{}",
+                        crate::tools::plan::TaskList::render(&tasks)
+                    )
+                })
+            }
+            None => None,
+        };
+        self.session.set_carry(carry);
     }
 
     /// The agent a line opens on with `@`, and the rest of the line, when the agent is one
@@ -3287,6 +3341,7 @@ mod tests {
             },
             ctx: h.ctx.clone(),
             checkpoints: None,
+            tasks: None,
             turn: 0,
         };
         (agent, steer_tx)

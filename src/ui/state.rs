@@ -902,6 +902,7 @@ impl UiState {
     /// new turn read as the first question of the session.
     pub(crate) fn show_resumed(&mut self, resumed: crate::agent::agent_loop::Resumed) {
         self.start_again();
+        self.planning = resumed.planning;
         let said = resumed.messages.len();
         self.entries.extend(what_was_said(&resumed.messages));
         if let Some(model) = resumed.model {

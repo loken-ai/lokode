@@ -303,6 +303,7 @@ impl Tool for Delegate {
                 ..ctx.clone()
             },
             checkpoints: None,
+            tasks: None,
             turn: 0,
         };
 

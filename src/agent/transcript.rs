@@ -36,6 +36,14 @@ pub enum Record {
     Model {
         name: String,
     },
+    /// The session started or stopped planning.
+    Mode {
+        planning: bool,
+    },
+    /// The task list as it stands after the model changed it.
+    Tasks {
+        tasks: Vec<crate::tools::plan::Task>,
+    },
     /// One step of a turn, with what was knowable before it and what it cost.
     ///
     /// Kept in the same file as the conversation so a session can be read back and
@@ -123,6 +131,10 @@ pub struct Replay {
     pub id: String,
     pub root: PathBuf,
     pub model: String,
+    /// Whether the session was planning when it was last recorded.
+    pub planning: bool,
+    /// The task list as it was last recorded.
+    pub tasks: Vec<crate::tools::plan::Task>,
     /// Every message recorded, in order, excluding the system message.
     ///
     /// The preamble is rebuilt from the current tool registry rather than replayed: the
@@ -145,6 +157,8 @@ pub fn replay(path: &Path) -> Result<Replay> {
     let mut root = None;
     let mut model = None;
     let mut messages = Vec::new();
+    let mut planning = false;
+    let mut tasks = Vec::new();
 
     for line in text.lines() {
         let Ok(rec) = serde_json::from_str::<Record>(line) else {
@@ -163,8 +177,13 @@ pub fn replay(path: &Path) -> Result<Replay> {
             }
             // A later switch wins over the one the session opened with.
             Record::Model { name } => model = Some(name),
+            Record::Mode { planning: p } => planning = p,
+            Record::Tasks { tasks: t } => tasks = t,
             // Everything before it was deliberately dropped, so it does not come back.
-            Record::Cleared => messages.clear(),
+            Record::Cleared => {
+                messages.clear();
+                tasks.clear();
+            }
             Record::Message(m) if m.role != "system" => messages.push(m),
             _ => {}
         }
@@ -178,6 +197,8 @@ pub fn replay(path: &Path) -> Result<Replay> {
         }),
         root: root.unwrap_or_default(),
         model: model.unwrap_or_default(),
+        planning,
+        tasks,
         messages,
     })
 }
@@ -299,6 +320,33 @@ mod tests {
         assert_eq!(back.model, "test-model");
         assert_eq!(back.messages.len(), 2);
         assert_eq!(back.messages[0].content, "do the thing");
+    }
+
+    /// The mode and the task list come back as last recorded, and a clear drops the list.
+    #[tokio::test]
+    async fn the_mode_and_the_task_list_come_back() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("m.jsonl");
+        let (t, writer) = Transcript::create(path.clone()).unwrap();
+        let task = crate::tools::plan::Task {
+            what: "write b".into(),
+            state: crate::tools::plan::State::Doing,
+        };
+        t.append(Record::Mode { planning: true });
+        t.append(Record::Tasks {
+            tasks: vec![task.clone()],
+        });
+        drop(t);
+        let _ = writer.await;
+        let back = replay(&path).unwrap();
+        assert!(back.planning);
+        assert_eq!(back.tasks, [task]);
+
+        let (t, writer) = Transcript::create(path.clone()).unwrap();
+        t.append(Record::Cleared);
+        drop(t);
+        let _ = writer.await;
+        assert!(replay(&path).unwrap().tasks.is_empty());
     }
 
     /// The preamble describes the tools available now, which are not necessarily the ones

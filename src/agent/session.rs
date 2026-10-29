@@ -83,6 +83,8 @@ pub struct Session {
     /// Attached here because `push` is the single place a message enters the
     /// conversation, so nothing can join the history without also being written down.
     transcript: Option<Transcript>,
+    /// What the elision note carries besides saying so.
+    carry: Option<String>,
 }
 
 /// The most of the window the answer may be promised, as a fraction of it.
@@ -147,6 +149,7 @@ impl Session {
             usable_tokens,
             chars_per_token: CHARS_PER_TOKEN as f64,
             transcript: None,
+            carry: None,
         }
     }
 
@@ -184,6 +187,20 @@ impl Session {
     /// The record keeps what was said - a session is a record, and choosing to start again
     /// does not unsay anything - and carries a mark so that resuming it later does not
     /// bring back what was just dropped.
+    /// What the note left where steps were elided carries besides saying so, as of the
+    /// next elision.
+    pub fn set_carry(&mut self, carry: Option<String>) {
+        self.carry = carry;
+    }
+
+    /// The note left where steps were elided.
+    fn elision(&self) -> String {
+        match &self.carry {
+            Some(carry) => format!("{ELISION}\n\n{carry}"),
+            None => ELISION.to_string(),
+        }
+    }
+
     pub fn clear(&mut self) -> usize {
         let dropped = self.history.len().saturating_sub(1);
         self.history.truncate(1);
@@ -445,24 +462,29 @@ impl Session {
         }
         let dropped = cut - KEEP_FIRST;
         self.history.drain(KEEP_FIRST..cut);
-        if self.history.get(KEEP_FIRST).map(|m| m.content.as_str()) != Some(ELISION) {
-            self.history.insert(KEEP_FIRST, Message::user(ELISION));
+        let note = self.elision();
+        match self.history.get_mut(KEEP_FIRST) {
+            Some(m) if m.content.starts_with(ELISION) => m.content = note,
+            _ => self.history.insert(KEEP_FIRST, Message::user(note)),
         }
         dropped
     }
 
     /// Say once, where the cut was made, that something was cut.
     fn mark_elision(&mut self) {
-        if self.history.get(1).map(|m| m.content.as_str()) != Some(ELISION) {
-            self.history.insert(1, Message::user(ELISION));
+        let note = self.elision();
+        match self.history.get_mut(1) {
+            Some(m) if m.content.starts_with(ELISION) => m.content = note,
+            _ => self.history.insert(1, Message::user(note)),
         }
     }
 
     /// Index of the second retained user message, i.e. where the history would resume
     /// after dropping the oldest step. `None` when there is nothing left to drop.
     fn next_user_boundary(&self) -> Option<usize> {
-        let first = (1..self.history.len())
-            .find(|&i| self.history[i].role == "user" && self.history[i].content != ELISION)?;
+        let first = (1..self.history.len()).find(|&i| {
+            self.history[i].role == "user" && !self.history[i].content.starts_with(ELISION)
+        })?;
         (first + 1..self.history.len()).find(|&i| self.history[i].role == "user")
     }
 }
@@ -841,5 +863,28 @@ mod context_tests {
         assert_eq!(s.budget_chars(), budget);
         // The contract is never what goes.
         assert_eq!(s.history[0].role, "system");
+    }
+
+    /// The note left where steps were elided carries what it is given.
+    #[test]
+    fn the_elision_note_carries_the_task_list() {
+        let mut s = filled();
+        for i in 0..8 {
+            s.push(Message::user(format!("step {i}")));
+            s.push(Message::tool("bulk".repeat(200), format!("c{i}")));
+        }
+        s.set_carry(Some("The task list as it stood:\n[~] write b".into()));
+        assert!(s.compact_now() > 0);
+        let notes: Vec<_> = s
+            .history
+            .iter()
+            .filter(|m| m.content.starts_with(ELISION))
+            .collect();
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].content.contains("[~] write b"),
+            "{}",
+            notes[0].content
+        );
     }
 }

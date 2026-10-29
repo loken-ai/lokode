@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
 /// Where one task stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum State {
     Todo,
@@ -35,7 +35,7 @@ impl State {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
 pub struct Task {
     pub what: String,
     pub state: State,

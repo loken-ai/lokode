@@ -239,6 +239,7 @@ impl Discovery {
             },
             ctx: self.ctx.clone(),
             checkpoints: None,
+            tasks: None,
             turn: 0,
         };
 

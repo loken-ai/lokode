@@ -55,7 +55,7 @@ struct TurnRequest {
     cancel: CancellationToken,
 }
 
-pub async fn run(cfg: AppConfig) -> Result<()> {
+pub async fn run(mut cfg: AppConfig) -> Result<()> {
     let boot::Booted {
         session_approvals,
         mut agent,
@@ -80,6 +80,8 @@ pub async fn run(cfg: AppConfig) -> Result<()> {
         discovery,
         mut live,
     } = boot::boot(&cfg).await?;
+    // A resumed session may have come back planning.
+    cfg.mode = agent.cfg.mode;
 
     // Channels:
     //   input_tx → agent task ── pushes "user said X"
@@ -369,6 +371,7 @@ async fn run_ui(
         ..Default::default()
     };
     session_approvals.accept_writes(cfg.accept_writes);
+    state.tasks = tasks.get().await;
     // The protocol is not stated here: it is settled by asking the backend, which has not
     // answered yet, and the status line carries whatever it turns out to be.
     // The keys live on their own line under the input, where they are always in view, so
@@ -1193,7 +1196,10 @@ async fn run_ui(
                                             state.start_again();
                                             state.entries.push(Entry::Notice(said));
                                         }
-                                        Ran::Resumed(resumed) => state.show_resumed(*resumed),
+                                        Ran::Resumed(resumed) => {
+                                            state.show_resumed(*resumed);
+                                            state.tasks = tasks.get().await;
+                                        }
                                         // Something to ask the model. Put on the line
                                         // rather than sent, so the person sees what they
                                         // are about to ask before it goes.
@@ -1812,6 +1818,7 @@ async fn run_ui(
                                         }
                                         Ran::Resumed(resumed) => {
                                             state.show_resumed(*resumed);
+                                            state.tasks = tasks.get().await;
                                             input = fresh_input("");
                                             refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                                             continue;
