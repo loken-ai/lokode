@@ -500,6 +500,9 @@ fn yes() -> bool {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct BackendSection {
+    /// A provider lokode knows by name, which gives the url, the kind and the variable of
+    /// the key when they are not written.
+    pub provider: Option<String>,
     /// Which API the backend speaks.
     ///
     /// `auto` reads it off the URL, which is right for every case anyone actually has:
@@ -594,21 +597,36 @@ fn is_readable_by_others(_path: &Path) -> bool {
 
 /// Later files override earlier ones, field by field.
 pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
+    // A later file that names a provider names a different backend: nothing of the
+    // earlier one, its key least of all, carries over to it.
+    let backend = match over.backend.provider.is_some() {
+        true => over.backend.clone(),
+        false => BackendSection {
+            provider: base.backend.provider.clone(),
+            kind: over.backend.kind.or(base.backend.kind),
+            url: over.backend.url.clone().or(base.backend.url.clone()),
+            api_key: over
+                .backend
+                .api_key
+                .clone()
+                .or(base.backend.api_key.clone()),
+            api_key_env: over
+                .backend
+                .api_key_env
+                .clone()
+                .or(base.backend.api_key_env.clone()),
+            headers: {
+                let mut h = base.backend.headers.clone();
+                h.extend(over.backend.headers.clone());
+                h
+            },
+        },
+    };
     FileConfig {
         model: over.model.or(base.model),
         mode: over.mode.or(base.mode),
         tool_protocol: over.tool_protocol.or(base.tool_protocol),
-        backend: BackendSection {
-            kind: over.backend.kind.or(base.backend.kind),
-            url: over.backend.url.or(base.backend.url),
-            api_key: over.backend.api_key.or(base.backend.api_key),
-            api_key_env: over.backend.api_key_env.or(base.backend.api_key_env),
-            headers: {
-                let mut h = base.backend.headers;
-                h.extend(over.backend.headers);
-                h
-            },
-        },
+        backend,
         backends: {
             let mut b = base.backends;
             b.extend(over.backends);
@@ -907,10 +925,31 @@ pub struct NamedBackend {
 
 /// The backends of `[backends]`. A key comes from the variable `api-key-env` names, or from
 /// `api-key` in a file only the user can read. Says what it could not settle.
+/// `b` with what its provider gives filled in where nothing is written.
+pub fn with_preset(b: &BackendSection) -> Result<BackendSection, String> {
+    let mut b = b.clone();
+    if let Some(name) = &b.provider {
+        let preset = crate::backend::presets::named(name)?;
+        b.url.get_or_insert_with(|| preset.url.to_string());
+        b.kind.get_or_insert(preset.kind);
+        if b.api_key_env.is_none() && b.api_key.is_none() {
+            b.api_key_env = preset.key_env.map(str::to_string);
+        }
+    }
+    Ok(b)
+}
+
 pub fn resolve_backends(cfg: &FileConfig) -> (BTreeMap<String, NamedBackend>, Vec<String>) {
     let mut out = BTreeMap::new();
     let mut warnings = Vec::new();
     for (name, b) in &cfg.backends {
+        let b = match with_preset(b) {
+            Ok(b) => b,
+            Err(why) => {
+                warnings.push(format!("the backend {name}: {why}"));
+                continue;
+            }
+        };
         let Some(url) = b.url.clone() else {
             warnings.push(format!("the backend {name} has no url"));
             continue;
@@ -1107,6 +1146,50 @@ pub fn resolve_allow_hosts(cfg: &FileConfig, cli: Vec<String>) -> HashSet<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A provider fills in what is not written, and a later file naming one replaces the
+    /// earlier backend, its key included.
+    #[test]
+    fn a_provider_names_a_whole_backend() {
+        let b = BackendSection {
+            provider: Some("groq".into()),
+            ..Default::default()
+        };
+        let filled = with_preset(&b).unwrap();
+        assert_eq!(
+            filled.url.as_deref(),
+            Some("https://api.groq.com/openai/v1")
+        );
+        assert_eq!(filled.api_key_env.as_deref(), Some("GROQ_API_KEY"));
+        let written = with_preset(&BackendSection {
+            url: Some("http://proxy/v1".into()),
+            ..b.clone()
+        })
+        .unwrap();
+        assert_eq!(written.url.as_deref(), Some("http://proxy/v1"));
+        assert!(with_preset(&BackendSection {
+            provider: Some("nowhere".into()),
+            ..Default::default()
+        })
+        .is_err());
+
+        let user = FileConfig {
+            backend: BackendSection {
+                url: Some("http://127.0.0.1:11435".into()),
+                api_key: Some("loken-key".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let project = FileConfig {
+            backend: b,
+            ..Default::default()
+        };
+        let merged = merge(user, project).backend;
+        assert_eq!(merged.provider.as_deref(), Some("groq"));
+        assert_eq!(merged.url, None);
+        assert_eq!(merged.api_key, None);
+    }
     use tempfile::tempdir;
 
     fn parse(text: &str) -> FileConfig {

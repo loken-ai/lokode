@@ -122,7 +122,7 @@ impl BackendClient {
         if known {
             return;
         }
-        let url = format!("{}/v1/models", self.base.trim_end_matches('/'));
+        let url = crate::backend::presets::endpoint(&self.base, "models");
         let Ok(resp) = self.http.get(&url).send().await else {
             return;
         };
@@ -145,7 +145,7 @@ impl BackendClient {
     }
 
     fn url(&self) -> String {
-        format!("{}/v1/chat/completions", self.base.trim_end_matches('/'))
+        crate::backend::presets::endpoint(&self.base, "chat/completions")
     }
 
     /// Non-streaming chat completion: returns the assistant content as
@@ -558,7 +558,7 @@ impl crate::backend::provider::Provider for BackendClient {
     }
 
     async fn models(&self) -> Result<Vec<String>> {
-        let url = format!("{}/v1/models", self.base.trim_end_matches('/'));
+        let url = crate::backend::presets::endpoint(&self.base, "models");
         let resp = self
             .http
             .get(&url)

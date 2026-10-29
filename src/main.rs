@@ -51,6 +51,11 @@ struct Cli {
     #[arg(short = 'u', long)]
     backend_url: Option<String>,
 
+    /// A provider lokode knows by name, in place of the configuration's [backend]:
+    /// openai, anthropic, openrouter, gemini, mistral, groq, ollama and others.
+    #[arg(long)]
+    provider: Option<String>,
+
     /// Extra header sent with every backend request, as `name=value`. Repeatable.
     #[arg(long = "header", value_name = "NAME=VALUE")]
     headers: Vec<String>,
@@ -289,6 +294,17 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
     if project.exists() {
         sources.push(project.display().to_string());
     }
+
+    // A provider named on the command line takes the place of the configured backend, so
+    // nothing written for another provider, its key included, is sent to this one.
+    let mut file = file;
+    if let Some(provider) = &cli.provider {
+        file.backend = config::BackendSection {
+            provider: Some(provider.clone()),
+            ..Default::default()
+        };
+    }
+    file.backend = config::with_preset(&file.backend).map_err(anyhow::Error::msg)?;
 
     let backend_url = cli
         .backend_url

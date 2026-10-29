@@ -2,6 +2,7 @@ pub mod anthropic;
 pub mod client;
 pub mod devices;
 pub mod meter;
+pub mod presets;
 pub mod probe;
 pub mod provider;
 pub mod reasoning;

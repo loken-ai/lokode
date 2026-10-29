@@ -948,6 +948,38 @@ energy. The call of a write carries `check`: `passed`, `failed` or `not-checked`
 | `1` | something failed: a backend error, or the step limit |
 | `2` | a tool was refused by the policy |
 
+## Which provider
+
+A provider lokode knows is named rather than written out, with `--provider` or with
+`provider = "openrouter"` in `[backend]` or in a `[backends]` entry. It gives the url, the API
+and the variable the key is read from. A `url`, `kind` or `api-key-env` written beside it wins.
+
+| Provider | Url | Key from |
+|---|---|---|
+| `anthropic` | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` |
+| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| `openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `GEMINI_API_KEY` |
+| `mistral` | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
+| `groq` | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
+| `deepseek` | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` |
+| `xai` | `https://api.x.ai/v1` | `XAI_API_KEY` |
+| `together` | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` |
+| `fireworks` | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` |
+| `cerebras` | `https://api.cerebras.ai/v1` | `CEREBRAS_API_KEY` |
+| `deepinfra` | `https://api.deepinfra.com/v1/openai` | `DEEPINFRA_API_KEY` |
+| `loken` | `http://127.0.0.1:11435` | none |
+| `ollama` | `http://127.0.0.1:11434/v1` | none |
+| `lmstudio` | `http://127.0.0.1:1234/v1` | none |
+| `llamacpp` | `http://127.0.0.1:8080/v1` | none |
+| `vllm` | `http://127.0.0.1:8000/v1` | none |
+
+- `--provider` takes the place of the configured `[backend]`, so no key written for another
+  backend is sent to this one. A later file that names a provider does the same.
+- Any other OpenAI-compatible server is reached by its url. A url ending in `/v1` or `/openai`
+  is the API's root, and a bare host gets `/v1`.
+- `/model` lists what the provider serves.
+
 ## Which API
 
 `kind = "auto"` reads it from the URL: `api.anthropic.com` is the Messages API, and anything
@@ -983,7 +1015,7 @@ model = "qwen3-coder:latest"
 tool-protocol = "auto"          # auto | native | envelope
 
 [backend]
-url = "http://127.0.0.1:11435"
+url = "http://127.0.0.1:11435"  # or provider = "openrouter", see Which provider
 kind = "auto"                   # auto | openai | anthropic
 api-key-env = "MY_BACKEND_KEY"  # name a variable; do not write the key here
 headers = { "X-Team" = "lokode" }
