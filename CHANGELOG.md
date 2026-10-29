@@ -30,6 +30,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Approvals: keep agreements across sessions and write without asking with --accept-edits.
 - Shell: run commands in a sandbox by default, and let the model ask to leave it.
 - Agents: hand work to named agents with their own tools, in the background in a worktree.
+- Plans: put the finished plan to the user, and keep the task list when a session resumes.
 
 ### Changed
 

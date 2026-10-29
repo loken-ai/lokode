@@ -320,8 +320,18 @@ Commands of your own run side by side, each under its step, with their output as
 ## Planning before acting
 
 `/plan` refuses every tool that writes, runs a command or reaches the network, before it runs,
-and tells the model so. The model reads, searches and ends with numbered steps. `/act` leaves
-the mode.
+and tells the model so. The model reads, searches and puts its plan to you with `submit_plan`:
+a summary and numbered steps, asked like a change.
+
+| Key | What happens |
+|---|---|
+| `y` | planning ends, the steps become the task list, and the turn carries on acting |
+| `e` | the plan is refused with what to change, and the model plans again |
+| `n` | the plan is refused, and the session keeps planning |
+
+`/act` leaves the mode without a plan. A rule `tools = ["submit_plan"]` under
+`[approve.allow]` acts on every plan without asking. A run without a terminal acts on it only
+with `--approve all`.
 
 | Mode | Shift-Tab | Flag | `mode =` |
 |---|---|---|---|

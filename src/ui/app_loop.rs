@@ -623,7 +623,7 @@ async fn run_ui(
                     AgentEvent::ToolResult { id, name, output, took, origin } => {
                         // The list is the model's, so it is read back after the call that
                         // may have changed it rather than kept in step by hand.
-                        if name == "update_plan" {
+                        if name == "update_plan" || name == "submit_plan" {
                             state.tasks = tasks.get().await;
                         }
                         state.settle_step(
@@ -665,6 +665,11 @@ async fn run_ui(
                         }
                     }
                     AgentEvent::Models(models) => state.models = models,
+                    AgentEvent::Mode(mode) => {
+                        state.planning = mode == crate::agent::agent_loop::Mode::Plan;
+                        state.accepting_writes = false;
+                        session_approvals.accept_writes(false);
+                    }
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
                     AgentEvent::Receipt(r) => {
                         if !state.focused {

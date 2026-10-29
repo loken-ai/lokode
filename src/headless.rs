@@ -266,7 +266,8 @@ pub async fn run(
             AgentEvent::Window(_)
             | AgentEvent::Rate(_)
             | AgentEvent::Background(_)
-            | AgentEvent::Models(_) => {}
+            | AgentEvent::Models(_)
+            | AgentEvent::Mode(_) => {}
             AgentEvent::Protocol(protocol) => {
                 report
                     .notices

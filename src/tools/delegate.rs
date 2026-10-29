@@ -53,8 +53,9 @@ pub struct Delegation {
     pub lsp: Option<Arc<crate::lsp::LspPool>>,
 }
 
-/// The tools a delegated session never has: the caller's task list, and the delegation.
-const NEVER: &[&str] = &["update_plan", "delegate"];
+/// The tools a delegated session never has: the caller's task list and plan, and the
+/// delegation.
+pub const NEVER: &[&str] = &["update_plan", "submit_plan", "delegate"];
 
 /// The steps of an agent that changes nothing and names no limit.
 const READING_STEPS: usize = 8;

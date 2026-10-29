@@ -363,15 +363,17 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let registry = Arc::new(registry);
 
     let digest = Arc::new(tokio::sync::Mutex::new(digest));
-    // Its own client, whose requests say they should yield, and the same tools as the
-    // session: a background turn that could not read the project could not find anything
-    // out about it. It plans rather than acts, so none of them can change anything.
+    // Its own client, whose requests say they should yield, and the tools that read: a
+    // background turn that could not read the project could not find anything out about
+    // it. None of them changes anything or asks the user anything.
     let discovery = cfg
         .discover
         .then(|| -> Result<Arc<crate::agent::background::Discovery>> {
             Ok(Arc::new(crate::agent::background::Discovery {
                 backend: background_provider(cfg)?,
-                registry: registry_for_delegation.clone(),
+                registry: Arc::new(
+                    registry_for_delegation.read_only(crate::tools::delegate::NEVER),
+                ),
                 ctx: ctx.clone(),
                 model: cfg
                     .roles
@@ -577,6 +579,9 @@ pub fn build_registry_with(
     reg.register(EditFile);
     reg.register(EditLines);
     reg.register(crate::tools::plan::UpdatePlan {
+        tasks: tasks.clone(),
+    });
+    reg.register(crate::tools::plan::SubmitPlan {
         tasks: tasks.clone(),
     });
     reg.register(ApplyPatch);

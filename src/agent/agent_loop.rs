@@ -215,6 +215,8 @@ pub enum AgentEvent {
     Background(Option<(String, CancellationToken)>),
     /// What the backend serves, for completing the name of one that is being typed.
     Models(Vec<String>),
+    /// The session changed mode by itself, as when a plan is approved.
+    Mode(Mode),
     TurnDone,
 }
 
@@ -926,8 +928,9 @@ impl Agent {
             prompt.push_str(
                 "\n\nYou are PLANNING. Read, search and ask, but do not change anything: \
                  every tool that writes, runs a command or reaches the network is refused \
-                 while planning. Finish by stating the plan as numbered steps, each naming \
-                 what you would run or change.",
+                 while planning. Finish by calling submit_plan with the plan, its steps each \
+                 naming what you would run or change. The user approves it before anything \
+                 changes.",
             );
         }
         // Last, and named as the project's own: a model that has read the contract first
@@ -2171,6 +2174,16 @@ impl Agent {
                             .registry
                             .get(&call.name)
                             .is_some_and(|t| t.may_change());
+                    // An approved plan ends planning, and the turn carries on acting on it.
+                    if call.name == "submit_plan"
+                        && !result.is_error
+                        && self.cfg.mode == Mode::Plan
+                        && result.content.starts_with(crate::tools::plan::APPROVED)
+                    {
+                        let said = self.set_mode(Mode::Act);
+                        let _ = events.send(AgentEvent::Mode(Mode::Act)).await;
+                        let _ = events.send(AgentEvent::Notice(said)).await;
+                    }
                     if handed_on {
                         for path in changed_paths(&result.content) {
                             self.this_turn.touched(&path);
@@ -3677,6 +3690,44 @@ mod tests {
         assert_eq!(agent.agent_named("look at @explore"), None);
         h.write("explore", "a file");
         assert_eq!(agent.agent_named("@explore where is main"), None);
+    }
+
+    /// A plan approved ends planning: the steps become the task list and the turn goes on
+    /// to change things. A plan refused leaves the session planning.
+    #[tokio::test]
+    async fn an_approved_plan_is_acted_on_and_a_refused_one_is_not() {
+        for approve in [true, false] {
+            let h = Harness::new(if approve { Answer::Yes } else { Answer::No });
+            let backend = fake_backend(vec![
+                sse(&[
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"submit_plan","arguments":"{\"summary\": \"make b\", \"steps\": [\"write b.txt\"]}"}}]}}]}"#,
+                    r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+                ]),
+                sse(&[
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c2","function":{"name":"write_file","arguments":"{\"path\": \"b.txt\", \"content\": \"x\"}"}}]}}]}"#,
+                    r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+                ]),
+                sse(&[
+                    r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                    r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+                ]),
+            ])
+            .await;
+            let tasks = Arc::new(crate::tools::plan::TaskList::default());
+            let reg = crate::boot::build_registry_with(
+                h.root.clone(),
+                tasks.clone(),
+                crate::lsp::Languages::default(),
+            )
+            .0
+             .0;
+            let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+            agent.set_mode(Mode::Plan);
+            drive(&mut agent, "make b").await;
+            assert_eq!(h.path("b.txt").exists(), approve, "approve: {approve}");
+            assert_eq!(agent.cfg.mode == Mode::Act, approve);
+            assert_eq!(tasks.get().await.len(), usize::from(approve));
+        }
     }
 
     /// A delegated session that runs out of steps says so, rather than handing back what

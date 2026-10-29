@@ -131,6 +131,110 @@ impl Tool for UpdatePlan {
     }
 }
 
+/// Put the plan to the user at the end of planning. Approved, it becomes the task list and
+/// the session acts on it.
+pub struct SubmitPlan {
+    pub tasks: Arc<TaskList>,
+}
+
+#[derive(Deserialize)]
+struct Plan {
+    /// What the plan does, in a few lines.
+    summary: String,
+    steps: Vec<String>,
+}
+
+/// What the model is told when its plan is approved, before the plan itself.
+pub const APPROVED: &str = "The user approved the plan.";
+
+#[async_trait]
+impl Tool for SubmitPlan {
+    fn name(&self) -> &str {
+        "submit_plan"
+    }
+
+    /// It asks the user and changes nothing, so it can be called while planning.
+    fn mutates(&self) -> bool {
+        false
+    }
+
+    fn description(&self) -> &str {
+        "While planning, put the finished plan to the user: a short summary and the steps, \
+         each naming what it would run or change. Approved, planning ends, the steps become \
+         the task list and the work is carried out. Refused, the user says what to change."
+    }
+
+    fn args_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+                "steps": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+            },
+            "required": ["summary", "steps"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
+        use crate::sandbox::approval::{Approval, ApprovalRequest, ApprovalScope};
+        let p: Plan = serde_json::from_value(args)?;
+        if !ctx.planning {
+            return Ok(ToolOutput::err(
+                "the session is not planning: carry the work out, and keep the task list with \
+                 update_plan",
+            ));
+        }
+        if p.steps.len() > 12 {
+            return Ok(ToolOutput::err(
+                "keep the plan to twelve steps or fewer; group the rest".to_string(),
+            ));
+        }
+        let shown = format!(
+            "{}\n\n{}",
+            p.summary.trim(),
+            p.steps
+                .iter()
+                .enumerate()
+                .map(|(i, s)| format!("{}. {}", i + 1, s.trim()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        match ctx
+            .approve(ApprovalRequest {
+                tool: self.name().into(),
+                summary: "act on this plan".into(),
+                diff_preview: Some(shown.clone()),
+                scope: ApprovalScope::Tool(self.name().into()),
+            })
+            .await
+        {
+            Approval::Proceed => {}
+            Approval::Denied(why) => {
+                return Ok(ToolOutput::err(format!(
+                    "{}. Keep planning, and submit the plan again once it is changed.",
+                    crate::sandbox::approval::denial(why)
+                )))
+            }
+            Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
+        }
+        let tasks: Vec<Task> = p
+            .steps
+            .into_iter()
+            .map(|what| Task {
+                what,
+                state: State::Todo,
+            })
+            .collect();
+        let list = TaskList::render(&tasks);
+        self.tasks.set(tasks).await;
+        Ok(ToolOutput::ok(format!(
+            "{APPROVED} Planning is over: carry it out now, step by step, and keep the task \
+             list with update_plan.\n{list}"
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
