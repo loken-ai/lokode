@@ -50,6 +50,11 @@ struct Entry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     Git(String),
+    /// A directory of a git repository, which is cloned for it.
+    Subdir {
+        url: String,
+        path: String,
+    },
     /// A directory of the marketplace's own clone.
     Dir(PathBuf),
 }
@@ -85,6 +90,9 @@ fn is_url(source: &str) -> bool {
 
 /// The marketplace cloned in `dir`, named `name`.
 fn read(dir: &Path, name: &str) -> Result<Market> {
+    if !dir.join(FILE).is_file() && listing_json(dir).is_file() {
+        return read_json(dir, name);
+    }
     let text = std::fs::read_to_string(dir.join(FILE))
         .map_err(|_| anyhow!("{name} has no {FILE}, so it is not a lokode marketplace"))?;
     let file: MarketFile = toml::from_str(&text).map_err(|e| anyhow!("{name}: {e}"))?;
@@ -123,6 +131,54 @@ fn read(dir: &Path, name: &str) -> Result<Market> {
     })
 }
 
+/// The file Claude Code's marketplaces list their plugins in.
+fn listing_json(dir: &Path) -> PathBuf {
+    dir.join(crate::claude::DIR).join("marketplace.json")
+}
+
+/// A marketplace written as Claude Code writes them.
+fn read_json(dir: &Path, name: &str) -> Result<Market> {
+    let text = std::fs::read_to_string(listing_json(dir))?;
+    let (description, plugins) =
+        crate::claude::marketplace_from(&text).map_err(|e| anyhow!("{name}: {e}"))?;
+    let root = dir.canonicalize()?;
+    let mut listings = Vec::new();
+    for listed in plugins {
+        let (plugin, about, version) = (listed.name, listed.description, listed.version);
+        if !crate::frontmatter::is_name(&plugin) {
+            continue;
+        }
+        let source = match listed.source {
+            Ok(Source::Dir(path)) => {
+                // A directory of the marketplace and nowhere else.
+                let at = root
+                    .join(&path)
+                    .canonicalize()
+                    .with_context(|| format!("{name}/{plugin}: {} is not there", path.display()))?;
+                if !at.starts_with(&root) {
+                    bail!("{name}/{plugin}: {} leaves the marketplace", path.display());
+                }
+                Source::Dir(at)
+            }
+            Ok(other) => other,
+            // Listed by a kind of source lokode does not read: left out of what can be installed.
+            Err(_) => continue,
+        };
+        listings.push(Listing {
+            name: plugin,
+            description: about,
+            version,
+            source,
+            market: name.to_string(),
+        });
+    }
+    Ok(Market {
+        name: name.to_string(),
+        description,
+        listings,
+    })
+}
+
 /// Every marketplace added under `home`, and what could not be read.
 pub fn load(home: &Path) -> (Vec<Market>, Vec<String>) {
     let mut out = Vec::new();
@@ -133,7 +189,7 @@ pub fn load(home: &Path) -> (Vec<Market>, Vec<String>) {
     let mut dirs: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.join(FILE).is_file())
+        .filter(|p| p.is_dir() && (p.join(FILE).is_file() || listing_json(p).is_file()))
         .collect();
     dirs.sort();
     for dir in dirs {

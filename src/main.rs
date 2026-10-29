@@ -573,6 +573,14 @@ fn plugin_command(action: PluginAction) -> Result<()> {
                         marketplace::Source::Dir(dir) => {
                             plugins::install_dir(&home, dir, &listing.market, &name, agree)?
                         }
+                        marketplace::Source::Subdir { url, path } => plugins::install_subdir(
+                            &home,
+                            url,
+                            path,
+                            &listing.market,
+                            &name,
+                            agree,
+                        )?,
                     }
                 }
             };

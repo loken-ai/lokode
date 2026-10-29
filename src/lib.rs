@@ -42,6 +42,7 @@ pub mod app;
 pub mod backend;
 pub mod boot;
 pub mod checkpoint;
+pub mod claude;
 pub mod commands;
 pub mod config;
 pub mod frontmatter;

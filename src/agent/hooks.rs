@@ -140,6 +140,8 @@ pub async fn run(hook: &Hook, event: Event, root: &Path, tool: &str, input: &Val
         .env("LOKODE_HOOK", when)
         .env("LOKODE_TOOL", tool)
         .env("LOKODE_ROOT", root)
+        // What the hooks of other tools' plugins name the project by.
+        .env("CLAUDE_PROJECT_DIR", root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -202,8 +204,20 @@ pub async fn run(hook: &Hook, event: Event, root: &Path, tool: &str, input: &Val
                 .flatten()
                 .filter(|t| !t.trim().is_empty())
                 .collect();
+            // A refusal as other tools' hooks write it, beside lokode's.
+            let denied = d
+                .pointer("/hookSpecificOutput/permissionDecision")
+                .and_then(|v| v.as_str())
+                == Some("deny");
+            let said: Vec<String> = match d
+                .pointer("/hookSpecificOutput/permissionDecisionReason")
+                .and_then(|v| v.as_str())
+            {
+                Some(why) if denied => vec![why.to_string()],
+                _ => said,
+            };
             Ran {
-                blocked: text("decision").as_deref() == Some("block"),
+                blocked: denied || text("decision").as_deref() == Some("block"),
                 failed: false,
                 output: said.join("\n"),
                 args: d.get("args").filter(|a| a.is_object()).cloned(),

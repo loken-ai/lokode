@@ -65,6 +65,7 @@ pub fn load(dirs: &[PathBuf]) -> (Vec<Command>, Vec<String>) {
         for (name, path) in files(dir) {
             let read = std::fs::read_to_string(&path)
                 .map_err(|e| e.to_string())
+                .map(|text| crate::claude::in_plugin(&text, dir))
                 .and_then(|text| parse(&name, &text, &path.display().to_string()));
             match read {
                 Ok(c) => {
@@ -123,6 +124,9 @@ pub fn parse(name: &str, text: &str, from: &str) -> Result<Command, String> {
             "description" => command.description = value,
             "argument-hint" => command.argument_hint = Some(value).filter(|v| !v.is_empty()),
             "agent" => command.agent = Some(value).filter(|v| !v.is_empty()),
+            // Written by other tools' commands, and harmless here.
+            "allowed-tools" | "model" | "disable-model-invocation" | "hooks" | "name" | "color" => {
+            }
             other => return Err(format!("it has a setting {other:?} lokode does not know")),
         }
     }

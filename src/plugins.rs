@@ -128,7 +128,7 @@ pub fn load_from(home: &Path, disabled: &[String]) -> (Vec<Plugin>, Vec<String>)
     let mut dirs: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.join("plugin.toml").is_file())
+        .filter(|p| p.join("plugin.toml").is_file() || crate::claude::is_plugin(p))
         .collect();
     dirs.sort();
     for dir in dirs {
@@ -143,16 +143,16 @@ pub fn load_from(home: &Path, disabled: &[String]) -> (Vec<Plugin>, Vec<String>)
             ));
             continue;
         }
-        let read = std::fs::read_to_string(dir.join("plugin.toml"))
-            .map_err(|e| e.to_string())
-            .and_then(|t| toml::from_str::<PluginFile>(&t).map_err(|e| e.to_string()));
-        match read {
-            Ok(file) => out.push(Plugin {
-                disabled: disabled.contains(&name),
-                name,
-                dir,
-                file,
-            }),
+        match file_of(&dir) {
+            Ok((file, notes)) => {
+                warnings.extend(notes.into_iter().map(|n| format!("the plugin {name}: {n}")));
+                out.push(Plugin {
+                    disabled: disabled.contains(&name),
+                    name,
+                    dir,
+                    file,
+                })
+            }
             Err(why) => warnings.push(format!("the plugin {name}: {why}")),
         }
     }
@@ -236,11 +236,34 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// What the plugin in `dir` brings, from its `plugin.toml` or, when it has none, from the
+/// layout Claude Code's plugins have. Says what it leaves out of the second.
+fn file_of(dir: &Path) -> std::result::Result<(PluginFile, Vec<String>), String> {
+    if dir.join("plugin.toml").is_file() {
+        let text = std::fs::read_to_string(dir.join("plugin.toml")).map_err(|e| e.to_string())?;
+        let file = toml::from_str::<PluginFile>(&text).map_err(|e| e.to_string())?;
+        return Ok((file, Vec::new()));
+    }
+    if !crate::claude::is_plugin(dir) {
+        return Err("it has no plugin.toml and holds nothing lokode reads".into());
+    }
+    let read = crate::claude::read_plugin(dir)?;
+    Ok((
+        PluginFile {
+            description: read.description,
+            version: read.version,
+            hooks: read.hooks,
+            mcp: crate::config::McpSection {
+                servers: read.servers,
+            },
+        },
+        read.warnings,
+    ))
+}
+
 /// Read the plugin in `dir`, named `name`.
 fn read_plugin(dir: &Path, name: &str) -> Result<Plugin> {
-    let text = std::fs::read_to_string(dir.join("plugin.toml"))
-        .map_err(|_| anyhow!("{name} has no plugin.toml, so it is not a lokode plugin"))?;
-    let file = toml::from_str::<PluginFile>(&text).map_err(|e| anyhow!("{name}: {e}"))?;
+    let (file, _) = file_of(dir).map_err(|e| anyhow!("{name}: {e}"))?;
     Ok(Plugin {
         name: name.to_string(),
         dir: dir.to_path_buf(),
@@ -268,6 +291,50 @@ pub fn install(
 
 /// The file a plugin copied from a marketplace keeps its marketplace in.
 pub const FROM_MARKET: &str = ".marketplace";
+
+/// Install the plugin kept in the directory `path` of the git repository at `url`, under
+/// `home`, named `name`. It keeps the name of `market`.
+pub fn install_subdir(
+    home: &Path,
+    url: &str,
+    path: &str,
+    market: &str,
+    name: &str,
+    agree: impl FnOnce(&Plugin) -> bool,
+) -> Result<Option<Plugin>> {
+    if path.split('/').any(|p| p == "..") || path.starts_with('/') {
+        bail!("{path} leaves the repository");
+    }
+    land(home, name, agree, |fetching| {
+        let source = fetching.join(format!("{name}-source"));
+        let _ = std::fs::remove_dir_all(&source);
+        let cloned = git(
+            fetching,
+            &[
+                "clone",
+                "--quiet",
+                "--depth",
+                "1",
+                "--",
+                url,
+                &format!("{name}-source"),
+            ],
+        );
+        let copied = cloned.and_then(|_| {
+            let inside = source.join(path);
+            // Inside the clone, after links are resolved.
+            let real = inside.canonicalize()?;
+            if !real.starts_with(source.canonicalize()?) {
+                bail!("{path} leaves the repository");
+            }
+            copy_tree(&real, &fetching.join(name))?;
+            std::fs::write(fetching.join(name).join(FROM_MARKET), market)?;
+            Ok(())
+        });
+        let _ = std::fs::remove_dir_all(&source);
+        copied
+    })
+}
 
 /// Install the plugin in the marketplace directory `dir` under `home`, named `name`, as
 /// `install` does from git. It keeps the name of `market`, to be updated from it.
@@ -427,10 +494,28 @@ pub fn update(home: &Path, name: &str, agree: impl FnOnce(&Plugin) -> bool) -> R
     if head == fetched {
         return Ok(format!("{name} is up to date"));
     }
-    let text = git(&dir, &["show", "FETCH_HEAD:plugin.toml"])?;
-    let file = toml::from_str::<PluginFile>(&text).map_err(|e| anyhow!("{name}: {e}"))?;
+    // What the update would be, unpacked beside the plugin to read what it runs.
+    let unpacked = home.join(FETCHING).join(format!("{name}-update"));
+    let _ = std::fs::remove_dir_all(&unpacked);
+    std::fs::create_dir_all(&unpacked)?;
+    let archived = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("git archive FETCH_HEAD | tar -x -C \"$1\"")
+        .arg("sh")
+        .arg(&unpacked)
+        .current_dir(&dir)
+        .output()?;
+    let read = match archived.status.success() {
+        true => file_of(&unpacked).map_err(|e| anyhow!("{name}: {e}")),
+        false => Err(anyhow!(
+            "{name}: could not read what the update holds: {}",
+            String::from_utf8_lossy(&archived.stderr).trim()
+        )),
+    };
+    let _ = std::fs::remove_dir_all(&unpacked);
+    let _ = std::fs::remove_dir(home.join(FETCHING));
     let after = Plugin {
-        file,
+        file: read?.0,
         ..before.clone()
     };
     if after.file.runs() != before.file.runs() && !agree(&after) {

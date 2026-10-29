@@ -875,6 +875,29 @@ source = "plugins/fmt"                                    # or a directory of th
 `lokode plugin update` brings a plugin copied from a marketplace up to it, after updating the
 marketplace.
 
+### Plugins from other tools
+
+A plugin written for Claude Code installs and loads as it is, from git or from a marketplace
+that lists it in `.claude-plugin/marketplace.json`. lokode reads what it has a place for.
+
+| In the plugin | In lokode |
+|---|---|
+| `skills/`, `commands/`, `agents/` | Loaded. Settings lokode does not use are ignored |
+| `hooks/hooks.json`, the manifest's `hooks` | `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SubagentStop` and `PreCompact` |
+| `.mcp.json`, the manifest's `mcpServers` | Tool servers, over a command or HTTP |
+| `${CLAUDE_PLUGIN_ROOT}` | The plugin's directory, in commands, agents, skills, hooks and servers |
+| A marketplace source | A path, `github`, `url` or `git-subdir`. Other kinds are not listed |
+
+- A hook's matcher names tools as Claude Code does, `Write`, `Edit`, `Bash`, `Read`, `Grep`,
+  `Glob`, `WebFetch`, `Task` and `mcp__server__tool`, and lokode matches its own tools by them.
+- A hook is given `hook_event_name`, `tool_name`, `tool_input`, `tool_response` and `cwd` beside
+  lokode's own fields, and finds the project in `CLAUDE_PROJECT_DIR`. Exit code 2 blocks, and so
+  does `permissionDecision` `deny`.
+- An agent's `tools` and a hook's `matcher` are translated. Its `model`, when it is `sonnet`,
+  `opus`, `haiku` or `inherit`, is ignored, so the agent runs on the models you configured.
+- What lokode has no place for is said when the plugin is listed: a hook event it does not
+  have, a hook that is not a command, a server with neither command nor url.
+
 ## Tools from elsewhere
 
 A Model Context Protocol server you configure adds its tools, named `<server>__<tool>`.

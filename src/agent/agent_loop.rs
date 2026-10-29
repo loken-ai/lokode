@@ -2842,6 +2842,13 @@ impl Agent {
             "root": self.ctx.root,
         });
         if let (Some(input), Some(facts)) = (input.as_object_mut(), facts.as_object()) {
+            // The fields other tools' hooks read, beside lokode's own.
+            if let Some(extra) =
+                crate::claude::hook_fields(event.label(), &facts.clone().into()).as_object()
+            {
+                input.extend(extra.clone());
+            }
+            input.insert("cwd".into(), serde_json::json!(self.ctx.root));
             input.extend(facts.clone());
         }
         input

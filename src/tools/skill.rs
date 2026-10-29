@@ -81,13 +81,23 @@ pub fn load(dirs: &[PathBuf]) -> (Vec<Skill>, Vec<String>) {
 /// A skill's description and know-how.
 fn read(dir: &Path) -> Result<(String, String), String> {
     let text = std::fs::read_to_string(dir.join("SKILL.md")).map_err(|e| e.to_string())?;
+    // A skill of a plugin is at `<plugin>/skills/<name>`.
+    let text = crate::claude::in_plugin(&text, dir.parent().unwrap_or(dir));
     let (settings, body) = crate::frontmatter::split(&text)?;
     let mut description = String::new();
     for (key, value) in settings {
         match key.as_str() {
             "description" => description = value,
             // Written by other tools' skills, and harmless here.
-            "name" | "license" | "metadata" | "allowed-tools" => {}
+            "name"
+            | "license"
+            | "metadata"
+            | "allowed-tools"
+            | "model"
+            | "version"
+            | "disable-model-invocation"
+            | "user-invocable"
+            | "argument-hint" => {}
             other => return Err(format!("it has a setting {other:?} lokode does not know")),
         }
     }

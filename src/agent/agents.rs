@@ -96,6 +96,7 @@ pub fn load(dirs: &[PathBuf]) -> (Vec<AgentSpec>, Vec<String>) {
             }
             let parsed = std::fs::read_to_string(&path)
                 .map_err(|e| e.to_string())
+                .map(|text| crate::claude::in_plugin(&text, dir))
                 .and_then(|text| parse(&name, &text, &path.display().to_string()));
             match parsed {
                 Ok(spec) => {
@@ -125,24 +126,26 @@ pub fn parse(name: &str, text: &str, from: &str) -> Result<AgentSpec, String> {
     for (key, value) in settings {
         match key.as_str() {
             "description" => spec.description = value,
-            "tools" => {
-                spec.tools = Some(
-                    value
-                        .split(',')
-                        .map(|t| t.trim().to_string())
-                        .filter(|t| !t.is_empty())
-                        .collect(),
-                )
+            // Named as lokode names its tools or as other tools do.
+            "tools" => spec.tools = Some(crate::claude::tools_named(&value)),
+            // Another tool's name for its own models names nothing lokode can run.
+            "model" => {
+                spec.model = Some(value).filter(|v| {
+                    !v.is_empty()
+                        && !crate::claude::MODEL_ALIASES.contains(&v.to_lowercase().as_str())
+                })
             }
-            "model" => spec.model = Some(value).filter(|v| !v.is_empty()),
             "backend" => spec.backend = Some(value).filter(|v| !v.is_empty()),
-            "max-steps" => {
+            "max-steps" | "max-turns" | "maxTurns" => {
                 spec.max_steps = Some(
                     value
                         .parse()
                         .map_err(|_| format!("max-steps must be a number, got {value:?}"))?,
                 )
             }
+            // Written by other tools' agents, and harmless here.
+            "name" | "color" | "skills" | "permissionMode" | "isolation" | "memory" | "effort"
+            | "disallowedTools" | "hooks" | "mcpServers" => {}
             other => return Err(format!("it has a setting {other:?} lokode does not know")),
         }
     }
