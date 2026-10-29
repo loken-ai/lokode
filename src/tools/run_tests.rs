@@ -2,7 +2,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::process::Command;
 
 use crate::sandbox::approval::{Approval, ApprovalRequest, ApprovalScope};
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
@@ -64,36 +63,32 @@ impl Tool for RunTests {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        let mut cmd = Command::new(program);
+        // The suite runs the project's own code, so it runs in the same sandbox as the
+        // shell.
+        let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let (mut cmd, held) =
+            match crate::sandbox::confine::command(ctx.sandbox.as_deref(), program, &args) {
+                Ok(built) => built,
+                Err(e) => {
+                    return Ok(ToolOutput::err(format!(
+                        "the sandbox could not be applied, so the tests did not run: {e}"
+                    )))
+                }
+            };
         // A test suite is the longest thing this agent starts; abandoning the turn has to
         // take the suite with it rather than leave it running unattended.
         cmd.kill_on_drop(true);
-        cmd.args(&argv).current_dir(&ctx.root);
+        cmd.current_dir(&ctx.root);
         // The suite is the longest thing here and the line that names the failing test
         // arrives long before the end of it. Read as it comes, like the shell.
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
-        // The suite runs the project's own code, so it runs in the same sandbox as the
-        // shell.
-        let ruleset = match ctx
-            .sandbox
-            .as_ref()
-            .map(|s| s.confine(&mut cmd))
-            .transpose()
-        {
-            Ok(fd) => fd,
-            Err(e) => {
-                return Ok(ToolOutput::err(format!(
-                    "the sandbox could not be applied, so the tests did not run: {e}"
-                )))
-            }
-        };
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
         };
-        drop(ruleset);
+        drop(held);
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let collect = async {

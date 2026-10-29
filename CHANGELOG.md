@@ -36,6 +36,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Plugins: install, update and list plugins from git or a marketplace, including Claude Code's.
 - Hooks: run hooks at every edge of a session, and read their decision.
 - MCP: reach servers over HTTP, sign in, restart them, and let them ask the model or the user.
+- Sandbox: confine the commands on macOS with Seatbelt, as Landlock does on Linux.
 
 ### Changed
 

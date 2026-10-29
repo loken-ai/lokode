@@ -1021,7 +1021,8 @@ pub fn resolve_sandbox(
         }
     }
     let network = cfg.shell.network.unwrap_or(level != Level::ReadOnly);
-    if !network && crate::sandbox::confine::abi().is_some_and(|v| v < 4) {
+    if !network && crate::sandbox::confine::available() && !crate::sandbox::confine::cuts_network()
+    {
         warnings.push(
             "this kernel's Landlock cannot cut the network, so sandboxed commands keep it".into(),
         );

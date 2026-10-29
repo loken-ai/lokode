@@ -57,8 +57,13 @@ leaves the old contents or the new ones. A multi-file patch is applied wholly or
 
 ## What is not enforced
 
-**A command runs in a sandbox, on Linux.** `bash` and `run_tests` run their command under
-Landlock, which the command and everything it starts cannot undo.
+**A command runs in a sandbox, on Linux and macOS.** `bash` and `run_tests` run their command
+under a sandbox that the command and everything it starts cannot undo.
+
+| System | Mechanism |
+|---|---|
+| Linux | Landlock |
+| macOS | Seatbelt, through `/usr/bin/sandbox-exec` and a profile lokode writes |
 
 | `[shell] sandbox` | What a command may write | Network |
 |---|---|---|
@@ -67,8 +72,8 @@ Landlock, which the command and everything it starts cannot undo.
 | `off` | anything you may write | yes |
 
 - `[shell] network` changes the network of a sandboxed command. Without it, the command can
-  neither bind nor connect a TCP socket, on this machine included. UDP is not cut. The kernel
-  needs Landlock ABI 4.
+  neither bind nor connect a TCP socket, on this machine included. UDP is not cut on Linux,
+  where the kernel needs Landlock ABI 4. On macOS every IP socket is cut.
 
 - `LOKODE_API_KEY` and the variable named by `api-key-env` are taken out of the command's
   environment.
@@ -83,9 +88,9 @@ Landlock, which the command and everything it starts cannot undo.
 - A command that fails tells the model it ran in the sandbox. The model may then ask to run it
   outside, with `outside_sandbox`. That question always reaches you: no `allow` rule answers
   it, and a run without a terminal refuses it.
-- A sandbox asked for on a kernel without Landlock refuses the command rather than run it
-  unconfined. Without Landlock and with nothing asked, commands run unconfined and the session
-  says so.
+- A sandbox asked for on a system that cannot confine refuses the command rather than run it
+  unconfined. On such a system with nothing asked, commands run unconfined and the session says
+  so.
 
 **Outside the sandbox, a command is not confined.** It runs `/bin/sh -lc <string>` with your
 privileges and your environment. `-l` sources your login profile. Approving a command is
@@ -127,7 +132,7 @@ them.
 
 - Point `--root` at one project, not at your home directory.
 - Decline `[A]lways` for `bash` unless you know what the project's sessions are going to do.
-- On Linux, keep the sandbox on, and add the caches your builds need to `[shell] writable`.
+- Keep the sandbox on, and add the caches your builds need to `[shell] writable`.
 - Prefer a container or a VM for a repository you have not read.
 - Keep an API key in the environment rather than in a config file. If you do put one in a
   file, lokode refuses to use it unless the file is private to you.

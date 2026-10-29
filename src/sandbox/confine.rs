@@ -1,13 +1,61 @@
 //! Making the root a boundary for the commands the agent runs.
 //!
 //! The path sandbox governs the tools that take paths. A shell takes a string, and an
-//! approved command runs with the user's privileges. On Linux, Landlock lets a process give
-//! up access it will never need again, and a child cannot get it back. A confined command
-//! and everything it starts may write only beneath the directories its [`Sandbox`] names,
-//! and to the devices under `/dev`. It may read everything but what the sandbox hides, and
-//! open TCP connections only when the sandbox lets it.
+//! approved command runs with the user's privileges. A confined command and everything it
+//! starts may write only beneath the directories its [`Sandbox`] names, and to the devices
+//! under `/dev`. It may read everything but what the sandbox hides, and open TCP
+//! connections only when the sandbox lets it.
+//!
+//! | System | Mechanism |
+//! |---|---|
+//! | Linux | Landlock: the command gives up the access before it runs, for good |
+//! | macOS | Seatbelt: the command runs under `sandbox-exec` with a profile written here |
 
 use std::path::PathBuf;
+
+/// What has to be kept until a confined command has been spawned.
+pub type Held = Option<std::os::fd::OwnedFd>;
+
+/// What confines commands on this system, for saying so.
+pub const MECHANISM: &str = if cfg!(target_os = "macos") {
+    "Seatbelt"
+} else {
+    "Landlock"
+};
+
+/// Whether commands can be confined here.
+pub fn available() -> bool {
+    match cfg!(target_os = "macos") {
+        true => std::path::Path::new(seatbelt::SANDBOX_EXEC).exists(),
+        false => abi().is_some(),
+    }
+}
+
+/// Whether a sandbox here can keep a command off the network.
+pub fn cuts_network() -> bool {
+    match cfg!(target_os = "macos") {
+        true => available(),
+        false => abi().is_some_and(|v| v >= 4),
+    }
+}
+
+/// A command that runs `program` with `args`, in `sandbox` when there is one, and what
+/// must be kept until it has been spawned. A sandbox that cannot be applied is an error,
+/// never a command left unconfined.
+pub fn command(
+    sandbox: Option<&Sandbox>,
+    program: &str,
+    args: &[&str],
+) -> std::io::Result<(tokio::process::Command, Held)> {
+    match sandbox {
+        Some(s) => s.command(program, args),
+        None => {
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.args(args);
+            Ok((cmd, None))
+        }
+    }
+}
 
 /// How far the commands the agent runs are confined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, clap::ValueEnum)]
@@ -46,13 +94,30 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
-    /// Confine `cmd`: take out the variables it must not see, and have it give up what the
-    /// sandbox does not allow before it runs. The descriptor returned must outlive the
-    /// spawn.
-    pub fn confine(
+    /// A command that runs `program` with `args` in this sandbox, and what must be kept
+    /// until it has been spawned.
+    pub fn command(
         &self,
-        cmd: &mut tokio::process::Command,
-    ) -> std::io::Result<std::os::fd::OwnedFd> {
+        program: &str,
+        args: &[&str],
+    ) -> std::io::Result<(tokio::process::Command, Held)> {
+        if cfg!(target_os = "macos") {
+            let mut cmd = seatbelt::command(&seatbelt::profile(self), program, args);
+            for var in &self.unset {
+                cmd.env_remove(var);
+            }
+            return Ok((cmd, None));
+        }
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args);
+        let fd = self.confine(&mut cmd)?;
+        Ok((cmd, Some(fd)))
+    }
+
+    /// Confine `cmd` with Landlock: take out the variables it must not see, and have it
+    /// give up what the sandbox does not allow before it runs. The descriptor returned
+    /// must outlive the spawn.
+    fn confine(&self, cmd: &mut tokio::process::Command) -> std::io::Result<std::os::fd::OwnedFd> {
         for var in &self.unset {
             cmd.env_remove(var);
         }
@@ -82,6 +147,67 @@ impl Sandbox {
             "It ran in a sandbox: it {writes}{network}. If the sandbox is what stopped it, the \
              same call with outside_sandbox set asks the user to run it unconfined."
         )
+    }
+}
+
+/// The macOS sandbox: a profile in Seatbelt's language, and the command that runs under it.
+///
+/// Built on every system, so what it writes is tested wherever the tests run. The profile
+/// allows everything the Linux sandbox does not govern, then takes away what it does: writes
+/// outside the writable paths and the devices, reads of what is hidden, and TCP.
+mod seatbelt {
+    use std::path::{Path, PathBuf};
+
+    pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
+    /// The path as the system names it: `/tmp` is `/private/tmp` there, and a profile
+    /// matches the real path.
+    fn real(path: &Path) -> PathBuf {
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// A string of the profile's language.
+    fn quoted(path: &Path) -> String {
+        let text = path.to_string_lossy();
+        format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    /// What `path` is to a rule: everything beneath a directory, or one file.
+    fn filter(path: &Path) -> String {
+        let real = real(path);
+        match real.is_file() {
+            true => format!("(literal {})", quoted(&real)),
+            false => format!("(subpath {})", quoted(&real)),
+        }
+    }
+
+    /// The profile for `sandbox`. The last rule that matches decides.
+    pub fn profile(sandbox: &super::Sandbox) -> String {
+        let mut out = vec![
+            "(version 1)".to_string(),
+            "(allow default)".to_string(),
+            "(deny file-write*)".to_string(),
+        ];
+        for path in &sandbox.writable {
+            out.push(format!("(allow file-write* {})", filter(path)));
+        }
+        out.push("(allow file-write-data file-ioctl (subpath \"/dev\"))".to_string());
+        for path in &sandbox.hidden {
+            out.push(format!("(deny file-read* {})", filter(path)));
+        }
+        if !sandbox.network {
+            out.push("(deny network-outbound (remote ip))".to_string());
+            out.push("(deny network-bind (local ip))".to_string());
+            out.push("(deny network-inbound (local ip))".to_string());
+        }
+        out.join("\n")
+    }
+
+    /// `program` with `args`, run under `profile`.
+    pub fn command(profile: &str, program: &str, args: &[&str]) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new(SANDBOX_EXEC);
+        cmd.arg("-p").arg(profile).arg("--").arg(program).args(args);
+        cmd
     }
 }
 
@@ -349,7 +475,7 @@ mod elsewhere {
         _hidden: &[PathBuf],
         _network: bool,
     ) -> io::Result<OwnedFd> {
-        Err(io::Error::other("shell confinement needs Linux"))
+        Err(io::Error::other("shell confinement needs Linux or macOS"))
     }
 
     /// # Safety
@@ -365,6 +491,62 @@ pub use elsewhere::{abi, restrict_after_fork, ruleset};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The profile allows the writable paths and the devices, takes away what is hidden and,
+    /// without the network, TCP. A later rule wins, so what is hidden comes after.
+    #[test]
+    fn the_macos_profile_says_what_the_sandbox_allows() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap();
+        std::fs::write(dir.path().join("secret"), "x").unwrap();
+        let sandbox = Sandbox {
+            level: Level::Workspace,
+            writable: vec![dir.path().to_path_buf(), PathBuf::from("/no/such/dir")],
+            hidden: vec![
+                dir.path().join("secret"),
+                PathBuf::from("/a \"quoted\" dir"),
+            ],
+            network: false,
+            unset: Vec::new(),
+        };
+        let profile = seatbelt::profile(&sandbox);
+        let lines: Vec<&str> = profile.lines().collect();
+        assert_eq!(
+            lines[..3],
+            ["(version 1)", "(allow default)", "(deny file-write*)"]
+        );
+        let at = |needle: &str| {
+            lines
+                .iter()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} is not in\n{profile}"))
+        };
+        assert!(
+            at(&format!(
+                "(allow file-write* (subpath \"{}\"))",
+                real.display()
+            )) < at(&format!(
+                "(deny file-read* (literal \"{}/secret\"))",
+                real.display()
+            ))
+        );
+        at("(allow file-write* (subpath \"/no/such/dir\"))");
+        at(r#"(deny file-read* (subpath "/a \"quoted\" dir"))"#);
+        at("(deny network-outbound (remote ip))");
+        let open = seatbelt::profile(&Sandbox {
+            network: true,
+            ..sandbox
+        });
+        assert!(!open.contains("network"), "{open}");
+        let cmd = seatbelt::command(&profile, "/bin/sh", &["-lc", "ls"]);
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(cmd.as_std().get_program(), seatbelt::SANDBOX_EXEC);
+        assert_eq!(args, ["-p", profile.as_str(), "--", "/bin/sh", "-lc", "ls"]);
+    }
 
     /// Whether it is available is a fact about the machine, and the answer has to be a fact
     /// rather than a guess - the shell is confined or it is not.

@@ -5,7 +5,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::process::Command;
 
 use crate::sandbox::allowlist;
 use crate::sandbox::approval::{Approval, ApprovalRequest, ApprovalScope};
@@ -101,22 +100,25 @@ impl Tool for Bash {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        let mut cmd = Command::new("/bin/sh");
-        // Without this, abandoning the turn leaves the command running: the future is
-        // dropped, nobody is left to read its output, and a build carries on burning the
-        // machine the user just told us to stop using.
-        cmd.kill_on_drop(true);
-        cmd.arg("-lc").arg(&a.cmd).current_dir(&cwd);
         // Kept until the spawn is over. A sandbox that cannot be applied refuses the
         // command rather than run it unconfined.
-        let _ruleset = match sandbox.map(|s| s.confine(&mut cmd)).transpose() {
-            Ok(fd) => fd,
+        let (mut cmd, _held) = match crate::sandbox::confine::command(
+            sandbox.map(|s| s.as_ref()),
+            "/bin/sh",
+            &["-lc", &a.cmd],
+        ) {
+            Ok(built) => built,
             Err(e) => {
                 return Ok(ToolOutput::err(format!(
                     "the sandbox could not be applied, so the command did not run: {e}"
                 )))
             }
         };
+        // Without this, abandoning the turn leaves the command running: the future is
+        // dropped, nobody is left to read its output, and a build carries on burning the
+        // machine the user just told us to stop using.
+        cmd.kill_on_drop(true);
+        cmd.current_dir(&cwd);
 
         // Read as it comes rather than at the end: a build that says nothing for two
         // minutes cannot be told from one that has hung, and the line that says which
@@ -323,7 +325,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_confined_command_cannot_write_outside_the_project() {
-        if crate::sandbox::confine::abi().is_none() {
+        if !crate::sandbox::confine::available() {
             return;
         }
         let h = Harness::confined();
@@ -359,7 +361,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_command_outside_the_sandbox_is_asked_for_and_unconfined() {
-        if crate::sandbox::confine::abi().is_none() {
+        if !crate::sandbox::confine::available() {
             return;
         }
         let h = Harness::confined();
@@ -387,7 +389,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_confined_command_writes_to_devices_and_misses_the_key() {
-        if crate::sandbox::confine::abi().is_none() {
+        if !crate::sandbox::confine::available() {
             return;
         }
         std::env::set_var("LOKODE_TEST_SECRET", "hunter2");
@@ -441,7 +443,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_confined_command_still_writes_inside_the_project() {
-        if crate::sandbox::confine::abi().is_none() {
+        if !crate::sandbox::confine::available() {
             return;
         }
         let h = Harness::confined();
@@ -456,7 +458,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_confined_command_can_still_read_outside_the_project() {
-        if crate::sandbox::confine::abi().is_none() {
+        if !crate::sandbox::confine::available() {
             return;
         }
         let h = Harness::confined();
@@ -470,7 +472,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn confinement_is_inherited_by_what_the_command_starts() {
-        if crate::sandbox::confine::abi().is_none() {
+        if !crate::sandbox::confine::available() {
             return;
         }
         let h = Harness::confined();

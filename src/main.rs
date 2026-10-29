@@ -107,7 +107,7 @@ struct Cli {
     #[arg(long, value_enum)]
     tool_protocol: Option<app::ProtocolChoice>,
 
-    /// How far the commands the agent runs are confined. Linux only. `workspace` when not
+    /// How far the commands the agent runs are confined. Linux and macOS. `workspace` when not
     /// given: writes in the project, the temporary directories and the build caches.
     #[arg(long, value_enum)]
     sandbox: Option<lokode::sandbox::confine::Level>,
@@ -340,12 +340,12 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
         .or(file.shell.level());
     let level = match asked {
         Some(level) => level,
-        None if lokode::sandbox::confine::abi().is_some() => Level::Workspace,
+        None if lokode::sandbox::confine::available() => Level::Workspace,
         None => {
-            warnings.push(
-                "this system has no Landlock, so the commands the agent runs are not confined"
-                    .into(),
-            );
+            warnings.push(format!(
+                "this system has no {}, so the commands the agent runs are not confined",
+                lokode::sandbox::confine::MECHANISM
+            ));
             Level::Off
         }
     };
@@ -357,12 +357,12 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
     warnings.extend(backend_warnings);
     let (agents, agent_warnings) = lokode::agent::agents::load(&lokode::agent::agents::dirs(&root));
     warnings.extend(agent_warnings);
-    if sandbox.is_some() && lokode::sandbox::confine::abi().is_none() {
-        warnings.push(
-            "a sandbox was asked for and this system has no Landlock: commands will be \
-             refused rather than run unconfined"
-                .into(),
-        );
+    if sandbox.is_some() && !lokode::sandbox::confine::available() {
+        warnings.push(format!(
+            "a sandbox was asked for and this system has no {}: commands will be refused \
+             rather than run unconfined",
+            lokode::sandbox::confine::MECHANISM
+        ));
     }
 
     if warnings.is_empty() && headers.iter().any(|(k, _)| k == "Authorization") {
