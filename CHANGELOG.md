@@ -39,6 +39,8 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Language server: answer the server's own requests, count columns as it does, restart it once.
 - Commands: keep a project's command from taking the name of a built-in.
 - Approvals: tell the model when a rule refused a call, and match rules per command of a line.
+- Headless: let --approve edits allow edit_lines.
+- Interface: keep the directory of a command handed back to correct with x.
 
 ### Removed
 

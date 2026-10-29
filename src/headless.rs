@@ -35,7 +35,10 @@ impl ApprovePolicy {
         let allowed = match self {
             ApprovePolicy::None => false,
             ApprovePolicy::Edits => {
-                matches!(tool, "write_file" | "edit_file" | "apply_patch")
+                matches!(
+                    tool,
+                    "write_file" | "edit_file" | "edit_lines" | "apply_patch"
+                )
             }
             ApprovePolicy::All => true,
         };

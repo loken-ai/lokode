@@ -51,9 +51,9 @@ impl Tool for RunTests {
                 tool: self.name().into(),
                 summary: format!("run_tests [{label}]: {program} {}", argv.join(" ")),
                 diff_preview: None,
-                // The command is derived from the manifest, not chosen by the model, so
-                // the whole surface of this tool is the one action just shown.
-                scope: ApprovalScope::Tool(self.name().into()),
+                // The runner comes from the manifest and the target from the model, so
+                // an agreement covers the command just shown and no other target.
+                scope: ApprovalScope::Command(format!("{program} {}", argv.join(" "))),
             })
             .await
         {

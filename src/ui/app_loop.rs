@@ -507,7 +507,11 @@ async fn run_ui(
                 state.follow_the_drag();
             }
 
-            Some(prompt) = approval_rx.recv() => {
+            // One question at a time: another waits in the channel until this one is
+            // answered, so no answer is lost to a question drawn over it.
+            Some(prompt) = approval_rx.recv(),
+                if state.pending_approval.is_none() && state.refusing.is_none() =>
+            {
                 // Somewhere else, the person would not see the question until they came
                 // back to look.
                 if !state.focused {
@@ -1037,11 +1041,10 @@ async fn run_ui(
                         // line from what is on screen is the work the prompt was meant to
                         // save. This hands the line over to be corrected and run.
                         if matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X')) {
-                            if let Some(command) = state
-                                .pending_approval
-                                .as_ref()
-                                .and_then(|p| p.req.summary.strip_prefix("$ "))
-                                .map(str::to_string)
+                            if let Some(command) =
+                                state.pending_approval.as_ref().and_then(|p| {
+                                    corrected_command(&p.req.summary, &p.req.scope)
+                                })
                             {
                                 if let Some(prompt) = state.pending_approval.take() {
                                     let _ = prompt.reply.send(
@@ -2009,4 +2012,46 @@ async fn take_back_from(
         )),
     }
     taken
+}
+
+/// The command an approval asked about, as a line to correct and run from the project:
+/// with a change of directory first when it was to run elsewhere.
+fn corrected_command(
+    summary: &str,
+    scope: &crate::sandbox::approval::ApprovalScope,
+) -> Option<String> {
+    let crate::sandbox::approval::ApprovalScope::Command(command) = scope else {
+        return None;
+    };
+    Some(
+        match summary
+            .rsplit_once("  (in ")
+            .and_then(|(_, dir)| dir.strip_suffix(')'))
+        {
+            Some(dir) => format!("cd '{}' && {command}", dir.replace('\'', "'\\''")),
+            None => command.clone(),
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sandbox::approval::ApprovalScope;
+
+    /// A command refused to be corrected keeps the directory it was to run in.
+    #[test]
+    fn a_command_to_correct_keeps_its_directory() {
+        let here = ApprovalScope::Command("cargo test".into());
+        assert_eq!(
+            corrected_command("$ cargo test", &here).as_deref(),
+            Some("cargo test")
+        );
+        assert_eq!(
+            corrected_command("$ cargo test  (in it's)", &here).as_deref(),
+            Some("cd 'it'\\''s' && cargo test")
+        );
+        let write = ApprovalScope::Tool("x".into());
+        assert_eq!(corrected_command("$ ls", &write), None);
+    }
 }
