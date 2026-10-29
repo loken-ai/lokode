@@ -211,8 +211,9 @@ pub(crate) fn draw(
 
     // The completion list, as wide as the conversation it opens over and drawn after the
     // rail, so the rail never cuts into it.
+    state.list_hit = None;
     if let Some(picker) = state.picker.as_ref() {
-        picker.render(
+        state.list_hit = picker.render(
             f,
             ratatui::layout::Rect {
                 width: pane_area.width,
@@ -313,7 +314,7 @@ pub(crate) fn draw(
     // Last, so it is over everything: a question being asked of the person is not
     // something anything else may cover.
     if let Some(chooser) = state.choosing.as_ref() {
-        chooser.render(f, chunks[0]);
+        state.list_hit = Some(chooser.render(f, chunks[0]));
     }
 }
 

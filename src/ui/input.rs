@@ -45,6 +45,7 @@ pub(crate) fn fresh_input(text: &str) -> TextArea<'static> {
 pub(crate) const ASK_AGAIN_WITHIN: Duration = Duration::from_secs(3);
 
 /// What a key says about leaving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Quit {
     /// Stop what is running, clear what is typed, or offer to leave - in that order,
     /// because that is the order of what is in front of the person.
@@ -53,6 +54,73 @@ pub(crate) enum Quit {
     OnEmptyLine,
     /// Asked for in a way that leaves no doubt.
     Now,
+}
+
+/// What leaving now would lose.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AtStake {
+    /// A turn is running.
+    pub busy: bool,
+    /// Something is typed on the line.
+    pub typing: bool,
+    /// A change is waiting for an answer.
+    pub waiting: bool,
+}
+
+/// What a key that leaves does, given what is at stake.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Leaving {
+    Go,
+    /// Ask for the same key again, saying what leaving would lose.
+    Confirm(String),
+    StopTurn,
+    ClearLine,
+    Nothing,
+}
+
+impl Quit {
+    /// The key, as the person presses it.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Quit::Ask => "ctrl-c",
+            Quit::OnEmptyLine => "ctrl-d",
+            Quit::Now => "ctrl-q",
+        }
+    }
+}
+
+/// What a key that leaves does.
+///
+/// Ctrl-C stops a turn, then clears the line, then leaves. Ctrl-D leaves from an empty line.
+/// Ctrl-Q leaves from anywhere. None of them leaves on the first press, except Ctrl-Q when
+/// nothing would be lost: the second press of the same key is the answer, and the question
+/// says what would go.
+pub(crate) fn leaving(quit: Quit, stake: AtStake, confirmed: bool) -> Leaving {
+    match quit {
+        Quit::Ask if stake.busy => return Leaving::StopTurn,
+        Quit::Ask if stake.typing => return Leaving::ClearLine,
+        Quit::OnEmptyLine if stake.typing => return Leaving::Nothing,
+        Quit::Now if !stake.busy && !stake.typing && !stake.waiting => return Leaving::Go,
+        _ => {}
+    }
+    if confirmed {
+        return Leaving::Go;
+    }
+    let mut lost = Vec::new();
+    if stake.busy {
+        lost.push("the turn in flight stops");
+    }
+    if stake.waiting {
+        lost.push("the change waiting for you is refused");
+    }
+    if stake.typing {
+        lost.push("what you typed is lost");
+    }
+    let key = quit.key();
+    Leaving::Confirm(match lost.is_empty() {
+        true => format!("press {key} again to leave"),
+        false => format!("press {key} again to leave: {}", lost.join(", ")),
+    })
 }
 
 pub(crate) fn quit_intent(k: &KeyEvent) -> Option<Quit> {
@@ -188,6 +256,10 @@ pub(crate) fn accept_choice(
     // A command is the whole line and is ready to send; an argument finishes one; a file
     // is one word in a sentence and the sentence carries on after it.
     Some(match kind {
+        // A command that takes an argument is left with the space its list opens on.
+        Kind::Command if crate::ui::commands::TAKES_ARGUMENT.contains(&chosen.as_str()) => {
+            format!("/{chosen} ")
+        }
         Kind::Command => format!("/{chosen}"),
         Kind::Argument(_) => format!("{}{chosen}", &line[..at]),
         Kind::Path => format!("{}@{chosen}", &line[..at]),
@@ -337,5 +409,38 @@ mod tests {
         assert!(quit_intent(&press(KeyCode::Char('c'))).is_none());
         assert!(quit_intent(&press(KeyCode::Char('d'))).is_none());
         assert_eq!(approval_key(&ctrl('c')), None);
+    }
+
+    /// No key leaves on its first press when it would lose something, and the question says
+    /// what. Ctrl-C stops a turn and clears a line before it offers to leave.
+    #[test]
+    fn leaving_is_asked_twice_when_something_would_be_lost() {
+        let idle = AtStake::default();
+        let busy = AtStake {
+            busy: true,
+            ..Default::default()
+        };
+        let typing = AtStake {
+            typing: true,
+            ..Default::default()
+        };
+        assert_eq!(leaving(Quit::Ask, busy, false), Leaving::StopTurn);
+        assert_eq!(leaving(Quit::Ask, typing, false), Leaving::ClearLine);
+        assert_eq!(
+            leaving(Quit::Ask, idle, false),
+            Leaving::Confirm("press ctrl-c again to leave".into())
+        );
+        assert_eq!(leaving(Quit::Ask, idle, true), Leaving::Go);
+        assert_eq!(
+            leaving(Quit::OnEmptyLine, busy, false),
+            Leaving::Confirm("press ctrl-d again to leave: the turn in flight stops".into())
+        );
+        assert_eq!(leaving(Quit::OnEmptyLine, idle, true), Leaving::Go);
+        assert_eq!(leaving(Quit::OnEmptyLine, typing, false), Leaving::Nothing);
+        assert_eq!(leaving(Quit::Now, idle, false), Leaving::Go);
+        assert!(
+            matches!(leaving(Quit::Now, typing, false), Leaving::Confirm(s) if s.contains("what you typed is lost"))
+        );
+        assert_eq!(leaving(Quit::Now, typing, true), Leaving::Go);
     }
 }

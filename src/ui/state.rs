@@ -75,7 +75,7 @@ pub(crate) struct UiState {
     /// When quitting was last asked for and not confirmed. A session holds work nobody
     /// else has - what was said, what was changed, what can still be put back - so leaving
     /// it is asked for twice.
-    pub(crate) quit_asked: Option<Instant>,
+    pub(crate) quit_asked: Option<(Instant, &'static str)>,
     /// Whether writes go ahead unasked, for this stretch of work.
     pub(crate) accepting_writes: bool,
     /// What is being looked for in the conversation, and which match is shown.
@@ -162,6 +162,8 @@ pub(crate) struct UiState {
     pub(crate) backend: String,
     /// The project's root, for asking git where it stands.
     pub(crate) root: std::path::PathBuf,
+    /// Where the open list was drawn and the first item on screen, for the mouse.
+    pub(crate) list_hit: Option<(ratatui::layout::Rect, usize)>,
     /// Whether the terminal window has the focus, as it last said.
     pub(crate) focused: bool,
     /// The window title as it was last set.

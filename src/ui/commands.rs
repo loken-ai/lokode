@@ -503,6 +503,18 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         if busy {
             return Ran::Said("the agent is working; ask again when the turn is over".into());
         }
+        // Asked first: what was said leaves the window and does not come back.
+        if rest != "yes" {
+            return Ran::Choose(Box::new(crate::ui::chooser::Chooser::new(
+                "clear",
+                "start the conversation again? what was said leaves the window",
+                vec![
+                    crate::ui::chooser::Choice::new("no", "keep the conversation"),
+                    crate::ui::chooser::Choice::new("yes", "start again"),
+                ],
+                Some("no".into()),
+            )));
+        }
         let (tx, rx) = tokio::sync::oneshot::channel();
         if control
             .send(crate::agent::agent_loop::Control::Clear { reply: tx })
@@ -739,6 +751,10 @@ const GROUPS: [(&str, &[&str]); 4] = [
         &["why", "cost", "context", "digest", "tools", "mcp", "help"],
     ),
 ];
+
+/// The commands that take an argument, which completion leaves a space after.
+pub(crate) const TAKES_ARGUMENT: [&str; 7] =
+    ["model", "retry", "mcp", "digest", "copy", "undo", "resume"];
 
 /// The keys, as `/help` lists them.
 const KEYS: [(&str, &str); 15] = [

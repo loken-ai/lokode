@@ -103,6 +103,11 @@ impl Chooser {
     }
 
     /// What is highlighted now, or nothing when the filter leaves nothing.
+    /// Highlight the item at `at` among what the filter leaves.
+    pub fn set_at(&mut self, at: usize) {
+        self.at = at.min(self.shown().len().saturating_sub(1));
+    }
+
     pub fn chosen(&self) -> Option<String> {
         self.shown().get(self.at).map(|c| c.value.clone())
     }
@@ -123,7 +128,9 @@ impl Chooser {
     }
 
     /// Draw it over `area`, filling it.
-    pub fn render(&self, f: &mut Frame, area: Rect) {
+    /// Draw it at the foot of `area`, and say where: the card's area and the first item on
+    /// screen, for the mouse.
+    pub fn render(&self, f: &mut Frame, area: Rect) -> (Rect, usize) {
         let shown = self.shown();
         let (first, rows) = self.window();
         let height = (rows.max(1) as u16 + 1).min(area.height);
@@ -145,6 +152,7 @@ impl Chooser {
             paths: false,
         }
         .render(f, area);
+        (area, first)
     }
 }
 

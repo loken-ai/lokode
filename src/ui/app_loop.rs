@@ -24,7 +24,7 @@ use crate::ui::commands::{
 };
 use crate::ui::input::{
     accept_choice, approval_key, at_start, fresh_input, nothing_left_to_complete, open_picker,
-    quit_intent, write_elsewhere, Known, Quit, ASK_AGAIN_WITHIN,
+    quit_intent, write_elsewhere, Known, ASK_AGAIN_WITHIN,
 };
 use crate::ui::state::{show, what_was_said, UiState};
 use crate::ui::term;
@@ -414,6 +414,7 @@ async fn run_ui(
     state.git = crate::ui::commands::git_state(&cfg.root).await;
 
     let mut events = EventStream::new();
+    let mut injected: std::collections::VecDeque<Event> = Default::default();
 
     loop {
         busy_tx.send_if_modified(|was| {
@@ -623,7 +624,14 @@ async fn run_ui(
                 }
             }
 
-            maybe_evt = events.next() => {
+            // A key the interface plays itself, as a click on a list does, is taken before
+            // the terminal's next event.
+            maybe_evt = async {
+                match injected.pop_front() {
+                    Some(evt) => Some(Ok(evt)),
+                    None => events.next().await,
+                }
+            } => {
                 let Some(Ok(evt)) = maybe_evt else { continue };
                 // Mouse capture was turned on from the beginning and nothing ever read an
                 // event, so the wheel did nothing in a pane whose purpose is scrolling.
@@ -655,6 +663,54 @@ async fn run_ui(
                     continue;
                 }
                 if let Event::Mouse(mouse) = evt {
+                    // A page or a list open over the rest takes the wheel, and a click on a
+                    // list takes what it lands on, as enter would.
+                    if let Some(sheet) = state.sheet.as_mut() {
+                        let height = state.view_height.saturating_sub(2);
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => sheet.scroll(-3, height),
+                            MouseEventKind::ScrollDown => sheet.scroll(3, height),
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    if let Some((area, first)) = state.list_hit {
+                        let inside = mouse.column >= area.x
+                            && mouse.column < area.x + area.width
+                            && mouse.row >= area.y
+                            && mouse.row < area.y + area.height;
+                        if inside {
+                            let by = match mouse.kind {
+                                MouseEventKind::ScrollUp => -1,
+                                MouseEventKind::ScrollDown => 1,
+                                _ => 0,
+                            };
+                            let picked = match mouse.kind {
+                                MouseEventKind::Down(MouseButton::Left) if mouse.row > area.y => {
+                                    Some(first + (mouse.row - area.y - 1) as usize)
+                                }
+                                _ => None,
+                            };
+                            if let Some(chooser) = state.choosing.as_mut() {
+                                chooser.move_by(by);
+                                if let Some(at) = picked {
+                                    chooser.set_at(at);
+                                }
+                            } else if let Some(picker) = state.picker.as_mut() {
+                                picker.move_by(by);
+                                if let Some(at) = picked {
+                                    picker.set_at(at);
+                                }
+                            }
+                            if picked.is_some() {
+                                injected.push_back(Event::Key(crossterm::event::KeyEvent::new(
+                                    KeyCode::Enter,
+                                    KeyModifiers::NONE,
+                                )));
+                            }
+                            continue;
+                        }
+                    }
                     match mouse.kind {
                         MouseEventKind::ScrollUp => state.scroll_back(3),
                         MouseEventKind::ScrollDown => state.scroll_forward(3),
@@ -732,30 +788,34 @@ async fn run_ui(
                     // outright, in the middle of a turn, with a change history nobody had
                     // looked at yet.
                     match quit_intent(&key) {
-                        Some(Quit::Now) => return Ok(()),
-                        Some(Quit::OnEmptyLine) if input.is_empty() => return Ok(()),
-                        Some(Quit::OnEmptyLine) => {}
-                        Some(Quit::Ask) => {
-                            if state.busy {
-                                if let Some(cancel) = state.turn_cancel.take() {
-                                    cancel.cancel();
-                                    state.entries.push(Entry::Notice("interrupting…".into()));
+                        Some(quit) => {
+                            let stake = crate::ui::input::AtStake {
+                                busy: state.busy,
+                                typing: !input.is_empty(),
+                                waiting: state.pending_approval.is_some(),
+                            };
+                            let confirmed = state.quit_asked.is_some_and(|(at, k)| {
+                                k == quit.key() && at.elapsed() < ASK_AGAIN_WITHIN
+                            });
+                            match crate::ui::input::leaving(quit, stake, confirmed) {
+                                crate::ui::input::Leaving::Go => return Ok(()),
+                                crate::ui::input::Leaving::Confirm(said) => {
+                                    state.quit_asked = Some((Instant::now(), quit.key()));
+                                    state.said = Some((said, Instant::now()));
                                 }
-                            } else if !input.is_empty() {
-                                // The emptied line is the answer; saying so as well would
-                                // be narrating what is already on screen.
-                                input = fresh_input("");
-                                state.quit_asked = None;
-                            } else if state
-                                .quit_asked
-                                .is_some_and(|at| at.elapsed() < ASK_AGAIN_WITHIN)
-                            {
-                                return Ok(());
-                            } else {
-                                state.quit_asked = Some(Instant::now());
-                                state.entries.push(Entry::Notice(
-                                    "press ctrl-c again to leave, or ctrl-d".into(),
-                                ));
+                                crate::ui::input::Leaving::StopTurn => {
+                                    if let Some(cancel) = state.turn_cancel.take() {
+                                        cancel.cancel();
+                                        state.entries.push(Entry::Notice("interrupting…".into()));
+                                    }
+                                }
+                                // Kept, as Esc keeps it: the up arrow offers it back.
+                                crate::ui::input::Leaving::ClearLine => {
+                                    state.draft = Some(input.lines().join("\n"));
+                                    input = fresh_input("");
+                                    state.quit_asked = None;
+                                }
+                                crate::ui::input::Leaving::Nothing => {}
                             }
                             continue;
                         }
@@ -913,6 +973,9 @@ async fn run_ui(
                                     c.chosen().map(|value| (c.verb().to_string(), value))
                                 });
                                 state.choosing = None;
+                                // The answer that declines a question asked before something
+                                // is done does nothing.
+                                let taken = taken.filter(|(_, value)| value != "no");
                                 if let Some((verb, value)) = taken {
                                     let ran = run_command(
                                         &format!("{verb} {value}"),
@@ -1017,12 +1080,19 @@ async fn run_ui(
                                 state.picker = None;
                                 true
                             }
+                            // A command or a command's argument is the whole line, so taking
+                            // it with enter also sends it: one key, not two. A file is a word
+                            // in a sentence, and the sentence carries on after it.
                             KeyCode::Enter if !nothing_left_to_complete(&input, &state.picker) => {
+                                let sends = !matches!(
+                                    state.picker.as_ref().map(|p| p.kind()),
+                                    Some(crate::ui::picker::Kind::Path)
+                                );
                                 if let Some(text) = accept_choice(&input, state.picker.as_ref()) {
-                                    input = fresh_input(&text);
+                                    input = fresh_input(text.trim_end());
                                 }
                                 state.picker = None;
-                                true
+                                !sends
                             }
                             KeyCode::Enter => {
                                 state.picker = None;
@@ -1172,6 +1242,12 @@ async fn run_ui(
                                     }
                                 } else {
                                     state.esc_at = Some(Instant::now());
+                                    if state.entries.iter().any(|e| matches!(e, Entry::User(_))) {
+                                        state.said = Some((
+                                            "esc again takes your last question back".into(),
+                                            Instant::now(),
+                                        ));
+                                    }
                                 }
                                 continue;
                             }
@@ -1234,29 +1310,21 @@ async fn run_ui(
                             {
                                 let turn = state.receipt_here().unwrap_or_default();
                                 match c {
+                                    // Asked first: putting a turn back changes the files.
                                     'u' => {
-                                        let ran = run_command(
-                                            &format!("undo {turn}"),
-                                            CommandCtx {
-                                                checkpoints: checkpoints.as_deref(),
-                                                root: &cfg.root,
-                                                control: &control_tx,
-                                                policy: &cfg.policy,
-                                                tools: &tools,
-                                                digest: &digest,
-                                                mcp: &mcp,
-                                                mcp_summary: &mcp_summary,
-                                                session_id: &session_id,
-                                                approvals: &session_approvals,
-                                                busy: state.busy,
-                                            },
-                                        )
-                                        .await;
-                                        if let Ran::Said(said) = ran {
-                                            show(&mut state, "undo", said);
-                                        }
+                                        state.choosing = Some(crate::ui::chooser::Chooser::new(
+                                            "undo",
+                                            format!("put turn {turn} back? its changes leave the files"),
+                                            vec![
+                                                crate::ui::chooser::Choice::new("no", "keep it as it is"),
+                                                crate::ui::chooser::Choice::new(
+                                                    turn.to_string(),
+                                                    "put it back",
+                                                ),
+                                            ],
+                                            Some("no".into()),
+                                        ));
                                         state.at_entry = None;
-                                        refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                                     }
                                     _ => {
                                         let said = match checkpoints.as_deref() {
@@ -1315,13 +1383,18 @@ async fn run_ui(
                                 }
                                 continue;
                             }
-                            KeyCode::Up if at_start(&input) => {
+                            // The history replaces the line only when there is nothing on it,
+                            // or when the line is a step of the history already.
+                            KeyCode::Up
+                                if at_start(&input)
+                                    && (input.is_empty() || state.history_at.is_some()) =>
+                            {
                                 if let Some(text) = state.older() {
                                     input = fresh_input(&text);
                                 }
                                 continue;
                             }
-                            KeyCode::Down if at_start(&input) => {
+                            KeyCode::Down if at_start(&input) && state.history_at.is_some() => {
                                 if let Some(text) = state.newer() {
                                     input = fresh_input(&text);
                                 }

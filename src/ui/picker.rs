@@ -96,16 +96,22 @@ impl Picker {
         self.at = at.rem_euclid(n as isize) as usize;
     }
 
+    /// Highlight the item at `at` among what the filter leaves.
+    pub fn set_at(&mut self, at: usize) {
+        self.at = at.min(self.shown().len().saturating_sub(1));
+    }
+
     /// What is highlighted now.
     pub fn chosen(&self) -> Option<String> {
         self.shown().get(self.at).map(|c| c.value.clone())
     }
 
-    /// Draw it just above `below`, growing upwards so the input never moves.
-    pub fn render(&self, f: &mut Frame, below: Rect) {
+    /// Draw it just above `below`, growing upwards so the input never moves, and say where: the card's area and the first item on
+    /// screen, for the mouse.
+    pub fn render(&self, f: &mut Frame, below: Rect) -> Option<(Rect, usize)> {
         let shown = self.shown();
         if shown.is_empty() {
-            return;
+            return None;
         }
         let rows = shown.len().min(ROWS);
         let height = rows as u16 + 1;
@@ -134,6 +140,7 @@ impl Picker {
             paths: self.kind == Kind::Path,
         }
         .render(f, area);
+        Some((area, first))
     }
 }
 
