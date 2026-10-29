@@ -80,7 +80,8 @@ or the startup probe. A server that measures nothing shows nothing, never a zero
   and asks. A change to them asks again.
 - **Changes are approved.** A change arrives in the conversation as a diff to accept or
   decline. An agreement covers what you were shown: this command, writes under this
-  directory, requests to this host. The prompt says what `a` covers before you press it.
+  directory, requests to this host. The prompt says what `a` covers before you press it. An
+  agreement holds in the project's later sessions until `/approve forget` takes it back.
 - **A patch is all or nothing.** Every file of it is resolved and applied in memory before you
   are asked. A failure while writing puts back what was already written.
 - **Tool arguments are checked.** They are validated against the tool's schema, repaired where

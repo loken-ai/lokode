@@ -94,7 +94,13 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     // Small on purpose: what a screen cannot keep up with is dropped rather than queued,
     // because a line that arrives late is worth less than the build finishing on time.
     let (live_tx, live_rx) = tokio::sync::mpsc::channel(64);
-    let session_approvals = Arc::new(SessionApprovals::new());
+    // A script decides by its policy alone, so agreements kept from a person's sessions
+    // are not its to use.
+    let session_approvals = Arc::new(if cfg.headless {
+        SessionApprovals::new()
+    } else {
+        SessionApprovals::kept_for(&cfg.root)
+    });
     let mut ctx = ToolCtx {
         policy: Arc::new(cfg.policy.clone()),
         auto_used: auto_used.clone(),

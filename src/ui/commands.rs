@@ -594,7 +594,7 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         if rest == "forget" {
             let had = approvals.forget_always().await;
             return Ran::Said(match had {
-                0 => "nothing had been agreed to this session".to_string(),
+                0 => "nothing had been agreed to".to_string(),
                 n => format!("{n} standing agreement(s) taken back; they will be asked again"),
             });
         }
@@ -612,9 +612,19 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                 None => format!("\n{line}\n"),
             });
         }
-        out.push_str("\n## Agreed for this session\n\n");
+        let (heading, nothing) = match approvals.keeps() {
+            true => (
+                "Agreed for this project, kept between sessions",
+                "Nothing has been agreed to in this project.",
+            ),
+            false => (
+                "Agreed for this session",
+                "Nothing has been agreed to for the rest of this session.",
+            ),
+        };
+        out.push_str(&format!("\n## {heading}\n\n"));
         match standing.is_empty() {
-            true => out.push_str("Nothing has been agreed to for the rest of this session.\n"),
+            true => out.push_str(&format!("{nothing}\n")),
             false => {
                 for s in &standing {
                     out.push_str(&format!("- {s}\n"));

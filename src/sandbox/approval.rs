@@ -11,7 +11,8 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 /// the tool's name it would mean that agreeing to one `ls` hands over a free shell, and
 /// agreeing to one file being written hands over every file - which is not what the
 /// question on screen appeared to ask.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ApprovalScope {
     /// One shell command, matched in full.
     ///
@@ -158,10 +159,13 @@ pub fn channel() -> (ApprovalSender, ApprovalReceiver) {
     mpsc::channel(8)
 }
 
-/// Tracks the `Always` agreements given during one session.
+/// Tracks the `Always` agreements given during one session, and those kept for its
+/// project when it keeps them.
 #[derive(Default, Debug)]
 pub struct SessionApprovals {
     always: Mutex<HashSet<ApprovalScope>>,
+    /// The project the agreements are kept for between sessions, when they are.
+    kept: Option<PathBuf>,
     /// Whether writes go ahead without being asked about, for as long as it is set.
     ///
     /// Writes and nothing else. A shell command and a request leaving the machine are the
@@ -175,12 +179,59 @@ impl SessionApprovals {
         Self::default()
     }
 
+    /// The agreements kept for the project at `root`, which later ones are added to.
+    pub fn kept_for(root: &Path) -> Self {
+        let always = read_kept()
+            .remove(&root.display().to_string())
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        Self {
+            always: Mutex::new(always),
+            kept: Some(root.to_path_buf()),
+            ..Self::default()
+        }
+    }
+
+    /// Write the agreements held into the store of the project they are kept for.
+    fn keep(&self, held: &HashSet<ApprovalScope>) {
+        let (Some(root), Some(path)) = (&self.kept, kept_path()) else {
+            return;
+        };
+        let mut all = read_kept();
+        let key = root.display().to_string();
+        if held.is_empty() {
+            all.remove(&key);
+        } else {
+            all.insert(key, held.iter().cloned().collect());
+        }
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| {
+                std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&all).unwrap_or_default(),
+                )
+            });
+        if let Err(e) = written {
+            tracing::warn!(path = %path.display(), error = %e, "agreements not kept");
+        }
+    }
+
     pub async fn is_always(&self, scope: &ApprovalScope) -> bool {
         self.always.lock().await.iter().any(|g| scope.covered_by(g))
     }
 
     pub async fn mark_always(&self, scope: ApprovalScope) {
-        self.always.lock().await.insert(scope);
+        let mut held = self.always.lock().await;
+        held.insert(scope);
+        self.keep(&held);
+    }
+
+    /// Whether agreements outlive the session.
+    pub fn keeps(&self) -> bool {
+        self.kept.is_some()
     }
 
     /// What has been agreed to for the rest of this session, in the words the prompt
@@ -202,6 +253,7 @@ impl SessionApprovals {
         let mut held = self.always.lock().await;
         let had = held.len();
         held.clear();
+        self.keep(&held);
         had
     }
 
@@ -214,6 +266,18 @@ impl SessionApprovals {
     pub fn writes_accepted(&self, scope: &ApprovalScope) -> bool {
         matches!(scope, ApprovalScope::Path { .. }) && self.writes.load(Ordering::Relaxed)
     }
+}
+
+/// Where the agreements kept for each project are written.
+fn kept_path() -> Option<PathBuf> {
+    crate::paths::data_dir().map(|d| d.join("agreements.json"))
+}
+
+fn read_kept() -> std::collections::BTreeMap<String, Vec<ApprovalScope>> {
+    kept_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
 }
 
 /// Convenience: ask the UI for approval and wait for a decision. Returns
@@ -302,6 +366,32 @@ mod tests {
             !a.is_always(&ApprovalScope::Host("169.254.169.254".into()))
                 .await
         );
+    }
+
+    /// An agreement kept for a project is there in its next session, for that project
+    /// only, until it is taken back.
+    #[test]
+    fn an_agreement_is_kept_for_its_project() {
+        let data = tempfile::tempdir().unwrap();
+        crate::paths::with_env(&[("XDG_DATA_HOME", data.path().to_str())], || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let root = Path::new("/somewhere/project");
+                SessionApprovals::kept_for(root)
+                    .mark_always(cmd("cargo test"))
+                    .await;
+                let next = SessionApprovals::kept_for(root);
+                assert!(next.is_always(&cmd("cargo test")).await);
+                let elsewhere = SessionApprovals::kept_for(Path::new("/elsewhere"));
+                assert!(!elsewhere.is_always(&cmd("cargo test")).await);
+                assert_eq!(next.forget_always().await, 1);
+                let after = SessionApprovals::kept_for(root);
+                assert!(!after.is_always(&cmd("cargo test")).await);
+                assert!(!SessionApprovals::new().keeps());
+            });
+        });
     }
 
     /// Nothing is agreed to before the user has agreed to anything.

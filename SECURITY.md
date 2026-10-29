@@ -33,7 +33,9 @@ accepting keys.
 **Scoped agreements.** `[A]lways` is remembered against what the prompt showed - this exact
 command, writes by this tool under this directory, requests to this host - so agreeing to one
 `ls` does not hand over the shell. A command is matched in full rather than by the program at
-the front of it, because `ls` and `ls; rm -rf ~` share a first word.
+the front of it, because `ls` and `ls; rm -rf ~` share a first word. An agreement is kept for
+the project in `$XDG_DATA_HOME/lokode/agreements.json` and holds in its later sessions.
+`/approve forget` takes them all back. A run without a terminal does not use them.
 
 **Rules read each command.** An `[approve]` rule is matched against each command of a line,
 substitutions included. An `allow` rule covers a line only when it covers every command and the
@@ -108,7 +110,7 @@ them.
 ## Running it more safely
 
 - Point `--root` at one project, not at your home directory.
-- Decline `[A]lways` for `bash` unless you know what the session is going to do.
+- Decline `[A]lways` for `bash` unless you know what the project's sessions are going to do.
 - On Linux, turn on `--confine-shell`, and add the caches your builds need to
   `[shell] writable`.
 - Prefer a container or a VM for a repository you have not read.
