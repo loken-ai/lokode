@@ -354,6 +354,7 @@ async fn run_ui(
 
     let mut state = UiState {
         mouse_ours: true,
+        focused: true,
         planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
         model: model.to_string(),
         protocol,
@@ -399,6 +400,27 @@ async fn run_ui(
     let mut events = EventStream::new();
 
     loop {
+        // The window's title and the tab's progress say what the session is doing, and are
+        // written only when that changes.
+        let project = cfg
+            .root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let (doing, progress) = match (state.pending_approval.is_some(), state.busy) {
+            (true, _) => (" · waiting for you", term::Progress::Waiting),
+            (false, true) => (" · working", term::Progress::Busy),
+            (false, false) => ("", term::Progress::Off),
+        };
+        let title = format!("lokode · {project}{doing}");
+        if title != state.title {
+            term::set_title(&title);
+            state.title = title;
+        }
+        if state.shown_progress != Some(progress) {
+            term::progress(progress);
+            state.shown_progress = Some(progress);
+        }
         term::begin_frame();
         let drawn =
             term.draw(|f| crate::ui::view::draw(f, &mut state, &input, &cfg.root, cfg.max_steps));
@@ -444,6 +466,11 @@ async fn run_ui(
             }
 
             Some(prompt) = approval_rx.recv() => {
+                // Somewhere else, the person would not see the question until they came
+                // back to look.
+                if !state.focused {
+                    term::notify("lokode", &format!("waiting for you: {}", prompt.req.summary));
+                }
                 // In the thread, where the conversation the change has to be judged
                 // against is still visible, and where it scrolls with everything else.
                 state.entries.push(Entry::Approval {
@@ -536,7 +563,12 @@ async fn run_ui(
                     }
                     AgentEvent::Models(models) => state.models = models,
                     AgentEvent::Notice(s) => state.entries.push(Entry::Notice(s)),
-                    AgentEvent::Receipt(r) => state.entries.push(Entry::Receipt(r)),
+                    AgentEvent::Receipt(r) => {
+                        if !state.focused {
+                            term::notify("lokode", &format!("turn over: {}", r.describe()));
+                        }
+                        state.entries.push(Entry::Receipt(r));
+                    }
                     AgentEvent::TurnDone => {
                         // Asked once a turn is over, which is when the conversation has
                         // changed and the agent is free to answer.
@@ -576,6 +608,17 @@ async fn run_ui(
                 // over a keystroke at a time - which is what a terminal does when nobody
                 // has asked otherwise - every one of them was the send key, and pasting
                 // ten lines asked ten questions made of fragments.
+                match evt {
+                    Event::FocusGained => {
+                        state.focused = true;
+                        continue;
+                    }
+                    Event::FocusLost => {
+                        state.focused = false;
+                        continue;
+                    }
+                    _ => {}
+                }
                 if let Event::Paste(text) = evt {
                     let text = text.replace("\r\n", "\n").replace('\r', "\n");
                     let mut lines = text.split('\n');

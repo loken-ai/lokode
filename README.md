@@ -156,6 +156,11 @@ still caps it where it is stated.
 | `Ctrl-C` | stop the turn, clear the line, or leave - twice, on an empty line |
 | `Ctrl-D`, `Ctrl-Q` | leave from an empty line; leave at once |
 
+The window's title says whether the session is working or waiting for you. Ghostty, WezTerm,
+Windows Terminal and iTerm2 from 3.6 also show it as progress in the tab. When the terminal is
+not in front, a question waiting for an answer and a turn coming to an end reach you as a
+desktop notification, or as a bell where the terminal has no notifications.
+
 Taking the mouse is what buys the wheel and a selection that scrolls past the edge of the
 pane, and it costs the terminal's own selection - and with it the terminal's own copy key,
 which never reaches a program to be reassigned. Both are kept within reach: hold `Shift`

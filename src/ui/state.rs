@@ -145,6 +145,12 @@ pub(crate) struct UiState {
     pub(crate) prefill: Option<(u64, u64)>,
     /// What the backend measured, as of the latest step.
     pub(crate) engine: crate::agent::agent_loop::Engine,
+    /// Whether the terminal window has the focus, as it last said.
+    pub(crate) focused: bool,
+    /// The window title as it was last set.
+    pub(crate) title: String,
+    /// The progress the tab was last told, so it is written only when it changes.
+    pub(crate) shown_progress: Option<crate::ui::term::Progress>,
     /// Whether the rail was on screen in the last frame, for the key that flips it.
     pub(crate) rail_now: bool,
     /// How tool calls travel, as the agent has it: settled by asking the backend, so the
