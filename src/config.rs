@@ -407,9 +407,18 @@ pub struct McpSection {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct McpServer {
-    pub command: String,
+    /// The program to start, for a server spoken to over its input and output.
+    pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Where to reach a server spoken to over HTTP, in place of a command.
+    pub url: Option<String>,
+    /// Headers sent to a server over HTTP.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    /// The variable that holds a token sent as `Authorization: Bearer` to a server over
+    /// HTTP.
+    pub token_env: Option<String>,
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
     /// Set false to keep a server configured but not started.

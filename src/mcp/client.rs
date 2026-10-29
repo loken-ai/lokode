@@ -1,8 +1,11 @@
-//! A Model Context Protocol client, over a server's standard input and output.
+//! A Model Context Protocol client, over a server's standard input and output, or over
+//! HTTP.
 //!
 //! JSON-RPC again, but not framed the way the language server protocol frames it: one
 //! message per line, no headers. Close enough to be confusing and different enough to
-//! break if you assume.
+//! break if you assume. Over HTTP, each message is posted, and the answer comes back as
+//! one JSON body or as a stream of events that may carry the server's own requests
+//! before it.
 //!
 //! The server may ask things of the client as well as answer it. Its requests are told
 //! apart from its replies by their method, and answered: `ping`, and `roots/list` with the
@@ -55,7 +58,8 @@ pub struct McpToolInfo {
 /// What the client and the task reading the server's output share.
 struct Shared {
     server: String,
-    stdin: Mutex<ChildStdin>,
+    /// The server's input, for a server the client started.
+    stdin: Option<Mutex<ChildStdin>>,
     pending: Mutex<HashMap<i64, oneshot::Sender<Value>>>,
     stderr: Mutex<String>,
     alive: AtomicBool,
@@ -64,10 +68,20 @@ struct Shared {
     root: std::path::PathBuf,
 }
 
+/// A server reached over HTTP.
+struct Http {
+    client: reqwest::Client,
+    url: String,
+    headers: Vec<(String, String)>,
+    /// The session the server gave at the handshake, sent back with every message.
+    session: Mutex<Option<String>>,
+}
+
 pub struct McpClient {
     /// Named by the configuration, and used to prefix its tools.
     pub server: String,
     child: Mutex<Option<Child>>,
+    http: Option<Http>,
     shared: Arc<Shared>,
     next_id: AtomicI64,
     timeout: Duration,
@@ -100,7 +114,7 @@ impl McpClient {
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
         let shared = Arc::new(Shared {
             server: server.to_string(),
-            stdin: Mutex::new(stdin),
+            stdin: Some(Mutex::new(stdin)),
             pending: Mutex::new(HashMap::new()),
             stderr: Mutex::new(String::new()),
             alive: AtomicBool::new(true),
@@ -116,14 +130,59 @@ impl McpClient {
             tokio::spawn(async move { reader_loop(shared, stdout).await });
         }
 
-        let mut client = Self {
+        Self {
             server: server.to_string(),
             child: Mutex::new(Some(child)),
+            http: None,
             shared,
             next_id: AtomicI64::new(1),
             timeout,
             version: String::new(),
-        };
+        }
+        .handshake()
+        .await
+    }
+
+    /// Reach a server over HTTP at `url`, sending `headers` with every message, and
+    /// complete the handshake.
+    pub async fn connect(
+        server: &str,
+        url: &str,
+        headers: Vec<(String, String)>,
+        root: &std::path::Path,
+        timeout: Duration,
+    ) -> Result<Arc<Self>> {
+        let shared = Arc::new(Shared {
+            server: server.to_string(),
+            stdin: None,
+            pending: Mutex::new(HashMap::new()),
+            stderr: Mutex::new(String::new()),
+            alive: AtomicBool::new(true),
+            tools_changed: AtomicBool::new(false),
+            root: root.to_path_buf(),
+        });
+        Self {
+            server: server.to_string(),
+            child: Mutex::new(None),
+            http: Some(Http {
+                client: reqwest::Client::builder().build()?,
+                url: url.to_string(),
+                headers,
+                session: Mutex::new(None),
+            }),
+            shared,
+            next_id: AtomicI64::new(1),
+            timeout,
+            version: String::new(),
+        }
+        .handshake()
+        .await
+    }
+
+    /// Agree on the protocol with the server, or say why not.
+    async fn handshake(mut self) -> Result<Arc<Self>> {
+        let server = self.server.clone();
+        let client = &mut self;
         let init = client
             .request(
                 "initialize",
@@ -159,7 +218,7 @@ impl McpClient {
         client
             .notify("notifications/initialized", json!({}))
             .await?;
-        Ok(Arc::new(client))
+        Ok(Arc::new(self))
     }
 
     /// Whether the server is still running.
@@ -311,8 +370,24 @@ impl McpClient {
     /// Tell the server to stop: close its input, and kill it if it is still there after a
     /// moment.
     pub async fn shutdown(&self) {
+        // A session over HTTP is ended by deleting it.
+        if let Some(http) = &self.http {
+            if let Some(session) = http.session.lock().await.clone() {
+                let mut req = http
+                    .client
+                    .delete(&http.url)
+                    .header("Mcp-Session-Id", session);
+                for (k, v) in &http.headers {
+                    req = req.header(k, v);
+                }
+                let _ = tokio::time::timeout(STOP_GRACE, req.send()).await;
+            }
+            return;
+        }
         // MCP has no shutdown request; closing stdin is how a stdio server is told to go.
-        let _ = self.shared.stdin.lock().await.shutdown().await;
+        if let Some(stdin) = &self.shared.stdin {
+            let _ = stdin.lock().await.shutdown().await;
+        }
         if let Some(mut child) = self.child.lock().await.take() {
             if tokio::time::timeout(STOP_GRACE, child.wait())
                 .await
@@ -345,19 +420,39 @@ impl McpClient {
             return Err(anyhow!("{method}: the server is not running"));
         }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let payload = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        let never = CancellationToken::new();
+        let cancel = cancel.unwrap_or(&never);
+        if let Some(http) = &self.http {
+            let reply = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    let _ = self
+                        .notify(
+                            "notifications/cancelled",
+                            json!({"requestId": id, "reason": "the user stopped it"}),
+                        )
+                        .await;
+                    return Err(anyhow!("{method}: stopped"));
+                }
+                r = tokio::time::timeout(self.timeout, self.post(http, &payload, Some(id))) => match r {
+                    Err(_) => return Err(anyhow!("{method} timed out after {}s", self.timeout.as_secs())),
+                    Ok(r) => r.with_context(|| method.to_string())?,
+                },
+            };
+            if let Some(err) = reply.get("error") {
+                return Err(anyhow!("{method}: {err}"));
+            }
+            return Ok(reply.get("result").cloned().unwrap_or(Value::Null));
+        }
         let (tx, rx) = oneshot::channel();
         self.shared.pending.lock().await.insert(id, tx);
 
-        if let Err(e) = self
-            .write(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
-            .await
-        {
+        if let Err(e) = self.write(&payload).await {
             self.shared.pending.lock().await.remove(&id);
             return Err(e);
         }
 
-        let never = CancellationToken::new();
-        let cancel = cancel.unwrap_or(&never);
         let reply = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
@@ -392,22 +487,105 @@ impl McpClient {
     }
 
     async fn notify(&self, method: &str, params: Value) -> Result<()> {
-        self.write(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
-            .await
+        let payload = json!({"jsonrpc": "2.0", "method": method, "params": params});
+        match &self.http {
+            Some(http) => self.post(http, &payload, None).await.map(|_| ()),
+            None => self.write(&payload).await,
+        }
     }
 
     async fn write(&self, payload: &Value) -> Result<()> {
         write_to(&self.shared, payload).await
     }
+
+    /// Post one message over HTTP. For a request, `id` names it, and its reply is read
+    /// from the body: one JSON message, or a stream of events where the server's own
+    /// requests are answered as they come. For anything else, nothing is read.
+    async fn post(&self, http: &Http, payload: &Value, id: Option<i64>) -> Result<Value> {
+        use futures::StreamExt;
+        let mut req = http
+            .client
+            .post(&http.url)
+            .header("Accept", "application/json, text/event-stream")
+            .json(payload);
+        for (k, v) in &http.headers {
+            req = req.header(k, v);
+        }
+        if let Some(session) = http.session.lock().await.clone() {
+            req = req.header("Mcp-Session-Id", session);
+        }
+        if !self.version.is_empty() {
+            req = req.header("MCP-Protocol-Version", &self.version);
+        }
+        let resp = req.send().await.context("reaching the server")?;
+        if let Some(session) = resp
+            .headers()
+            .get("Mcp-Session-Id")
+            .and_then(|v| v.to_str().ok())
+        {
+            *http.session.lock().await = Some(session.to_string());
+        }
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("the server answered {status}: {}", body.trim());
+        }
+        let Some(id) = id else {
+            return Ok(Value::Null);
+        };
+        let is_stream = resp
+            .headers()
+            .get("Content-Type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|t| t.starts_with("text/event-stream"));
+        if !is_stream {
+            return Ok(resp.json().await?);
+        }
+        let mut events = eventsource_stream::Eventsource::eventsource(resp.bytes_stream());
+        while let Some(event) = events.next().await {
+            let event = event.map_err(|e| anyhow!("reading the server's events: {e}"))?;
+            let Ok(msg) = serde_json::from_str::<Value>(&event.data) else {
+                continue;
+            };
+            let method = msg.get("method").and_then(|m| m.as_str());
+            match (msg.get("id"), method) {
+                (Some(their), Some(method)) => {
+                    let reply = reply_to(&self.shared, their, method);
+                    // Posted beside the stream, which is still open for the reply.
+                    let _ = Box::pin(self.post(http, &reply, None)).await;
+                }
+                (Some(theirs), None) if theirs.as_i64() == Some(id) => return Ok(msg),
+                (None, Some("notifications/tools/list_changed")) => {
+                    self.shared.tools_changed.store(true, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+        }
+        anyhow::bail!("the server's events ended without the reply")
+    }
 }
 
 async fn write_to(shared: &Shared, payload: &Value) -> Result<()> {
+    let Some(stdin) = &shared.stdin else {
+        anyhow::bail!("this server has no input to write to");
+    };
     let mut line = serde_json::to_vec(payload)?;
     line.push(b'\n');
-    let mut stdin = shared.stdin.lock().await;
+    let mut stdin = stdin.lock().await;
     stdin.write_all(&line).await.context("writing to server")?;
     stdin.flush().await?;
     Ok(())
+}
+
+/// The client's reply to a request of the server's, with the id it gave.
+fn reply_to(shared: &Shared, id: &Value, method: &str) -> Value {
+    match answer(shared, method) {
+        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+        Err((code, message)) => json!({
+            "jsonrpc": "2.0", "id": id,
+            "error": {"code": code, "message": message}
+        }),
+    }
 }
 
 /// What the client answers a request from the server.
@@ -443,14 +621,7 @@ async fn reader_loop(shared: Arc<Shared>, stdout: tokio::process::ChildStdout) {
         match (msg.get("id"), method) {
             // A request of the server's own, answered with the id it gave.
             (Some(id), Some(method)) => {
-                let reply = match answer(&shared, method) {
-                    Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-                    Err((code, message)) => json!({
-                        "jsonrpc": "2.0", "id": id,
-                        "error": {"code": code, "message": message}
-                    }),
-                };
-                let _ = write_to(&shared, &reply).await;
+                let _ = write_to(&shared, &reply_to(&shared, id, method)).await;
             }
             (Some(id), None) => {
                 if let Some(id) = id.as_i64() {
@@ -611,5 +782,96 @@ exit 3
         );
         assert!(format!("{err}").contains("stopped"), "{err}");
         assert!(!client.alive());
+    }
+
+    /// One HTTP exchange of the test server: the request's headers and body, and what to
+    /// answer it with.
+    async fn exchange(
+        stream: &mut tokio::net::TcpStream,
+        answer: impl FnOnce(&str, &Value) -> String,
+    ) -> (String, Value) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let (head, body) = loop {
+            let n = stream.read(&mut chunk).await.unwrap();
+            buf.extend_from_slice(&chunk[..n]);
+            let text = String::from_utf8_lossy(&buf).to_string();
+            if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                let length: usize = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().to_string())
+                    })
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                if body.len() >= length {
+                    break (head.to_string(), body[..length].to_string());
+                }
+            }
+        };
+        let msg: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+        let reply = answer(&head, &msg);
+        stream.write_all(reply.as_bytes()).await.unwrap();
+        stream.shutdown().await.ok();
+        (head, msg)
+    }
+
+    /// Over HTTP the session the server gives is sent back, a reply may come as a stream
+    /// of events, and a request of the server's inside that stream is answered.
+    #[tokio::test]
+    async fn a_server_over_http_is_spoken_to() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        let kept = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let got = exchange(&mut stream, |_, msg| {
+                    match msg.get("method").and_then(|m| m.as_str()) {
+                        Some("initialize") => {
+                            let body = json!({"jsonrpc": "2.0", "id": msg["id"], "result": {"protocolVersion": "2025-06-18"}}).to_string();
+                            format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nMcp-Session-Id: s-42\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                        }
+                        Some("tools/call") => {
+                            let ping = json!({"jsonrpc": "2.0", "id": 99, "method": "ping"});
+                            let done = json!({"jsonrpc": "2.0", "id": msg["id"], "result": {"content": [{"type": "text", "text": "over http"}]}});
+                            let body = format!("data: {ping}\n\ndata: {done}\n\n");
+                            format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                        }
+                        _ => "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
+                    }
+                })
+                .await;
+                kept.lock().await.push(got);
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = McpClient::connect("h", &url, Vec::new(), dir.path(), Duration::from_secs(10))
+            .await
+            .unwrap();
+        let (text, _) = client
+            .call_tool("x", json!({}), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(text, "over http");
+        let seen = seen.lock().await;
+        let call = seen
+            .iter()
+            .find(|(_, m)| m["method"] == "tools/call")
+            .expect("the call never arrived");
+        assert!(
+            call.0.to_lowercase().contains("mcp-session-id: s-42"),
+            "{}",
+            call.0
+        );
+        assert!(
+            seen.iter()
+                .any(|(_, m)| m["id"] == 99 && m.get("result").is_some()),
+            "the ping was not answered: {seen:?}"
+        );
     }
 }

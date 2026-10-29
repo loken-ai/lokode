@@ -696,6 +696,11 @@ command = "mcp-server-github"
 args = []
 env = { GITHUB_TOKEN = "..." }     # prefer naming a variable your shell already has
 timeout = 30                       # seconds for one answer, the handshake included
+
+[mcp.servers.docs]
+url = "https://mcp.example.com/mcp"   # spoken to over HTTP, in place of a command
+token-env = "DOCS_TOKEN"              # sent as Authorization: Bearer
+headers = { "X-Team" = "lokode" }
 ```
 
 - Every call is approved, and treated as able to change the project, unless the server marks

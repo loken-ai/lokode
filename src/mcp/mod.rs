@@ -29,6 +29,33 @@ pub struct Loaded {
     pub tools: usize,
 }
 
+/// Start one server, or reach it over HTTP.
+async fn start(
+    name: &str,
+    spec: &McpServer,
+    root: &std::path::Path,
+) -> anyhow::Result<Arc<client::McpClient>> {
+    let timeout = spec
+        .timeout
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(client::TIMEOUT);
+    match (&spec.command, &spec.url) {
+        (Some(command), None) => {
+            client::McpClient::start(name, command, &spec.args, &spec.env, root, timeout).await
+        }
+        (None, Some(url)) => {
+            let mut headers: Vec<(String, String)> = spec.headers.clone().into_iter().collect();
+            if let Some(var) = &spec.token_env {
+                let token = std::env::var(var)
+                    .map_err(|_| anyhow::anyhow!("the variable {var} holds no token"))?;
+                headers.push(("Authorization".into(), format!("Bearer {token}")));
+            }
+            client::McpClient::connect(name, url, headers, root, timeout).await
+        }
+        _ => anyhow::bail!("a server needs either a command or a url"),
+    }
+}
+
 /// Start each configured server and register what it offers.
 ///
 /// One server failing takes only that server with it. These are other people's programs and
@@ -43,19 +70,8 @@ pub async fn load(
 
     // Started side by side, and adopted in the order of their names.
     let enabled: Vec<_> = servers.iter().filter(|(_, s)| s.enabled).collect();
-    let started = futures::future::join_all(enabled.iter().map(|(name, spec)| {
-        client::McpClient::start(
-            name,
-            &spec.command,
-            &spec.args,
-            &spec.env,
-            root,
-            spec.timeout
-                .map(std::time::Duration::from_secs)
-                .unwrap_or(client::TIMEOUT),
-        )
-    }))
-    .await;
+    let started =
+        futures::future::join_all(enabled.iter().map(|(name, spec)| start(name, spec, root))).await;
     for ((name, _), started) in enabled.into_iter().zip(started) {
         let client = match started {
             Ok(c) => c,
