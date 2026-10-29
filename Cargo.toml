@@ -65,9 +65,9 @@ uuid = { version = "1", features = ["v4"] }
 lsp-types = "0.94"
 url = { version = "2", features = ["serde"] }
 
-# Landlock, to make the root a boundary for the shell too. Linux only, and the syscalls are
-# made directly so that what runs between fork and exec is exactly two of them.
-[target.'cfg(target_os = "linux")'.dependencies]
+# Landlock on Linux, whose syscalls are made directly so that what runs between fork and exec
+# is exactly two of them, and the signals that stop a hook's processes on any Unix.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]

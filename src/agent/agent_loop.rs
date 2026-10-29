@@ -673,6 +673,10 @@ pub struct TurnTally {
     pub energy_from: crate::backend::meter::Totals,
     /// The turn's number, as the change history counts turns.
     pub turn: u32,
+    /// How many times a turn-end hook kept the turn going.
+    pub held: u8,
+    /// What the turn-end hooks said at the answer, once they let it end.
+    pub turn_end: Option<Vec<crate::agent::hooks::Ran>>,
 }
 
 impl TurnTally {
@@ -1670,6 +1674,42 @@ impl Agent {
         // A file the person named travels with the question rather than being fetched
         // after it: they have already decided it is relevant, and on a local model the
         // round trip that would fetch it costs seconds.
+        // What the hooks make of the question: refused, or sent with what they add. The
+        // session's own hooks go with its first question.
+        let mut hooks_said = Vec::new();
+        if !self.cfg.delegated {
+            use crate::agent::hooks::{run_all, said, Event};
+            if self.turn == 1 {
+                let rans = run_all(
+                    &self.cfg.hooks.session_start,
+                    Event::SessionStart,
+                    &self.ctx.root,
+                    None,
+                    self.hook_input(Event::SessionStart, serde_json::json!({})),
+                )
+                .await;
+                hooks_said.extend(said(Event::SessionStart, &rans));
+            }
+            let rans = run_all(
+                &self.cfg.hooks.prompt,
+                Event::Prompt,
+                &self.ctx.root,
+                None,
+                self.hook_input(Event::Prompt, serde_json::json!({"prompt": user_input})),
+            )
+            .await;
+            if let Some(refusal) = rans.iter().find(|r| r.blocked) {
+                let _ = events
+                    .send(AgentEvent::Notice(format!(
+                        "a prompt hook refused the question:\n{}",
+                        refusal.output
+                    )))
+                    .await;
+                let _ = events.send(AgentEvent::TurnDone).await;
+                return Ok(());
+            }
+            hooks_said.extend(said(Event::Prompt, &rans));
+        }
         // A line that opens on an agent's name hands the rest to that agent.
         let user_input = match self.agent_named(&user_input) {
             Some((agent, rest)) => format!(
@@ -1705,6 +1745,9 @@ impl Agent {
         // Not when files were named: the person has already said what is relevant, and
         // guessing over the top of that is guessing against them.
         let mut text = expanded.text;
+        for note in hooks_said {
+            text.push_str(&format!("\n\n{note}"));
+        }
         if !self.cfg.delegated && expanded.attached.is_empty() && asks_about_the_project(&asked) {
             if let Some(found) =
                 crate::agent::retrieve::passages(&asked, &self.ctx.root, self.ctx.max_output_chars)
@@ -1745,6 +1788,20 @@ impl Agent {
             let _ = events.send(AgentEvent::Phase(Phase::Preparing)).await;
             self.carry_tasks().await;
             let dropped = self.session.compact();
+            if dropped > 0 && !self.cfg.hooks.compact.is_empty() {
+                use crate::agent::hooks::{run_all, said, Event};
+                let rans = run_all(
+                    &self.cfg.hooks.compact,
+                    Event::Compact,
+                    &self.ctx.root,
+                    None,
+                    self.hook_input(Event::Compact, serde_json::json!({"dropped": dropped})),
+                )
+                .await;
+                if let Some(text) = said(Event::Compact, &rans) {
+                    let _ = events.send(AgentEvent::Notice(text)).await;
+                }
+            }
             if dropped > 0 {
                 tracing::warn!(
                     dropped,
@@ -2009,6 +2066,19 @@ impl Agent {
                         ))
                         .await;
                     self.session.push(Message::user(NOT_LOOKED));
+                    self.close_step(record);
+                    continue;
+                }
+                // A turn-end hook that blocks hands its reason back, and the turn goes on.
+                if let Some(reason) = self.held_by_turn_end(&turn.text).await {
+                    let _ = events
+                        .send(AgentEvent::Notice(format!(
+                            "a turn-end hook keeps the turn going:\n{reason}"
+                        )))
+                        .await;
+                    self.session.push(Message::user(format!(
+                        "A turn-end hook does not let the turn end yet:\n{reason}"
+                    )));
                     self.close_step(record);
                     continue;
                 }
@@ -2604,18 +2674,23 @@ impl Agent {
         // memory, not a session, and a turn is the unit a person would call a piece of
         // work anyway.
         self.history.save();
-        if let Some(hook) = self.cfg.hooks.turn_end.clone() {
-            let ran = crate::agent::hooks::run(&hook, &self.ctx.root, "", "turn-end").await;
-            if !ran.output.is_empty() {
-                let mark = if ran.ok {
-                    "turn-end hook"
-                } else {
-                    "turn-end hook failed"
-                };
-                let _ = events
-                    .send(AgentEvent::Notice(format!("{mark}:\n{}", ran.output)))
-                    .await;
+        // The hooks run here when the turn ended some other way than an answer, and what
+        // they said at the answer is told now.
+        let rans = match self.this_turn.turn_end.clone() {
+            Some(rans) => rans,
+            None => {
+                crate::agent::hooks::run_all(
+                    &self.cfg.hooks.turn_end,
+                    crate::agent::hooks::Event::TurnEnd,
+                    &self.ctx.root,
+                    None,
+                    self.hook_input(crate::agent::hooks::Event::TurnEnd, serde_json::json!({})),
+                )
+                .await
             }
+        };
+        if let Some(text) = crate::agent::hooks::said(crate::agent::hooks::Event::TurnEnd, &rans) {
+            let _ = events.send(AgentEvent::Notice(text)).await;
         }
         let _ = events.send(AgentEvent::TurnDone).await;
     }
@@ -2631,6 +2706,52 @@ impl Agent {
         // The hook runs here too: an abandoned turn can have changed files, and that is
         // exactly when a formatter or a test suite is worth running.
         self.end_turn(events).await;
+    }
+
+    /// How many times turn-end hooks may keep one turn going.
+    const HELD_AT_MOST: u8 = 2;
+
+    /// Run the turn-end hooks on the answer. The reason they give when one blocks and the
+    /// turn may still be kept going; otherwise what they said is kept for the end of the
+    /// turn.
+    async fn held_by_turn_end(&mut self, answer: &str) -> Option<String> {
+        if self.cfg.hooks.turn_end.is_empty() {
+            return None;
+        }
+        let rans = crate::agent::hooks::run_all(
+            &self.cfg.hooks.turn_end,
+            crate::agent::hooks::Event::TurnEnd,
+            &self.ctx.root,
+            None,
+            self.hook_input(
+                crate::agent::hooks::Event::TurnEnd,
+                serde_json::json!({"answer": answer}),
+            ),
+        )
+        .await;
+        match rans.iter().find(|r| r.blocked) {
+            Some(r) if self.this_turn.held < Self::HELD_AT_MOST => {
+                self.this_turn.held += 1;
+                Some(r.output.clone())
+            }
+            _ => {
+                self.this_turn.turn_end = Some(rans);
+                None
+            }
+        }
+    }
+
+    /// What a hook is given: the event, the session and the project, with `facts`.
+    fn hook_input(&self, event: crate::agent::hooks::Event, facts: Value) -> Value {
+        let mut input = serde_json::json!({
+            "event": event.label(),
+            "session_id": self.session.id,
+            "root": self.ctx.root,
+        });
+        if let (Some(input), Some(facts)) = (input.as_object_mut(), facts.as_object()) {
+            input.extend(facts.clone());
+        }
+        input
     }
 
     /// Take again the tools of each server that said they changed, so this turn offers
@@ -2994,7 +3115,7 @@ impl Agent {
         unreachable!()
     }
 
-    async fn dispatch_tool(&self, id: &str, name: &str, args: Value) -> ToolOutput {
+    async fn dispatch_tool(&self, id: &str, name: &str, mut args: Value) -> ToolOutput {
         // The call's own context: what it prints carries the id of its step and fills a
         // tail of its own, and it can be stopped alone, the turn going on without it.
         let ctx = crate::tools::registry::ToolCtx {
@@ -3024,19 +3145,31 @@ impl Agent {
                  Say what you would do with it as a step of the plan."
             ));
         }
-        // Only around a call that changes something: a hook on every read would run on
-        // the searches an agent does by the dozen, and there is nothing there to check.
-        if tool.mutates() {
-            if let Some(hook) = self.cfg.hooks.pre_tool.clone() {
-                let ran = crate::agent::hooks::run(&hook, &self.ctx.root, name, "pre-tool").await;
-                if !ran.ok {
-                    return ToolOutput::err(format!(
-                        "refused before it ran, by this project's pre-tool hook:\n{}",
-                        ran.output
-                    ));
-                }
-            }
+        // Around a call that changes something, and around the reads a hook names: a hook
+        // on every read would run on the searches an agent does by the dozen.
+        use crate::agent::hooks::{run_all, said, Event};
+        let target = Some((name, tool.mutates()));
+        let before = run_all(
+            &self.cfg.hooks.pre_tool,
+            Event::PreTool,
+            &self.ctx.root,
+            target,
+            self.hook_input(
+                Event::PreTool,
+                serde_json::json!({"tool": name, "args": args}),
+            ),
+        )
+        .await;
+        if let Some(refusal) = before.iter().find(|r| r.blocked) {
+            return ToolOutput::err(format!(
+                "refused before it ran, by a pre-tool hook:\n{}",
+                refusal.output
+            ));
         }
+        if let Some(changed) = before.iter().rev().find_map(|r| r.args.clone()) {
+            args = changed;
+        }
+        let args_seen = args.clone();
         let started = std::time::Instant::now();
         ctx.offer_stop(name).await;
         let out = match tool.run(&ctx, args).await {
@@ -3068,17 +3201,27 @@ impl Agent {
             }
             None => out,
         };
-        if tool.mutates() {
-            if let Some(hook) = self.cfg.hooks.post_tool.clone() {
-                let ran = crate::agent::hooks::run(&hook, &self.ctx.root, name, "post-tool").await;
-                // What it says is handed over whether it succeeded or not: a formatter
-                // that rewrote the file has something the model needs to know.
-                if !ran.output.is_empty() {
-                    let mut out = out;
-                    out.content
-                        .push_str(&format!("\n\npost-tool hook:\n{}", ran.output));
-                    return out;
-                }
+        // What the hooks say is handed over whether they succeeded or not: a formatter
+        // that rewrote the file has something the model needs to know.
+        let after = run_all(
+            &self.cfg.hooks.post_tool,
+            Event::PostTool,
+            &self.ctx.root,
+            target,
+            self.hook_input(
+                Event::PostTool,
+                serde_json::json!({
+                    "tool": name,
+                    "args": args_seen,
+                    "result": {"content": out.content, "is_error": out.is_error},
+                }),
+            ),
+        )
+        .await;
+        let mut out = out;
+        for (event, rans) in [(Event::PreTool, &before), (Event::PostTool, &after)] {
+            if let Some(text) = said(event, rans) {
+                out.content.push_str(&format!("\n\n{text}"));
             }
         }
         tracing::info!(
@@ -3822,6 +3965,45 @@ mod tests {
         }
     }
 
+    /// A turn-end hook that blocks hands its reason to the model, and the turn goes on
+    /// until the hook lets it end.
+    #[tokio::test]
+    async fn a_turn_end_hook_keeps_the_turn_going_once() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"really done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let reg = crate::boot::build_registry(h.root.clone()).0;
+        let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
+        agent.cfg.hooks.turn_end = vec![crate::config::Hook {
+            command: "test -f held || { touch held; echo the tests fail >&2; exit 2; }".into(),
+            matches: None,
+            timeout: None,
+        }];
+        let events = drive(&mut agent, "fix it").await;
+        let answers: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::AssistantText(s) if !s.is_empty() => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answers, ["done", "really done"]);
+        assert!(agent
+            .session
+            .history
+            .iter()
+            .any(|m| m.content.contains("the tests fail")));
+    }
+
     /// A delegated session that runs out of steps says so, rather than handing back what
     /// it was about to do as its answer.
     #[tokio::test]
@@ -4467,7 +4649,11 @@ mod tests {
         .await;
 
         let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
-        agent.cfg.hooks.pre_tool = Some("echo the tree is not clean >&2; exit 1".into());
+        agent.cfg.hooks.pre_tool = vec![crate::config::Hook {
+            command: "echo the tree is not clean >&2; exit 1".into(),
+            matches: None,
+            timeout: None,
+        }];
         let events = drive(&mut agent, "change it").await;
 
         let refusal = events
@@ -4496,7 +4682,11 @@ mod tests {
         ])])
         .await;
         let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
-        agent.cfg.hooks.turn_end = Some("echo formatted 3 files".into());
+        agent.cfg.hooks.turn_end = vec![crate::config::Hook {
+            command: "echo formatted 3 files".into(),
+            matches: None,
+            timeout: None,
+        }];
         let events = drive(&mut agent, "hello").await;
         assert!(
             events.iter().any(|e| matches!(

@@ -668,17 +668,43 @@ shows it under PLAN with how far it has got. It writes nothing and needs no appr
 [hooks]
 pre-tool = "./scripts/guard.sh"
 post-tool = "cargo fmt"
-turn-end = "cargo test --quiet"
+turn-end = ["cargo fmt --check", "cargo test --quiet"]
+
+[[hooks.pre-tool]]
+match = "read_file|grep"           # tools by name, * for any run of characters
+command = "./scripts/no-secrets.sh"
+timeout = 10
 ```
 
-| Hook | |
-|---|---|
-| `pre-tool` | runs before a tool that changes something. A non-zero exit refuses the call, and its output goes to the model |
-| `post-tool` | runs after such a tool. Its output goes to the model |
-| `turn-end` | runs when a turn ends, abandoned or not. Its output goes to you |
+A hook is a command, or a table with `command`, `match` and `timeout`, alone or in a list. The
+user's hooks and the project's both run, the user's first.
 
-The tool hooks run only around tools that change something. A hook gets the tool's name, the
-project root and its edge in the environment. Its time and its output are bounded.
+| Event | When | What blocking does |
+|---|---|---|
+| `session-start` | before the first question of a session | nothing. What it says goes with the question |
+| `prompt` | when a question is asked, before the model sees it | refuses the question. What it says goes with the question |
+| `pre-tool` | before a tool runs | refuses the call. Its JSON may give other arguments |
+| `post-tool` | after a tool ran | nothing. What it says goes with the result |
+| `turn-end` | when the model has answered, or the turn ended otherwise | hands the reason to the model and the turn goes on, twice at most |
+| `agent-end` | when an agent has answered | nothing. What it says goes with the answer |
+| `compact` | when the oldest steps have left the window | nothing. What it says goes to you |
+
+A tool hook without `match` runs around the tools that change something.
+
+A hook reads one JSON object on its standard input: the event, the session, the project, and
+what the event is about (the tool and its arguments, the result, the question, the answer). It
+also finds `LOKODE_HOOK`, `LOKODE_TOOL` and `LOKODE_ROOT` in its environment.
+
+| Exit | Meaning |
+|---|---|
+| 0 | go on. What it printed is handed on, or read as a decision when it is a JSON object |
+| 2 | block. Its error output, or else its output, says why |
+| other | it failed. A failed `pre-tool` hook refuses the call |
+
+A decision is `{"decision": "block", "reason": "..."}`, with `context` for what to hand the
+model and `args` for the arguments a `pre-tool` hook wants the call made with. A hook that
+outlives its timeout, 30 seconds by default, is stopped with everything it started. Its output
+is bounded.
 
 ## Commands a project ships
 

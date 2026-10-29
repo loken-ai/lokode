@@ -277,10 +277,7 @@ impl Tool for Delegate {
                 guess_with: None,
                 roles: w.roles.clone(),
                 mode,
-                hooks: match writes {
-                    true => w.hooks.clone(),
-                    false => Default::default(),
-                },
+                hooks: w.hooks.clone(),
                 instructions: None,
                 remember_model_in: None,
                 context_tokens: window,
@@ -353,6 +350,7 @@ impl Tool for Delegate {
             }
             events
         });
+        let task = a.task.clone();
         let outcome = sub.run_user_turn(a.task, cancel, tx).await;
         let events = drain.await.unwrap_or_default();
         if let Err(e) = outcome {
@@ -401,6 +399,24 @@ impl Tool for Delegate {
                 .map(|f| format!("edited {f}"))
                 .collect();
             answer = format!("{answer}\n\nIt changed:\n{}", changed.join("\n"));
+        }
+        // What the agent-end hooks make of the answer goes with it.
+        let rans = crate::agent::hooks::run_all(
+            &w.hooks.agent_end,
+            crate::agent::hooks::Event::AgentEnd,
+            &ctx.root,
+            None,
+            json!({
+                "event": "agent-end",
+                "root": ctx.root,
+                "agent": name,
+                "task": task,
+                "answer": answer,
+            }),
+        )
+        .await;
+        if let Some(text) = crate::agent::hooks::said(crate::agent::hooks::Event::AgentEnd, &rans) {
+            answer = format!("{answer}\n\n{text}");
         }
         if called_after {
             return Ok(ToolOutput::ok(ctx.clamp(format!(

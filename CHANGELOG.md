@@ -31,6 +31,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Shell: run commands in a sandbox by default, and let the model ask to leave it.
 - Agents: hand work to named agents with their own tools, in the background in a worktree.
 - Plans: put the finished plan to the user, and keep the task list when a session resumes.
+- Hooks: run hooks at every edge of a session, and read their decision.
 - MCP: reach servers over HTTP, sign in, restart them, and let them ask the model or the user.
 
 ### Changed
