@@ -52,9 +52,9 @@ const FAILED: i64 = -32603;
 /// The commands of the terminal an editor has no use for: they act on its screen.
 const SCREEN_ONLY: &[&str] = &["jobs", "copy", "resume", "help"];
 
-/// The connection to the editor.
-struct Conn {
-    out: mpsc::UnboundedSender<Value>,
+/// The connection to a client: an editor, or the pages of `lokode serve`.
+pub struct Conn {
+    out: Sink,
     pending: std::sync::Mutex<HashMap<i64, oneshot::Sender<Value>>>,
     next: AtomicI64,
     /// What the editor said it can do.
@@ -65,7 +65,7 @@ struct Conn {
 
 impl Conn {
     fn send(&self, msg: Value) {
-        let _ = self.out.send(msg);
+        (self.out)(msg);
     }
 
     fn notify(&self, method: &str, params: Value) {
@@ -113,7 +113,7 @@ impl Conn {
 }
 
 /// One session the editor opened.
-struct Session {
+pub struct Session {
     id: String,
     root: PathBuf,
     turns: mpsc::Sender<Turn>,
@@ -182,6 +182,76 @@ impl crate::tools::registry::Editor for EditorFiles {
 }
 
 /// Serve the editor on standard input and output until it closes them.
+/// Where the messages for the client go.
+pub type Sink = Box<dyn Fn(Value) + Send + Sync>;
+
+/// A connection to a client, whose messages go to `out`.
+pub fn connect(out: Sink, config_for: ConfigFor) -> Arc<Conn> {
+    Arc::new(Conn {
+        out,
+        pending: Default::default(),
+        next: AtomicI64::new(1),
+        client: Default::default(),
+        sessions: Default::default(),
+        config_for,
+    })
+}
+
+/// Take one message of the client's: a request, answered when it is done, a
+/// notification, or the answer to a question of lokode's.
+pub fn dispatch(conn: &Arc<Conn>, msg: Value) {
+    let method = msg
+        .get("method")
+        .and_then(|m| m.as_str())
+        .map(str::to_string);
+    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    match (msg.get("id").cloned(), method) {
+        (Some(id), Some(method)) => {
+            let conn = conn.clone();
+            tokio::spawn(async move {
+                let result = handle(&conn, &method, &params).await;
+                let opened = match (&result, method.as_str()) {
+                    (Ok(r), "session/new") => r.get("sessionId").cloned(),
+                    (Ok(_), "session/load") => params.get("sessionId").cloned(),
+                    _ => None,
+                };
+                conn.reply(&id, result);
+                // Offered once the client knows the session.
+                if let Some(opened) = opened {
+                    if let Ok(session) = session_of(&conn, &json!({"sessionId": opened})).await {
+                        conn.update(
+                            &session.id,
+                            json!({"sessionUpdate": "available_commands_update", "availableCommands": commands_of(&session)}),
+                        );
+                    }
+                }
+            });
+        }
+        (None, Some(method)) => {
+            let conn = conn.clone();
+            tokio::spawn(async move { notified(&conn, &method, &params).await });
+        }
+        (Some(id), None) => {
+            let waiting = id
+                .as_i64()
+                .and_then(|id| conn.pending.lock().ok()?.remove(&id));
+            if let Some(tx) = waiting {
+                let _ = tx.send(msg);
+            }
+        }
+        (None, None) => {}
+    }
+}
+
+/// Close every session of the connection, their transcripts written out.
+pub async fn close(conn: &Arc<Conn>) {
+    let sessions: Vec<Arc<Session>> = conn.sessions.lock().await.values().cloned().collect();
+    for session in sessions {
+        session.close().await;
+    }
+}
+
+/// Serve the editor on standard input and output until it closes them.
 pub async fn run(config_for: ConfigFor) -> Result<()> {
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Value>();
     let writer = tokio::spawn(async move {
@@ -194,70 +264,23 @@ pub async fn run(config_for: ConfigFor) -> Result<()> {
             }
         }
     });
-    let conn = Arc::new(Conn {
-        out: out_tx,
-        pending: Default::default(),
-        next: AtomicI64::new(1),
-        client: Default::default(),
-        sessions: Default::default(),
+    let conn = connect(
+        Box::new(move |msg| {
+            let _ = out_tx.send(msg);
+        }),
         config_for,
-    });
+    );
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
-            tracing::warn!("an unreadable line from the editor");
-            continue;
-        };
-        let method = msg
-            .get("method")
-            .and_then(|m| m.as_str())
-            .map(str::to_string);
-        match (msg.get("id").cloned(), method) {
-            (Some(id), Some(method)) => {
-                let conn = conn.clone();
-                let params = msg.get("params").cloned().unwrap_or(Value::Null);
-                tokio::spawn(async move {
-                    let result = handle(&conn, &method, &params).await;
-                    let opened = match (&result, method.as_str()) {
-                        (Ok(r), "session/new") => r.get("sessionId").cloned(),
-                        (Ok(_), "session/load") => params.get("sessionId").cloned(),
-                        _ => None,
-                    };
-                    conn.reply(&id, result);
-                    // Offered once the editor knows the session.
-                    if let Some(opened) = opened {
-                        if let Ok(session) = session_of(&conn, &json!({"sessionId": opened})).await
-                        {
-                            conn.update(
-                                &session.id,
-                                json!({"sessionUpdate": "available_commands_update", "availableCommands": commands_of(&session)}),
-                            );
-                        }
-                    }
-                });
-            }
-            (None, Some(method)) => {
-                let params = msg.get("params").cloned().unwrap_or(Value::Null);
-                notified(&conn, &method, &params).await;
-            }
-            (Some(id), None) => {
-                let waiting = id
-                    .as_i64()
-                    .and_then(|id| conn.pending.lock().ok()?.remove(&id));
-                if let Some(tx) = waiting {
-                    let _ = tx.send(msg);
-                }
-            }
-            (None, None) => {}
+        match serde_json::from_str::<Value>(&line) {
+            Ok(msg) => dispatch(&conn, msg),
+            Err(_) => tracing::warn!("an unreadable line from the editor"),
         }
     }
-    let sessions: Vec<Arc<Session>> = conn.sessions.lock().await.values().cloned().collect();
-    for session in sessions {
-        session.close().await;
-    }
+    close(&conn).await;
     drop(conn);
     let _ = tokio::time::timeout(SHUTDOWN_GRACE, writer).await;
     Ok(())
@@ -294,6 +317,13 @@ async fn handle(conn: &Arc<Conn>, method: &str, params: &Value) -> Result<Value,
                 .get("sessionId")
                 .and_then(|s| s.as_str())
                 .map(str::to_string);
+            // A session already open is not opened twice: its pages attach to it.
+            if let Some(id) = &resume {
+                if let Some(open) = conn.sessions.lock().await.get(id).cloned() {
+                    let current = open.mode.lock().map(|m| *m).unwrap_or("act");
+                    return Ok(json!({"modes": updates::modes(current)}));
+                }
+            }
             let servers = params.get("mcpServers").cloned().unwrap_or(Value::Null);
             let (session, restored) = open(conn, Path::new(cwd), resume, &servers)
                 .await

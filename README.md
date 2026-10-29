@@ -904,6 +904,24 @@ Flags go before `acp`: `lokode --tool-protocol native acp`.
 - A project's settings that wait for trust stay out, since nobody can be asked. Run `lokode`
   once in the project to trust them, or give the editor `--trust-project`.
 
+## In a browser
+
+`lokode serve` serves the project's sessions to a browser page, on 127.0.0.1 only. It prints the
+address to open, with a token that the page then keeps in a cookie.
+
+```sh
+lokode serve --port 8420
+```
+
+- The page shows the thread, each step with its diff, the approvals and the tool servers' forms
+  as cards, and a rail with the plan, the changes, the window and the energy.
+- `/` offers the commands, as in the terminal. Enter sends, esc stops the turn.
+- A session goes on when its page is closed. A page opened later attaches to it, with what it
+  said and what it still waits on. Several pages can follow one session.
+- The page speaks the Agent Client Protocol, its events on a stream and its messages posted.
+- Another machine reaches it through an ssh tunnel: `ssh -L 8420:127.0.0.1:8420 host`.
+- The `Host` and `Origin` of every request are checked, so a page elsewhere cannot reach it.
+
 ## Without the interface
 
 `-p` runs one turn and exits.

@@ -166,6 +166,12 @@ struct Cli {
 enum Command {
     /// Serve an editor over the Agent Client Protocol, on standard input and output.
     Acp,
+    /// Serve the project's sessions to a browser page, on this machine only.
+    Serve {
+        /// The port on 127.0.0.1. Any free one when not given.
+        #[arg(long)]
+        port: Option<u16>,
+    },
     /// Install, update, remove or list plugins.
     Plugin {
         #[command(subcommand)]
@@ -203,7 +209,8 @@ fn main() -> Result<()> {
     let mut cli = Cli::parse();
     match cli.command.take() {
         Some(Command::Plugin { action }) => return plugin_command(action),
-        Some(Command::Acp) => return acp_command(cli),
+        Some(Command::Acp) => return acp_command(cli, None),
+        Some(Command::Serve { port }) => return acp_command(cli, Some(port.unwrap_or(0))),
         None => {}
     }
 
@@ -440,9 +447,16 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
 
 /// Ask on the terminal whether to trust the project's guarded settings. No when there is
 /// no terminal to ask on.
-/// Serve an editor: each session it opens is configured for its project as the terminal
-/// would be. A project's guarded settings wait for trust, since nobody can be asked here.
-fn acp_command(cli: Cli) -> Result<()> {
+/// Serve an editor, or with `port` the pages of a browser: each session is configured for
+/// its project as the terminal would be. A project's guarded settings wait for trust,
+/// since nobody can be asked here.
+fn acp_command(cli: Cli, port: Option<u16>) -> Result<()> {
+    let root = cli.root.canonicalize().map_err(|e| {
+        anyhow::anyhow!(
+            "--root {} could not be canonicalized: {e}",
+            cli.root.display()
+        )
+    })?;
     let _log_guard = init_logging(cli.log_file.clone().or_else(|| env_path("LOKODE_LOG_FILE")))?;
     let config_for: lokode::acp::ConfigFor = std::sync::Arc::new(move |root: &std::path::Path| {
         let config::Loaded { file, untrusted } = config::load(root, cli.trust_project)?;
@@ -459,7 +473,10 @@ fn acp_command(cli: Cli) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(lokode::acp::run(config_for))
+    match port {
+        Some(port) => runtime.block_on(lokode::serve::run(config_for, root, port)),
+        None => runtime.block_on(lokode::acp::run(config_for)),
+    }
 }
 
 /// Install, update, remove or list plugins, saying what was done.

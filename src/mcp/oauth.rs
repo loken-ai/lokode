@@ -554,7 +554,7 @@ fn read_token(mut tokens: Tokens, got: &Value) -> Result<Tokens> {
 }
 
 /// Random bytes, written for a url.
-fn random() -> String {
+pub(crate) fn random() -> String {
     let mut bytes = [0u8; SECRET_BYTES];
     getrandom::fill(&mut bytes).expect("the system gives no random bytes");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)

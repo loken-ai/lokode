@@ -22,6 +22,7 @@
 //! - [`sandbox`] - what the agent may touch, and what the user has agreed to.
 //! - [`config`] - settings, from a flag, the environment, a project file or a user file.
 //! - [`paths`] - where logs and transcripts live.
+//! - [`serve`] - the sessions of a project in a browser page, over the same protocol.
 //!
 //! # Two things worth knowing before changing anything
 //!
@@ -50,6 +51,7 @@ pub mod mcp;
 pub mod paths;
 pub mod plugins;
 pub mod sandbox;
+pub mod serve;
 pub mod tools;
 pub mod trust;
 pub mod ui;
