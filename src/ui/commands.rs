@@ -600,7 +600,10 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                     .as_ref()
                     .map(|t| t.join(", "))
                     .unwrap_or_else(|| "those that change nothing".into()),
-                a.model.as_deref().unwrap_or("its role's"),
+                match &a.backend {
+                    Some(b) => format!("{} on {b}", a.model.as_deref().unwrap_or("none named")),
+                    None => a.model.as_deref().unwrap_or("its role's").to_string(),
+                },
                 a.from,
             ));
         }

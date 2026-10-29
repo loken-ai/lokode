@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 /// The top-level tables of a project file that apply only once trusted.
-pub const GUARDED: &[&str] = &["hooks", "mcp", "lsp", "shell", "backend", "web", "session"];
+pub const GUARDED: &[&str] = &[
+    "hooks", "mcp", "lsp", "shell", "backend", "backends", "web", "session",
+];
 
 /// A project file, split into what applies at once and what waits for trust.
 #[derive(Debug, Clone, PartialEq)]

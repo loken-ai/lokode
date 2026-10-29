@@ -331,8 +331,18 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             .map(str::to_string)
             .unwrap_or_else(|| model.clone())
     };
+    let mut backends = std::collections::HashMap::new();
+    for (name, b) in &cfg.backends {
+        match provider(b.kind, &b.url, &b.headers) {
+            Ok(p) => {
+                backends.insert(name.clone(), p);
+            }
+            Err(e) => model_notes.push(format!("the backend {name} cannot be used: {e:#}")),
+        }
+    }
     let delegation = Arc::new(crate::tools::delegate::Delegation {
         backend: backend.clone(),
+        backends,
         registry: registry_for_delegation.clone(),
         agents: cfg.agents.clone(),
         search_model: role_or_session(crate::agent::roles::Role::Search),
@@ -498,10 +508,18 @@ fn background_provider(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provid
 /// Bearer` for the OpenAI-compatible family, `x-api-key` for Anthropic. Converting a
 /// working configuration between them is a header change, not a value change.
 fn provider_for(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Provider>> {
-    match cfg.backend_kind {
+    provider(cfg.backend_kind, &cfg.backend_url, &cfg.headers)
+}
+
+/// The client for a backend at `url` that speaks `kind`, sending `headers`.
+fn provider(
+    kind: crate::config::BackendKind,
+    url: &str,
+    headers: &[(String, String)],
+) -> Result<Arc<dyn crate::backend::provider::Provider>> {
+    match kind {
         crate::config::BackendKind::Anthropic => {
-            let key = cfg
-                .headers
+            let key = headers
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
                 .map(|(_, v)| v.trim_start_matches("Bearer ").to_string())
@@ -512,14 +530,14 @@ fn provider_for(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Pro
                     )
                 })?;
             Ok(Arc::new(crate::backend::anthropic::AnthropicProvider::new(
-                cfg.backend_url.clone(),
+                url.to_string(),
                 &key,
             )?))
         }
         // `auto` is settled against the URL before it reaches here.
         _ => Ok(Arc::new(BackendClient::with_headers(
-            cfg.backend_url.clone(),
-            &cfg.headers,
+            url.to_string(),
+            headers,
         ))),
     }
 }

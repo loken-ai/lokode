@@ -3455,6 +3455,7 @@ mod tests {
             backend: Arc::new(crate::backend::client::BackendClient::new(
                 backend.to_string(),
             )),
+            backends: Default::default(),
             registry: Arc::new(registry),
             agents: vec![explore],
             search_model: "test".into(),
@@ -3542,6 +3543,7 @@ mod tests {
                     backend: Arc::new(crate::backend::client::BackendClient::new(
                         backend.url.clone(),
                     )),
+                    backends: Default::default(),
                     registry: Arc::new(reg.clone()),
                     agents: vec![crate::agent::agents::AgentSpec::explore(), scribe],
                     search_model: "test".into(),
@@ -3563,6 +3565,76 @@ mod tests {
             drive(&mut agent, "go").await;
             assert_eq!(h.path("b.txt").exists(), !planning, "planning: {planning}");
         }
+    }
+
+    /// An agent that names another backend runs there, and the session's backend is
+    /// asked nothing on its behalf.
+    #[tokio::test]
+    async fn an_agent_runs_on_the_backend_it_names() {
+        let h = Harness::new(Answer::Yes);
+        let here = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"delegate","arguments":"{\"agent\": \"far\", \"task\": \"say where you are\"}"}}]}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let there = fake_backend(vec![sse(&[
+            r#"{"choices":[{"delta":{"content":"from elsewhere"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ])])
+        .await;
+        let mut reg = crate::boot::build_registry(h.root.clone()).0;
+        let far = crate::agent::agents::parse(
+            "far",
+            "---\nbackend: far\nmodel: big\n---\nAnswer.",
+            "test",
+        )
+        .unwrap();
+        let mut backends: std::collections::HashMap<
+            String,
+            Arc<dyn crate::backend::provider::Provider>,
+        > = Default::default();
+        backends.insert(
+            "far".into(),
+            Arc::new(crate::backend::client::BackendClient::new(
+                there.url.clone(),
+            )),
+        );
+        reg.register(crate::tools::delegate::Delegate::new(Arc::new(
+            crate::tools::delegate::Delegation {
+                backend: Arc::new(crate::backend::client::BackendClient::new(here.url.clone())),
+                backends,
+                registry: Arc::new(reg.clone()),
+                agents: vec![crate::agent::agents::AgentSpec::explore(), far],
+                search_model: "test".into(),
+                edit_model: "test".into(),
+                roles: Default::default(),
+                models: Default::default(),
+                context_tokens: 8192,
+                max_answer_tokens: 4096,
+                protocol: Default::default(),
+                grammar_enabled: false,
+                max_steps: 4,
+                slots: Arc::new(tokio::sync::Semaphore::new(2)),
+                hooks: Default::default(),
+                lsp: None,
+            },
+        )));
+        let mut agent = agent_with(&h, &here, ToolProtocol::Native, reg);
+        let events = drive(&mut agent, "go").await;
+        let result = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult { name, output, .. } if name == "delegate" => Some(output),
+                _ => None,
+            })
+            .expect("the delegation was never answered");
+        assert_eq!(result.content, "from elsewhere");
     }
 
     /// A delegated session that runs out of steps says so, rather than handing back what

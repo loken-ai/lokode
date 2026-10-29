@@ -24,6 +24,8 @@ use crate::tools::registry::{Registry, Tool, ToolCtx, ToolOutput};
 /// call, and sharing one would share its history, which is the opposite of the point.
 pub struct Delegation {
     pub backend: Arc<dyn crate::backend::provider::Provider>,
+    /// The other backends an agent can run on, by their name in `[backends]`.
+    pub backends: std::collections::HashMap<String, Arc<dyn crate::backend::provider::Provider>>,
     /// The session's tools, without the delegation. Each agent gets its share of them.
     pub registry: Arc<Registry>,
     pub agents: Vec<crate::agent::agents::AgentSpec>,
@@ -78,6 +80,17 @@ impl Delegation {
     pub fn unknown(&self) -> Vec<String> {
         let mut out = Vec::new();
         for spec in &self.agents {
+            match (&spec.backend, &spec.model) {
+                (Some(b), _) if !self.backends.contains_key(b) => out.push(format!(
+                    "the agent {} names the backend {b}, which [backends] does not have",
+                    spec.name
+                )),
+                (Some(b), None) => out.push(format!(
+                    "the agent {} runs on the backend {b} and names no model for it",
+                    spec.name
+                )),
+                _ => {}
+            }
             for name in spec.tools.iter().flatten() {
                 if self.registry.get(name).is_none() || NEVER.contains(&name.as_str()) {
                     out.push(format!(
@@ -178,6 +191,28 @@ impl Tool for Delegate {
                 names.join(", ")
             )));
         };
+        // Its own backend when it names one, which it then needs a model for. The way the
+        // session's backend takes tools is not that backend's, so it starts native.
+        let (backend, protocol, elsewhere) = match &spec.backend {
+            None => (w.backend.clone(), w.protocol.get(), false),
+            Some(b) => match (w.backends.get(b), &spec.model) {
+                (Some(p), Some(_)) => (
+                    p.clone(),
+                    crate::agent::protocol::ToolProtocol::Native,
+                    true,
+                ),
+                (None, _) => {
+                    return Ok(ToolOutput::err(format!(
+                        "the agent {name} names the backend {b}, which [backends] does not have"
+                    )))
+                }
+                (Some(_), None) => {
+                    return Ok(ToolOutput::err(format!(
+                        "the agent {name} runs on the backend {b} and names no model for it"
+                    )))
+                }
+            },
+        };
         let registry = Arc::new(w.tools_of(spec));
         let writes = registry.iter().any(|(_, t)| t.mutates());
         // A place among those that run at once, given up if the call is stopped first.
@@ -206,7 +241,7 @@ impl Tool for Delegate {
         };
         let system = crate::agent::agent_loop::Agent::build_system_prompt(
             &registry,
-            w.protocol.get(),
+            protocol,
             crate::agent::agent_loop::Mode::Act,
             Some(&spec.prompt),
         );
@@ -230,7 +265,7 @@ impl Tool for Delegate {
             steps: Vec::new(),
             lsp: w.lsp.clone().filter(|_| writes),
             steer: tokio::sync::mpsc::channel(1).1,
-            backend: w.backend.clone(),
+            backend,
             registry,
             session: crate::agent::session::Session::new(system, window, w.max_answer_tokens),
             cfg: crate::agent::agent_loop::AgentConfig {
@@ -252,8 +287,10 @@ impl Tool for Delegate {
                 grammar_enabled: w.grammar_enabled,
                 max_steps,
                 max_answer_tokens: w.max_answer_tokens,
-                protocol: w.protocol.get(),
-                allow_fallback: false,
+                protocol,
+                // On a backend of its own, a refusal of native tools drops this session to
+                // the envelope, as the main session's probe would have.
+                allow_fallback: elsewhere,
                 shared_protocol: None,
                 delegated: true,
             },

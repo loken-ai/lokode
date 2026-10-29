@@ -50,6 +50,8 @@ pub struct AppConfig {
     pub parallel_delegates: usize,
     /// The agents a turn can hand work to.
     pub agents: Vec<crate::agent::agents::AgentSpec>,
+    /// The other backends an agent can run on, by name.
+    pub backends: BTreeMap<String, crate::config::NamedBackend>,
     /// What is settled in advance about approvals.
     pub policy: crate::sandbox::policy::Policy,
     /// Commands to run at the edges of a tool call and a turn.

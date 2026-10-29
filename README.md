@@ -75,8 +75,8 @@ or the startup probe. A server that measures nothing shows nothing, never a zero
   it is refused. A file may be created in a directory that does not exist yet. The check
   applies to where the write lands.
 - **A project is trusted first.** A project's `.lokode.toml` can run programs or loosen
-  approvals. Its `[hooks]`, `[mcp]`, `[lsp]`, `[shell]`, `[backend]`, `[web]`, `[session]` and
-  `[approve.allow]` apply once you trust them. The first session in the project shows them
+  approvals. Its `[hooks]`, `[mcp]`, `[lsp]`, `[shell]`, `[backend]`, `[backends]`, `[web]`,
+  `[session]` and `[approve.allow]` apply once you trust them. The first session in the project shows them
   and asks. A change to them asks again.
 - **Changes are approved.** A change arrives in the conversation as a diff to accept or
   decline. An agreement covers what you were shown: this command, writes under this
@@ -614,6 +614,18 @@ Read the changes since the last commit and say what is wrong with them.
 | `tools` | the tools that change nothing |
 | `model` | the `search` role for an agent that changes nothing, the `edit` role otherwise, else the session's model |
 | `max-steps` | 8 for an agent that changes nothing, the session's limit otherwise |
+| `backend` | the session's backend. Another one is named in `[backends]`, and then `model` is needed |
+
+An agent can run on another machine or another API:
+
+```toml
+[backends.amd]
+url = "http://amd.local:11435"
+
+[backends.claude]
+url = "https://api.anthropic.com"
+api-key-env = "ANTHROPIC_API_KEY"
+```
 
 - The project's agent takes the place of the user's of the same name.
 - An agent never has the task list or `delegate`.
@@ -764,7 +776,7 @@ transcripts = true
 
 | | |
 |---|---|
-| Waits for trust | `[hooks]`, `[mcp]`, `[lsp]`, `[shell]`, `[backend]`, `[web]`, `[session]`, `[approve.allow]` |
+| Waits for trust | `[hooks]`, `[mcp]`, `[lsp]`, `[shell]`, `[backend]`, `[backends]`, `[web]`, `[session]`, `[approve.allow]` |
 | Applies at once | everything else, `[approve.deny]` included |
 | Asked | at the first interactive session, and again after a change to them |
 | Without a terminal | left out, with a warning. `--trust-project` takes them for one run |

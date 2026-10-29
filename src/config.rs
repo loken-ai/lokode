@@ -188,6 +188,9 @@ pub struct FileConfig {
     pub tool_protocol: Option<String>,
     #[serde(default)]
     pub backend: BackendSection,
+    /// Other backends, by name, for the agents that name one.
+    #[serde(default)]
+    pub backends: BTreeMap<String, BackendSection>,
     #[serde(default)]
     pub limits: LimitsSection,
     #[serde(default)]
@@ -485,7 +488,9 @@ fn parse(text: &str, path: &Path) -> Result<FileConfig> {
     let cfg: FileConfig =
         toml::from_str(text).with_context(|| format!("parsing {}", path.display()))?;
 
-    if cfg.backend.api_key.is_some() && is_readable_by_others(path) {
+    let has_key =
+        cfg.backend.api_key.is_some() || cfg.backends.values().any(|b| b.api_key.is_some());
+    if has_key && is_readable_by_others(path) {
         anyhow::bail!(
             "{} contains an api-key and is readable by others; \
              run `chmod 600 {}`, or use api-key-env to name a variable instead",
@@ -525,6 +530,11 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 h.extend(over.backend.headers);
                 h
             },
+        },
+        backends: {
+            let mut b = base.backends;
+            b.extend(over.backends);
+            b
         },
         limits: LimitsSection {
             max_steps: over.limits.max_steps.or(base.limits.max_steps),
@@ -797,6 +807,45 @@ pub fn resolve_headers(
     Ok(Headers { headers, warnings })
 }
 
+/// A backend of `[backends]`, settled: where it is, what it speaks, what to send it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedBackend {
+    pub url: String,
+    pub kind: BackendKind,
+    pub headers: Vec<Header>,
+}
+
+/// The backends of `[backends]`. A key comes from the variable `api-key-env` names, or from
+/// `api-key` in a file only the user can read. Says what it could not settle.
+pub fn resolve_backends(cfg: &FileConfig) -> (BTreeMap<String, NamedBackend>, Vec<String>) {
+    let mut out = BTreeMap::new();
+    let mut warnings = Vec::new();
+    for (name, b) in &cfg.backends {
+        let Some(url) = b.url.clone() else {
+            warnings.push(format!("the backend {name} has no url"));
+            continue;
+        };
+        let mut headers: Vec<Header> = b.headers.clone().into_iter().collect();
+        let key = b
+            .api_key_env
+            .as_ref()
+            .and_then(|v| std::env::var(v).ok())
+            .filter(|k| !k.trim().is_empty())
+            .or_else(|| b.api_key.clone());
+        if let Some(key) = key {
+            if sends_secret_in_clear(&url) {
+                warnings.push(format!(
+                    "sending an API key over plain http to {url}; anyone on the path can read it"
+                ));
+            }
+            headers.push(("Authorization".into(), format!("Bearer {key}")));
+        }
+        let kind = b.kind.unwrap_or_default().resolve(&url);
+        out.insert(name.clone(), NamedBackend { url, kind, headers });
+    }
+    (out, warnings)
+}
+
 /// Whether a credential sent to this URL would cross a network unencrypted.
 /// Whether the backend's weights are near enough that loading them is worth arranging.
 ///
@@ -862,6 +911,7 @@ pub fn resolve_sandbox(
     use crate::sandbox::confine::{Level, Sandbox};
     let mut unset = vec!["LOKODE_API_KEY".to_string()];
     unset.extend(cfg.backend.api_key_env.clone());
+    unset.extend(cfg.backends.values().filter_map(|b| b.api_key_env.clone()));
     let writable = match level {
         Level::Workspace => resolve_shell_writable(cfg, root, warnings),
         Level::ReadOnly | Level::Off => Vec::new(),
@@ -1043,6 +1093,26 @@ mod tests {
         });
         let old = parse("[shell]\nconfine-writes = false\n");
         assert_eq!(old.shell.level(), Some(Level::Off));
+    }
+
+    /// A named backend takes its key from the variable it names, and one without a url is
+    /// reported.
+    #[test]
+    fn a_named_backend_is_settled() {
+        crate::paths::with_env(&[("LOKODE_TEST_FAR_KEY", Some("k1"))], || {
+            let cfg = parse(
+                "[backends.far]\nurl = \"https://api.anthropic.com\"\n\
+                 api-key-env = \"LOKODE_TEST_FAR_KEY\"\n[backends.nowhere]\nkind = \"openai\"\n",
+            );
+            let (backends, warnings) = resolve_backends(&cfg);
+            let far = &backends["far"];
+            assert_eq!(far.kind, BackendKind::Anthropic);
+            assert!(far
+                .headers
+                .contains(&("Authorization".into(), "Bearer k1".into())));
+            assert!(!backends.contains_key("nowhere"));
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+        });
     }
 
     /// The project is writable whether or not anything was named.
