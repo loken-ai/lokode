@@ -22,6 +22,8 @@ pub struct Status {
     pub context_percent: u8,
     /// Whether the entry pointed at is a receipt whose turn changed files.
     pub on_receipt: bool,
+    /// What enter does to the entry pointed at, when it does anything.
+    pub enter_does: Option<&'static str>,
     /// What is open over the rest, which owns the keys while it is.
     pub open: Option<Open>,
     /// The files the line being typed names with `@`, and the characters they hold.
@@ -299,6 +301,9 @@ impl Status {
                 spans.extend(key("u", "put back"));
                 spans.extend(key("d", "diff"));
             }
+            if let Some(what) = self.enter_does {
+                spans.extend(key("enter", what));
+            }
             spans.extend(key("space", "unfold"));
             spans.extend(key("esc", "back"));
         } else {
@@ -373,6 +378,7 @@ mod tests {
             attaching: None,
             on_receipt: false,
             open: None,
+            enter_does: None,
             step: 2,
             max_steps: 16,
             busy,

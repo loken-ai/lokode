@@ -195,6 +195,22 @@ impl ToolCtx {
         }
     }
 
+    /// Report what a session this call runs is doing, a step at a time. Waited for rather
+    /// than dropped when the screen is behind: a step that never reported its end would be
+    /// shown running for ever.
+    pub async fn report(&self, tool: &str, sub: SubEvent) {
+        if let Some(live) = &self.live {
+            let _ = live
+                .send(LiveOutput {
+                    tool: tool.to_string(),
+                    call: self.call.clone(),
+                    line: String::new(),
+                    sub: Some(sub),
+                })
+                .await;
+        }
+    }
+
     /// Show a line a tool has just printed. Dropped rather than queued when the screen is
     /// behind: a stale line is worth nothing and holding up a build to deliver one would
     /// be worse than losing it.
@@ -204,6 +220,7 @@ impl ToolCtx {
                 tool: tool.to_string(),
                 call: self.call.clone(),
                 line: line.to_string(),
+                sub: None,
             });
         }
     }
@@ -240,6 +257,26 @@ pub struct LiveOutput {
     /// The id of the call printing it, when it is printed from inside one.
     pub call: Option<String>,
     pub line: String,
+    /// What a session the call runs did, when that is what this carries instead of a line.
+    pub sub: Option<SubEvent>,
+}
+
+/// What a session run by a call did: a step asked for, a step settled, its answer.
+#[derive(Debug, Clone)]
+pub enum SubEvent {
+    Called {
+        id: String,
+        name: String,
+        args: String,
+    },
+    Settled {
+        id: String,
+        is_error: bool,
+        body: String,
+        took: Duration,
+        origin: crate::agent::agent_loop::Origin,
+    },
+    Answer(String),
 }
 
 #[derive(Debug, Clone)]

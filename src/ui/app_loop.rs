@@ -542,7 +542,10 @@ async fn run_ui(
                 // Kept as one entry that grows rather than a line each: a build's output
                 // is one thing happening, and a hundred entries would push the answer it
                 // belongs to off the screen.
-                state.print_line(printed.call.as_deref(), &printed.tool, &printed.line);
+                match printed.sub {
+                    Some(sub) => state.apply_sub(printed.call.as_deref(), sub),
+                    None => state.print_line(printed.call.as_deref(), &printed.tool, &printed.line),
+                }
             }
 
             Some(learned) = learn_rx.recv() => {
@@ -1404,6 +1407,22 @@ async fn run_ui(
                                 }
                                 continue;
                             }
+                            // A step pointed at opens on a page of its own: everything it
+                            // printed, and every step of a session it ran.
+                            KeyCode::Enter
+                                if state
+                                    .at_entry
+                                    .is_some_and(|i| matches!(state.entries.get(i), Some(Entry::Step(_)))) =>
+                            {
+                                if let Some(Entry::Step(step)) = state.at_entry.and_then(|i| state.entries.get(i)) {
+                                    state.sheet = Some(crate::ui::sheet::Sheet::titled(
+                                        &step.name,
+                                        &step.subject,
+                                        crate::ui::sheet::Body::Markdown(step.page()),
+                                    ));
+                                }
+                                continue;
+                            }
                             // A receipt pointed at: its turn put back, or what it changed
                             // shown.
                             KeyCode::Char(c @ ('u' | 'd'))
@@ -1573,8 +1592,8 @@ async fn run_ui(
                                         id: id.clone(),
                                         name: "$".into(),
                                         subject: command.clone(),
-                                        live: String::new(),
-                                        outcome: None,
+                                        started: Some(Instant::now()),
+                                        ..Default::default()
                                     }));
                                     let stop = shutdown.child_token();
                                     state.hand = Some((id.clone(), stop.clone()));

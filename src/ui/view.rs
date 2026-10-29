@@ -241,6 +241,11 @@ pub(crate) fn draw(
         },
         rail_offered: !wide,
         on_receipt: state.receipt_here().is_some(),
+        enter_does: match state.at_entry.and_then(|i| state.entries.get(i)) {
+            Some(crate::ui::chat::Entry::Step(_)) => Some("open"),
+            Some(crate::ui::chat::Entry::User(_)) => Some("take back"),
+            _ => None,
+        },
         open: if state.choosing.is_some() {
             Some(crate::ui::status::Open::Choice)
         } else if state.sheet.is_some() {
@@ -669,6 +674,78 @@ mod tests {
         assert_eq!(state.drawings.drawn, all + 1);
     }
 
+    /// A delegated session's steps run under its step, stay there folded once it is over,
+    /// unfold whole, and its page holds each step and the answer.
+    #[test]
+    fn a_delegated_session_keeps_its_steps() {
+        use crate::tools::registry::SubEvent;
+        let mut state = a_session();
+        state.entries.push(Entry::Step(Step::called(
+            "d1".into(),
+            "delegate".into(),
+            r#"{"task":"find where timeouts are set"}"#,
+        )));
+        let at = state.entries.len() - 1;
+        for (id, path) in [("s1", "src/mcp/client.rs"), ("s2", "src/config.rs")] {
+            state.apply_sub(
+                Some("d1"),
+                SubEvent::Called {
+                    id: id.into(),
+                    name: "read_file".into(),
+                    args: format!(r#"{{"path":"{path}"}}"#),
+                },
+            );
+        }
+        state.apply_sub(
+            Some("d1"),
+            SubEvent::Settled {
+                id: "s1".into(),
+                is_error: false,
+                body: "212 lines\nuse std::time::Duration;".into(),
+                took: std::time::Duration::ZERO,
+                origin: Origin::Ran,
+            },
+        );
+        let running = frame(&mut state, 120, 60);
+        assert!(running.contains("read_file  src/config.rs"), "{running}");
+        state.apply_sub(
+            Some("d1"),
+            SubEvent::Answer("only the client sets one".into()),
+        );
+        state.settle_step(
+            "d1",
+            "delegate".into(),
+            Outcome {
+                is_error: false,
+                body: "only the client sets one".into(),
+                took: std::time::Duration::ZERO,
+                origin: Origin::Ran,
+            },
+        );
+        let folded = frame(&mut state, 120, 60);
+        assert!(folded.contains("2 step(s)"), "{folded}");
+        assert!(!folded.contains("read_file  src/config.rs"), "{folded}");
+        state.toggle_unfolded(at);
+        let unfolded = frame(&mut state, 120, 60);
+        assert!(
+            unfolded.contains("read_file  src/mcp/client.rs"),
+            "{unfolded}"
+        );
+        let Entry::Step(step) = &state.entries[at] else {
+            panic!("the delegate step");
+        };
+        let page = step.page();
+        assert!(
+            page.contains("**read_file** `src/config.rs` · running"),
+            "{page}"
+        );
+        assert!(page.contains("use std::time::Duration;"), "{page}");
+        assert!(
+            page.contains("### Answer\n\nonly the client sets one"),
+            "{page}"
+        );
+    }
+
     /// A click without a drag on a badge of the question waiting is that badge's key, and
     /// a click on a step with more to show unfolds it.
     #[test]
@@ -774,6 +851,72 @@ mod tests {
             height: 34,
             state: busy,
             typed: "and add a test for a silent server",
+        });
+        let mut delegated = a_session();
+        let mut lane = Step::called(
+            "d1".into(),
+            "delegate".into(),
+            r#"{"task":"find every place a timeout is set"}"#,
+        );
+        for (i, (name, args, body)) in [
+            (
+                "grep",
+                r#"{"pattern":"timeout"}"#,
+                "6 matches\nsrc/mcp/client.rs:88\nsrc/config.rs:41",
+            ),
+            (
+                "read_file",
+                r#"{"path":"src/mcp/client.rs"}"#,
+                "212 lines\nuse std::time::Duration;",
+            ),
+            (
+                "read_file",
+                r#"{"path":"src/config.rs"}"#,
+                "140 lines\npub struct Config {",
+            ),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut child = Step::called(format!("s{i}"), name.to_string(), args);
+            child.outcome = Some(Outcome {
+                is_error: false,
+                body: body.to_string(),
+                took: std::time::Duration::from_millis(40),
+                origin: Origin::Ran,
+            });
+            lane.children.push(child);
+        }
+        lane.said =
+            "Only the MCP client waits on a reply, at `src/mcp/client.rs:88`, with no bound."
+                .into();
+        lane.outcome = Some(Outcome {
+            is_error: false,
+            body: lane.said.clone(),
+            took: std::time::Duration::from_secs(4),
+            origin: Origin::Ran,
+        });
+        delegated.entries.push(Entry::Step(lane.clone()));
+        delegated.at_entry = Some(delegated.entries.len() - 1);
+        out.push(Scene {
+            name: "delegate-120",
+            width: 120,
+            height: 34,
+            state: delegated,
+            typed: "",
+        });
+        let mut page = a_session();
+        page.sheet = Some(crate::ui::sheet::Sheet::titled(
+            &lane.name,
+            &lane.subject,
+            crate::ui::sheet::Body::Markdown(lane.page()),
+        ));
+        out.push(Scene {
+            name: "delegate-page-120",
+            width: 120,
+            height: 34,
+            state: page,
+            typed: "",
         });
         let mut commands = a_session();
         let mut picker = Picker::new(Kind::Command, crate::ui::commands::command_choices(root));

@@ -7,7 +7,7 @@ use crate::agent::agent_loop::{Origin, Receipt};
 use crate::ui::theme::theme;
 
 /// One call of a tool: what it acts on, what it is printing, and what it came to.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Step {
     /// The id the call and its result share. Empty for a command the person ran.
     pub id: String,
@@ -18,6 +18,12 @@ pub struct Step {
     pub live: String,
     /// What it came to, once it has.
     pub outcome: Option<Outcome>,
+    /// The steps of a session this call ran, as it ran them.
+    pub children: Vec<Step>,
+    /// What that session answered.
+    pub said: String,
+    /// When the call was asked for.
+    pub started: Option<std::time::Instant>,
 }
 
 /// What a step came to.
@@ -37,8 +43,8 @@ impl Step {
             id,
             name,
             subject,
-            live: String::new(),
-            outcome: None,
+            started: Some(std::time::Instant::now()),
+            ..Default::default()
         }
     }
 
@@ -55,7 +61,54 @@ impl Step {
                 took,
                 origin: Origin::Ran,
             }),
+            ..Default::default()
         }
+    }
+
+    /// The page a step opens on: its call, then for a session it ran each of that
+    /// session's steps with what it came to, then what it answered or printed, whole.
+    pub fn page(&self) -> String {
+        // The page's band names the call, so the page starts with what it did.
+        let mut out = String::new();
+        if !self.children.is_empty() {
+            out.push_str("### Steps\n\n");
+            for child in &self.children {
+                let (mark, said) = match &child.outcome {
+                    None => ("◌", "running".to_string()),
+                    Some(o) if o.is_error => ("✕", "failed".to_string()),
+                    Some(o) => ("●", o.body.lines().next().unwrap_or("").trim().to_string()),
+                };
+                let took = child
+                    .outcome
+                    .as_ref()
+                    .filter(|o| o.took >= SHOWN_FROM)
+                    .map(|o| format!(" · {}", how_long(o.took)))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "{mark} **{}** `{}` · {said}{took}\n\n",
+                    child.name,
+                    child.subject.replace('`', "'")
+                ));
+                if let Some(o) = &child.outcome {
+                    let body: Vec<&str> = o.body.lines().skip(1).take(PAGE_EVIDENCE).collect();
+                    if !body.is_empty() {
+                        out.push_str(&format!("```\n{}\n```\n\n", body.join("\n")));
+                    }
+                }
+            }
+        }
+        let answer = match (&self.outcome, self.said.trim().is_empty()) {
+            (_, false) => self.said.clone(),
+            (Some(o), true) => o.body.clone(),
+            (None, true) => self.live.clone(),
+        };
+        if !answer.trim().is_empty() {
+            match self.children.is_empty() {
+                true => out.push_str(&format!("```\n{answer}\n```\n")),
+                false => out.push_str(&format!("### Answer\n\n{answer}\n")),
+            }
+        }
+        out
     }
 }
 
@@ -95,10 +148,13 @@ impl Entry {
     /// question and an answer are shown whole because they are what the pane is for.
     pub fn can_unfold(&self) -> bool {
         match self {
-            Entry::Step(step) => match &step.outcome {
-                Some(o) => o.body.lines().count() > BODY_LINES + 1,
-                None => step.live.lines().count() > RUNNING_LINES,
-            },
+            Entry::Step(step) => {
+                !step.children.is_empty()
+                    || match &step.outcome {
+                        Some(o) => o.body.lines().count() > BODY_LINES + 1,
+                        None => step.live.lines().count() > RUNNING_LINES,
+                    }
+            }
             Entry::Reasoning(s) => s.lines().count() > BODY_LINES,
             _ => false,
         }
@@ -480,9 +536,9 @@ fn call_subject(name: &str, args: &str) -> String {
 /// The first line of a tool's own result is its answer and goes on the call's line. What
 /// follows is evidence: up to a few lines, the rest counted. An error is shown whole. While
 /// the call runs, the end of what it is printing stands in for the evidence.
-fn step_lines(step: &Step, open: bool, width: usize, joined: bool) -> Vec<Line<'static>> {
+/// A step's row: its mark, its call and what it came to, against the edge of `width`.
+fn step_header(step: &Step, width: usize) -> Line<'static> {
     let t = theme();
-    let width = width.min(STEP_AT_MOST);
     let (glyph, glyph_style) = match &step.outcome {
         None => ("◌", Style::default().fg(t.accent)),
         Some(o) if o.is_error && o.body.starts_with("user denied") => {
@@ -509,11 +565,26 @@ fn step_lines(step: &Step, open: bool, width: usize, joined: bool) -> Vec<Line<'
     let mut right: Vec<Span<'static>> = Vec::new();
     if let Some(o) = &step.outcome {
         let head = o.body.lines().next().unwrap_or("");
+        // What is left of the row once the call and the duration are on it, so the row
+        // stays one line.
+        let used: usize = left
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum::<usize>()
+            + 2
+            + "guessed  ".len()
+            + match o.took >= SHOWN_FROM {
+                true => 2 + how_long(o.took).chars().count(),
+                false => 0,
+            };
+        let room = width
+            .saturating_sub(used)
+            .clamp(SAID_AT_LEAST, SUBJECT_CHARS);
         let said = match (o.is_error, head.trim().is_empty(), o.body.lines().count()) {
             (true, _, _) => "failed".to_string(),
             (false, true, n) if n > 1 => format!("{n} line(s)"),
             (false, true, _) => "nothing".to_string(),
-            (false, false, _) => clip(head.trim(), SUBJECT_CHARS),
+            (false, false, _) => clip(head.trim(), room),
         };
         match o.origin {
             Origin::Guessed => right.push(Span::styled("guessed  ", Style::default().fg(t.accent))),
@@ -531,7 +602,13 @@ fn step_lines(step: &Step, open: bool, width: usize, joined: bool) -> Vec<Line<'
             right.push(Span::styled(format!("  {}", how_long(o.took)), t.dim));
         }
     }
-    let mut out = vec![beside(left, right, width)];
+    beside(left, right, width)
+}
+
+fn step_lines(step: &Step, open: bool, width: usize, joined: bool) -> Vec<Line<'static>> {
+    let t = theme();
+    let width = width.min(STEP_AT_MOST);
+    let mut out = vec![step_header(step, width)];
 
     let rail = |text: String, style: Style| {
         Line::from(vec![
@@ -545,6 +622,26 @@ fn step_lines(step: &Step, open: bool, width: usize, joined: bool) -> Vec<Line<'
         spans.extend(line.spans);
         Line::from(spans)
     };
+    // The steps of a session the call ran: while it runs, the latest of them, and once it is
+    // over, a count that unfolds into all of them.
+    if !step.children.is_empty() {
+        let n = step.children.len();
+        let running = step.outcome.is_none();
+        let first = match (open, running) {
+            (true, _) => 0,
+            (false, true) => n.saturating_sub(RUNNING_LINES),
+            (false, false) => n,
+        };
+        if first > 0 && running {
+            out.push(rail(format!("… {first} earlier step(s)"), t.dim));
+        }
+        for child in &step.children[first..] {
+            out.push(rail_line(step_header(child, width.saturating_sub(5))));
+        }
+        if !open && !running {
+            out.push(rail(format!("{n} step(s)"), t.dim));
+        }
+    }
     match &step.outcome {
         None => {
             let held = step.live.lines().count();
@@ -772,6 +869,12 @@ fn indent(line: Line<'static>) -> Line<'static> {
 /// How much of a subject or an answer fits on one line before it stops being one.
 const SUBJECT_CHARS: usize = 96;
 
+/// The fewest characters of what a step came to that its row shows, however full it is.
+const SAID_AT_LEAST: usize = 12;
+
+/// How many lines of each step's evidence a step's page shows.
+const PAGE_EVIDENCE: usize = 40;
+
 /// How long a step has to take before its duration is worth showing.
 const SHOWN_FROM: Duration = Duration::from_millis(100);
 
@@ -975,6 +1078,7 @@ mod tests {
                 took: Duration::ZERO,
                 origin: Origin::Ran,
             }),
+            ..Default::default()
         });
         let lines = entry.to_lines();
         assert!(lines
@@ -989,6 +1093,7 @@ mod tests {
             subject: "src/mcp/client.rs".into(),
             live: String::new(),
             outcome,
+            ..Default::default()
         }
     }
 

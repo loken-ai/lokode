@@ -516,9 +516,8 @@ impl UiState {
             None => self.entries.push(Entry::Step(Step {
                 id: id.to_string(),
                 name,
-                subject: String::new(),
-                live: String::new(),
                 outcome: Some(outcome),
+                ..Default::default()
             })),
         }
     }
@@ -547,6 +546,45 @@ impl UiState {
             }
             (None, false) => self.entries.push(Entry::Assistant(text)),
             (None, true) => {}
+        }
+    }
+
+    /// Apply what a session run by the call `call` did to that call's step: a step it
+    /// asked for, a step settled, its answer.
+    pub(crate) fn apply_sub(&mut self, call: Option<&str>, sub: crate::tools::registry::SubEvent) {
+        use crate::tools::registry::SubEvent;
+        let Some(at) = call.and_then(|id| self.step_of_call(id)) else {
+            return;
+        };
+        let Entry::Step(step) = &mut self.entries[at] else {
+            return;
+        };
+        match sub {
+            SubEvent::Called { id, name, args } => {
+                step.children.push(Step::called(id, name, &args));
+            }
+            SubEvent::Settled {
+                id,
+                is_error,
+                body,
+                took,
+                origin,
+            } => {
+                if let Some(child) = step
+                    .children
+                    .iter_mut()
+                    .rev()
+                    .find(|c| c.id == id && c.outcome.is_none())
+                {
+                    child.outcome = Some(Outcome {
+                        is_error,
+                        body,
+                        took,
+                        origin,
+                    });
+                }
+            }
+            SubEvent::Answer(text) => step.said = text,
         }
     }
 

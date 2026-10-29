@@ -153,11 +153,38 @@ impl Tool for Delegate {
         let drain = tokio::spawn(async move {
             let mut events = Vec::new();
             while let Some(event) = rx.recv().await {
-                if let crate::agent::agent_loop::AgentEvent::ToolCall {
-                    name, args_pretty, ..
-                } = &event
-                {
-                    shown.show("delegate", &format!("{name}  {}", subject_of(args_pretty)));
+                use crate::agent::agent_loop::AgentEvent;
+                use crate::tools::registry::SubEvent;
+                let sub = match &event {
+                    AgentEvent::ToolCall {
+                        id,
+                        name,
+                        args_pretty,
+                    } => Some(SubEvent::Called {
+                        id: id.clone(),
+                        name: name.clone(),
+                        args: args_pretty.clone(),
+                    }),
+                    AgentEvent::ToolResult {
+                        id,
+                        output,
+                        took,
+                        origin,
+                        ..
+                    } => Some(SubEvent::Settled {
+                        id: id.clone(),
+                        is_error: output.is_error,
+                        body: output.content.clone(),
+                        took: *took,
+                        origin: *origin,
+                    }),
+                    AgentEvent::AssistantText(s) if !s.trim().is_empty() => {
+                        Some(SubEvent::Answer(s.clone()))
+                    }
+                    _ => None,
+                };
+                if let Some(sub) = sub {
+                    shown.report("delegate", sub).await;
                 }
                 events.push(event);
             }
@@ -198,13 +225,4 @@ impl Tool for Delegate {
         );
         Ok(ToolOutput::ok(ctx.clamp(answer)))
     }
-}
-/// What a call acts on, in a few words, from the argument that names it.
-fn subject_of(args: &str) -> String {
-    let parsed: Value = serde_json::from_str(args).unwrap_or(Value::Null);
-    ["path", "pattern", "cmd", "url", "task", "file", "target"]
-        .iter()
-        .find_map(|k| parsed.get(*k).and_then(|v| v.as_str()))
-        .map(|s| s.lines().next().unwrap_or("").chars().take(80).collect())
-        .unwrap_or_default()
 }

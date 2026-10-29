@@ -13,6 +13,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Interface: say what the files named with @ will cost before the line is sent.
 - Interface: draw command answers as pages, with tables, the map and numbered diffs.
 - Interface: scroll and pick with the wheel and the click, and unfold a step by its badge.
+- Interface: keep a delegated session's steps under its step, and open any on a page.
 - Interface: ask before any action that loses something, and keep what was typed.
 - Interface: run a command of your own beside the screen, several at once.
 - Interface: follow the terminal's colours, tell Esc and Alt chords apart, show frames whole.

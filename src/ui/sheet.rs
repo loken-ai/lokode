@@ -35,7 +35,8 @@ pub enum Body {
 
 /// A page over the conversation.
 pub struct Sheet {
-    verb: String,
+    /// What names the page in its band.
+    badge: String,
     subtitle: String,
     body: Body,
     /// The rows as last drawn, and the width they were drawn for.
@@ -82,8 +83,20 @@ impl Sheet {
     /// A page holding `body`, under the command `verb`.
     pub fn with(verb: &str, body: Body) -> Self {
         Self {
-            verb: verb.to_string(),
+            badge: format!("/{verb}"),
             subtitle: subtitle_of(verb).to_string(),
+            body,
+            drawn: None,
+            height: 0,
+            at: 0,
+        }
+    }
+
+    /// A page that is not a command's, under its own name and what it is about.
+    pub fn titled(name: &str, about: &str, body: Body) -> Self {
+        Self {
+            badge: name.to_string(),
+            subtitle: about.to_string(),
             body,
             drawn: None,
             height: 0,
@@ -139,7 +152,7 @@ impl Sheet {
         // A title band, a blank row, the body, a blank row and the foot.
         let height = (area.height as usize).saturating_sub(4).max(1);
         self.height = height;
-        let verb = self.verb.clone();
+        let badge = self.badge.clone();
         let subtitle = self.subtitle.clone();
         let total = self.rows(inner).len();
         self.at = self.at.min(total.saturating_sub(height));
@@ -149,7 +162,7 @@ impl Sheet {
         let mut out = vec![Line::from(vec![
             Span::raw(margin.clone()),
             Span::styled(
-                format!(" /{verb} "),
+                format!(" {badge} "),
                 Style::default()
                     .fg(t.ink)
                     .bg(t.accent)
