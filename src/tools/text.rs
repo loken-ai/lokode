@@ -129,6 +129,18 @@ pub async fn read_numbered(
     Ok(out.trim_end_matches('\n').to_string())
 }
 
+/// The lines of `text` from `start` to `end`, numbered as a read of the file numbers them.
+pub fn number_window(text: &str, start: Option<usize>, end: Option<usize>) -> String {
+    let first = start.unwrap_or(1).max(1);
+    let last = end.unwrap_or(usize::MAX);
+    let window: Vec<&str> = text
+        .lines()
+        .skip(first - 1)
+        .take(last.saturating_sub(first - 1))
+        .collect();
+    number_from(&window.join("\n"), first)
+}
+
 fn number_from(text: &str, first: usize) -> String {
     text.lines()
         .enumerate()
@@ -141,6 +153,15 @@ fn number_from(text: &str, first: usize) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_window_of_text_is_numbered_from_its_first_line() {
+        assert_eq!(
+            number_window("a\nb\nc\n", Some(2), Some(3)),
+            "    2 | b\n    3 | c"
+        );
+        assert_eq!(number_window("a\nb", None, None), "    1 | a\n    2 | b");
+    }
 
     async fn write(dir: &Path, name: &str, body: &[u8]) -> std::path::PathBuf {
         let p = dir.join(name);

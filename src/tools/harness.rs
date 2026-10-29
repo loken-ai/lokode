@@ -62,6 +62,7 @@ impl Harness {
         });
 
         let ctx = ToolCtx {
+            editor: None,
             policy: Arc::new(Default::default()),
             auto_used: Arc::new(Default::default()),
             honour_allow: true,

@@ -8,6 +8,9 @@
 //! | a line typed during the turn | `user_message_chunk` |
 //! | a change of mode | `current_mode_update` |
 //! | the task list | `plan`, sent whole whenever it changes |
+//!
+//! What ACP has no place for, the turn's receipt, the window and the energy, goes in the
+//! `_meta` of the answer to the prompt, under `lokode`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -91,6 +94,10 @@ pub struct Translator {
     streamed: String,
     /// The files an edit is about to change, with what they held, by call.
     before: HashMap<String, Vec<(PathBuf, Option<String>)>>,
+    receipt: Option<crate::agent::agent_loop::Receipt>,
+    window: Option<crate::agent::session::Occupancy>,
+    engine: Option<crate::agent::agent_loop::Engine>,
+    rate: Option<f64>,
 }
 
 impl Translator {
@@ -99,7 +106,46 @@ impl Translator {
             root: root.to_path_buf(),
             streamed: String::new(),
             before: HashMap::new(),
+            receipt: None,
+            window: None,
+            engine: None,
+            rate: None,
         }
+    }
+
+    /// What the turn came to, for the `_meta` of the answer, and the turn's receipt
+    /// forgotten so the next turn starts without it.
+    pub fn meta(&mut self) -> Value {
+        let mut lokode = serde_json::Map::new();
+        if let Some(r) = self.receipt.take() {
+            lokode.insert(
+                "turn".into(),
+                json!({
+                    "tookMs": r.took.as_millis() as u64,
+                    "steps": r.steps,
+                    "tokensIn": r.tokens_in,
+                    "tokensOut": r.tokens_out,
+                    "files": r.files,
+                    "joules": r.energy.map(|e| e.joules),
+                }),
+            );
+        }
+        if let Some(w) = &self.window {
+            lokode.insert(
+                "window".into(),
+                json!({"percent": w.percent, "used": w.used, "budget": w.budget}),
+            );
+        }
+        if let Some(e) = &self.engine {
+            lokode.insert(
+                "energy".into(),
+                json!({"turnJoules": e.turn.joules, "sessionJoules": e.session.joules}),
+            );
+        }
+        if let Some(rate) = self.rate {
+            lokode.insert("tokensPerSecond".into(), json!(rate));
+        }
+        json!({"lokode": lokode})
     }
 
     /// The updates `event` makes, none for what an editor has no place for.
@@ -124,6 +170,22 @@ impl Translator {
                 }
             }
             AgentEvent::Reasoning(text) => vec![chunk("agent_thought_chunk", text)],
+            AgentEvent::Receipt(r) => {
+                self.receipt = Some(r.clone());
+                Vec::new()
+            }
+            AgentEvent::Window(w) => {
+                self.window = Some(w.clone());
+                Vec::new()
+            }
+            AgentEvent::Engine(e) => {
+                self.engine = Some(*e);
+                Vec::new()
+            }
+            AgentEvent::Rate(r) => {
+                self.rate = Some(*r);
+                Vec::new()
+            }
             AgentEvent::Notice(text) => vec![chunk("agent_thought_chunk", &format!("{text}\n"))],
             AgentEvent::Steered(text) => vec![chunk("user_message_chunk", text)],
             AgentEvent::Mode(mode) => vec![json!({

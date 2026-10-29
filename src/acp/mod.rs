@@ -137,11 +137,48 @@ struct Session {
     mode: std::sync::Mutex<&'static str>,
 }
 
-/// A turn to run, and who to tell once its updates are all out.
+/// A turn to run, and who to tell once its updates are all out, with what it came to.
 struct Turn {
     text: String,
     cancel: CancellationToken,
-    done: oneshot::Sender<()>,
+    done: oneshot::Sender<Value>,
+}
+
+/// The editor's files, read and written through it when it offers to.
+struct EditorFiles {
+    conn: Arc<Conn>,
+    session: String,
+}
+
+#[async_trait::async_trait]
+impl crate::tools::registry::Editor for EditorFiles {
+    async fn read(&self, path: &Path) -> Option<String> {
+        if !self.conn.offers("/fs/readTextFile") {
+            return None;
+        }
+        let read = self
+            .conn
+            .request(
+                "fs/read_text_file",
+                json!({"sessionId": self.session, "path": path}),
+            )
+            .await
+            .ok()?;
+        read.get("content")?.as_str().map(str::to_string)
+    }
+
+    async fn write(&self, path: &Path, contents: &str) -> bool {
+        if !self.conn.offers("/fs/writeTextFile") {
+            return false;
+        }
+        self.conn
+            .request(
+                "fs/write_text_file",
+                json!({"sessionId": self.session, "path": path, "content": contents}),
+            )
+            .await
+            .is_ok()
+    }
 }
 
 /// Serve the editor on standard input and output until it closes them.
@@ -456,7 +493,11 @@ async fn open(
     let (turn_tx, mut turn_rx) = mpsc::channel::<Turn>(4);
     let (control_tx, mut control_rx) = mpsc::channel::<Control>(4);
     let (evt_tx, mut evt_rx) = mpsc::channel::<AgentEvent>(128);
-    let (finish_tx, mut finish_rx) = mpsc::channel::<oneshot::Sender<()>>(4);
+    let (finish_tx, mut finish_rx) = mpsc::channel::<oneshot::Sender<Value>>(4);
+    agent.ctx.editor = Some(Arc::new(EditorFiles {
+        conn: conn.clone(),
+        session: session_id.clone(),
+    }));
 
     let mode = updates::mode_id(agent.cfg.mode, cfg.accept_writes);
     let session = Arc::new(Session {
@@ -556,7 +597,7 @@ async fn open(
                             }
                         }
                         send_plan(&conn, &id, &tasks, &mut plan).await;
-                        let _ = done.send(());
+                        let _ = done.send(translator.meta());
                     }
                 }
             }
@@ -740,9 +781,10 @@ impl Session {
                 done,
             })
             .await;
-        if sent.is_ok() {
-            let _ = finished.await;
-        }
+        let meta = match sent {
+            Ok(()) => finished.await.unwrap_or(Value::Null),
+            Err(_) => Value::Null,
+        };
         if let Ok(mut running) = self.running.lock() {
             *running = None;
         }
@@ -750,7 +792,7 @@ impl Session {
             true => "cancelled",
             false => "end_turn",
         };
-        Ok(json!({"stopReason": reason}))
+        Ok(json!({"stopReason": reason, "_meta": meta}))
     }
 
     /// Run a command as the terminal would. Gives the prompt it makes, when it makes one.

@@ -10,7 +10,6 @@ use tokio::io::AsyncWriteExt;
 use crate::sandbox::allowlist;
 use crate::sandbox::approval::{write_scope, Approval, ApprovalRequest};
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
-use crate::tools::text;
 
 const MAX_PREVIEW: usize = 16 * 1024;
 
@@ -57,7 +56,7 @@ impl Tool for WriteFile {
             Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
 
-        let before = match text::read_text_if_exists(&target).await {
+        let before = match ctx.read_text_if_exists(&target).await {
             Ok(b) => b.unwrap_or_default(),
             Err(e) => return Ok(ToolOutput::err(e)),
         };
@@ -94,7 +93,7 @@ impl Tool for WriteFile {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        write_atomic(&target, &a.content).await?;
+        ctx.write_text(&target, &a.content).await?;
         ctx.note_content(&target, a.content.as_bytes());
 
         Ok(ToolOutput::ok(format!(
@@ -150,7 +149,7 @@ impl Tool for EditFile {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
-        let before = match text::read_text(&target).await {
+        let before = match ctx.read_text(&target).await {
             Ok(b) => b,
             Err(e) => return Ok(ToolOutput::err(e)),
         };
@@ -187,7 +186,7 @@ impl Tool for EditFile {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        write_atomic(&target, &after).await?;
+        ctx.write_text(&target, &after).await?;
         ctx.note_content(&target, after.as_bytes());
         Ok(ToolOutput::ok(format!(
             "edited {}\n{}",
@@ -265,7 +264,7 @@ impl Tool for EditLines {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
-        let before = match text::read_text(&target).await {
+        let before = match ctx.read_text(&target).await {
             Ok(b) => b,
             Err(e) => return Ok(ToolOutput::err(e)),
         };
@@ -310,7 +309,7 @@ impl Tool for EditLines {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        write_atomic(&target, &after).await?;
+        ctx.write_text(&target, &after).await?;
         ctx.note_content(&target, after.as_bytes());
         Ok(ToolOutput::ok(format!(
             "applied {} edit(s) to {}\n{}",
@@ -384,9 +383,8 @@ impl Tool for ApplyPatch {
                     return Ok(ToolOutput::err(format!("{rel}: {why}")));
                 }
             };
-            let before = match tokio::fs::read_to_string(&target).await {
-                Ok(s) => Some(s),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            let before = match ctx.read_text_if_exists(&target).await {
+                Ok(before) => before,
                 Err(e) => return Ok(ToolOutput::err(format!("{rel}: {e}"))),
             };
             let after = match diffy::apply(before.as_deref().unwrap_or(""), patch) {
@@ -430,7 +428,7 @@ impl Tool for ApplyPatch {
         // line of prose, which is a tree in a state nobody asked for.
         let mut committed: Vec<&Staged> = Vec::with_capacity(staged.len());
         for s in &staged {
-            if let Err(e) = write_atomic(&s.target, &s.after).await {
+            if let Err(e) = ctx.write_text(&s.target, &s.after).await {
                 let rolled = roll_back(&committed).await;
                 return Ok(ToolOutput::err(format!(
                     "{}: write failed: {e}\n{rolled}",
@@ -517,7 +515,7 @@ fn common_ancestor(paths: &[&std::path::Path]) -> PathBuf {
 /// new one. Writing beside the target and renaming over it means a reader sees one or the
 /// other. The temporary lives in the same directory so the rename stays on one
 /// filesystem, where it is atomic.
-async fn write_atomic(target: &std::path::Path, contents: &str) -> Result<()> {
+pub(crate) async fn write_atomic(target: &std::path::Path, contents: &str) -> Result<()> {
     let parent = target
         .parent()
         .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", target.display()))?;

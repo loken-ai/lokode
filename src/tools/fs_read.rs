@@ -53,14 +53,25 @@ impl Tool for ReadFile {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
-        let body = match text::read_numbered(&resolved, a.start_line, a.end_line).await {
-            Ok(b) => b,
-            Err(e) => return Ok(ToolOutput::err(e)),
+        // What the editor holds comes first: a buffer not saved yet is what the person
+        // is looking at.
+        let held = ctx.editor_text(&resolved).await;
+        let body = match &held {
+            Some(t) => text::number_window(t, a.start_line, a.end_line),
+            None => match text::read_numbered(&resolved, a.start_line, a.end_line).await {
+                Ok(b) => b,
+                Err(e) => return Ok(ToolOutput::err(e)),
+            },
         };
         // What the file held when it was read, so a later whole-file write can tell
         // whether it is replacing what the model saw or somebody else's work.
-        if let Ok(bytes) = tokio::fs::read(&resolved).await {
-            ctx.note_content(&resolved, &bytes);
+        match held {
+            Some(t) => ctx.note_content(&resolved, t.as_bytes()),
+            None => {
+                if let Ok(bytes) = tokio::fs::read(&resolved).await {
+                    ctx.note_content(&resolved, &bytes);
+                }
+            }
         }
 
         Ok(ToolOutput::ok(ctx.clamp(body)))

@@ -893,8 +893,12 @@ Flags go before `acp`: `lokode --tool-protocol native acp`.
 | A mode | Act, accept edits or plan |
 | Stop | Stops the turn |
 
+- A file is read from the editor when it offers it, so a buffer not saved yet is what the model
+  sees. A write goes through the editor, and lokode puts it on disk if the editor did not.
 - The commands the model runs are run by lokode, in its sandbox, never in a terminal of the
   editor's.
+- The answer to each prompt carries the turn's figures in `_meta.lokode`: time, steps, tokens,
+  files changed, window and energy.
 - The tool servers the editor names join those of the configuration.
 - A tool server's form is put to the editor when it can show one, and declined otherwise.
 - A project's settings that wait for trust stay out, since nobody can be asked. Run `lokode`

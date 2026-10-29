@@ -13,8 +13,19 @@ use crate::sandbox::approval::{
     self, Approval, ApprovalDecision, ApprovalRequest, ApprovalSender, Denial, SessionApprovals,
 };
 
+/// An editor holding the files the person has open, saved or not.
+#[async_trait]
+pub trait Editor: Send + Sync {
+    /// The text the editor holds for `path`, or `None` when it does not say.
+    async fn read(&self, path: &Path) -> Option<String>;
+    /// Hand the editor `contents` for `path`. Says whether it took them.
+    async fn write(&self, path: &Path, contents: &str) -> bool;
+}
+
 #[derive(Clone)]
 pub struct ToolCtx {
+    /// The editor this session runs in, which files are read from and written through.
+    pub editor: Option<Arc<dyn Editor>>,
     /// What the configuration settles in advance, and how much of it one turn may use.
     pub policy: Arc<crate::sandbox::policy::Policy>,
     /// Requests the policy has granted this turn. Reset when a turn starts, because a cap
@@ -148,6 +159,43 @@ impl ToolCtx {
     }
 
     /// Remember what `path` holds now, so a later write can tell whether it still does.
+    /// The text the editor holds for `path`, when the session runs in one that says.
+    pub async fn editor_text(&self, path: &Path) -> Option<String> {
+        match &self.editor {
+            Some(e) => e.read(path).await,
+            None => None,
+        }
+    }
+
+    /// The text of `path`: the editor's, or the disk's.
+    pub async fn read_text(&self, path: &Path) -> Result<String, String> {
+        match self.editor_text(path).await {
+            Some(text) => Ok(text),
+            None => crate::tools::text::read_text(path).await,
+        }
+    }
+
+    /// The same, `None` for a file that is not there.
+    pub async fn read_text_if_exists(&self, path: &Path) -> Result<Option<String>, String> {
+        match self.editor_text(path).await {
+            Some(text) => Ok(Some(text)),
+            None => crate::tools::text::read_text_if_exists(path).await,
+        }
+    }
+
+    /// Hand `contents` of `path` to the editor, when there is one, and make sure the disk
+    /// holds them: the shell, the tests and the change history read the disk.
+    pub async fn write_text(&self, path: &Path, contents: &str) -> anyhow::Result<()> {
+        if let Some(editor) = &self.editor {
+            if editor.write(path, contents).await
+                && tokio::fs::read_to_string(path).await.ok().as_deref() == Some(contents)
+            {
+                return Ok(());
+            }
+        }
+        crate::tools::fs_write::write_atomic(path, contents).await
+    }
+
     pub fn note_content(&self, path: &Path, bytes: &[u8]) {
         if let Ok(mut known) = self.known.lock() {
             known.insert(path.to_path_buf(), fingerprint(bytes));
