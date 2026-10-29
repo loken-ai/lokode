@@ -38,6 +38,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Interface: keep the last lines of a call that prints fast.
 - Language server: answer the server's own requests, count columns as it does, restart it once.
 - Commands: keep a project's command from taking the name of a built-in.
+- Approvals: tell the model when a rule refused a call, and match rules per command of a line.
 
 ### Removed
 

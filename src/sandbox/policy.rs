@@ -282,7 +282,7 @@ mod through_the_context {
     use std::sync::Arc;
 
     use super::*;
-    use crate::sandbox::approval::{Approval, ApprovalRequest, ApprovalScope};
+    use crate::sandbox::approval::{Approval, ApprovalRequest, ApprovalScope, Denial};
     use crate::tools::harness::{Answer, Harness};
 
     fn request(cmd: &str) -> ApprovalRequest {
@@ -318,13 +318,15 @@ mod through_the_context {
         // which here says no.
         assert_eq!(
             ctx.approve(request("cargo test")).await,
-            Approval::Denied(None)
+            Approval::Denied(Denial::User(None))
         );
         assert_eq!(h.asked().len(), 1);
         // The refusal still answers on its own.
         assert_eq!(
             ctx.approve(request("rm -rf /")).await,
-            Approval::Denied(None)
+            Approval::Denied(Denial::Rule(
+                "refused by the policy rule \"*rm -rf*\"".into()
+            ))
         );
         assert_eq!(h.asked().len(), 1);
     }
@@ -354,7 +356,9 @@ mod through_the_context {
         );
         assert_eq!(
             ctx.approve(request("rm -rf /")).await,
-            Approval::Denied(None)
+            Approval::Denied(Denial::Rule(
+                "refused by the policy rule \"*rm -rf*\"".into()
+            ))
         );
         // Nothing was put to the user for either.
         assert_eq!(h.asked().len(), 0);

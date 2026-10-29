@@ -116,20 +116,30 @@ pub enum ApprovalDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Approval {
     Proceed,
-    Denied(Option<String>),
+    Denied(Denial),
     /// The turn was abandoned while the prompt was on screen. Not the same as `Denied`:
     /// the user refused nothing, they stopped waiting.
     Interrupted,
 }
 
+/// Who refused a call, and what they said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Denial {
+    /// The person, with what they said when they said anything.
+    User(Option<String>),
+    /// A rule of the configuration, named.
+    Rule(String),
+}
+
 /// What a tool hands back when its call was refused.
 ///
-/// Carries what the person said, so the model has something to act on rather than a
+/// Carries who refused it and why, so the model has something to act on rather than a
 /// failure to work around.
-pub fn denial(why: Option<String>) -> String {
+pub fn denial(why: Denial) -> String {
     match why {
-        None => "user denied".to_string(),
-        Some(why) => format!("user denied: {why}"),
+        Denial::User(None) => "user denied".to_string(),
+        Denial::User(Some(why)) => format!("user denied: {why}"),
+        Denial::Rule(why) => format!("{why}, without asking the user"),
     }
 }
 

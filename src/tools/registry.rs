@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::sandbox::approval::{
-    self, Approval, ApprovalDecision, ApprovalRequest, ApprovalSender, SessionApprovals,
+    self, Approval, ApprovalDecision, ApprovalRequest, ApprovalSender, Denial, SessionApprovals,
 };
 
 #[derive(Clone)]
@@ -199,7 +199,7 @@ impl ToolCtx {
         ) {
             crate::sandbox::policy::Verdict::Refused(why) => {
                 tracing::info!(tool = %req.tool, scope = ?req.scope, %why, "refused by policy");
-                return Approval::Denied(None);
+                return Approval::Denied(Denial::Rule(why));
             }
             crate::sandbox::policy::Verdict::Allowed if self.honour_allow => {
                 self.auto_used.fetch_add(1, Ordering::Relaxed);
@@ -234,7 +234,7 @@ impl ToolCtx {
         // the first question anyone asks about a run that did something unexpected.
         tracing::info!(%tool, ?decision, ?scope, "approval decided");
         match decision {
-            ApprovalDecision::Deny(why) => Approval::Denied(why),
+            ApprovalDecision::Deny(why) => Approval::Denied(Denial::User(why)),
             ApprovalDecision::Once => Approval::Proceed,
             ApprovalDecision::Always => {
                 self.session_approvals.mark_always(scope).await;

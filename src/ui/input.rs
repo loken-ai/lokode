@@ -352,10 +352,15 @@ mod tests {
         // when what was typed is sent.
         assert_eq!(approval_key(&press(KeyCode::Char('e'))), None);
         assert_eq!(
-            crate::sandbox::approval::denial(Some("use the test runner".into())),
+            crate::sandbox::approval::denial(crate::sandbox::approval::Denial::User(Some(
+                "use the test runner".into()
+            ))),
             "user denied: use the test runner"
         );
-        assert_eq!(crate::sandbox::approval::denial(None), "user denied");
+        assert_eq!(
+            crate::sandbox::approval::denial(crate::sandbox::approval::Denial::User(None)),
+            "user denied"
+        );
     }
 
     /// Declining must stay reachable by the two gestures people already use to back out.
