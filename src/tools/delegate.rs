@@ -62,6 +62,8 @@ pub struct Delegation {
     /// How many levels of agents may be under this one, itself included. An agent that
     /// names `delegate` among its tools has it when there is a level under it.
     pub depth: usize,
+    /// The work agents did in their own copies, waiting for the session to take it.
+    pub works: crate::tools::worktree::Pending,
 }
 
 /// The tools a delegated session never has: the caller's task list and plan, and the
@@ -344,15 +346,46 @@ impl Tool for Delegate {
             // handed to the session when it comes.
             let stop = tokio_util::sync::CancellationToken::new();
             let id = BACKGROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // An agent that changes files works in a copy of its own when the project is
+            // in git; elsewhere it writes in the project, holding what it writes.
+            let copy = match (writes, crate::tools::worktree::home()) {
+                (true, Some(home)) => {
+                    match crate::tools::worktree::Work::make(&home, &ctx.root, id, name, &task)
+                        .await
+                    {
+                        Ok(copy) => copy,
+                        Err(e) => {
+                            return Ok(ToolOutput::err(format!(
+                                "no copy of the project could be made for {name}: {e:#}"
+                            )))
+                        }
+                    }
+                }
+                _ => None,
+            };
             let ctx = crate::tools::registry::ToolCtx {
                 cancel: stop.clone(),
-                holder: Some((id, name.to_string())),
+                holder: match &copy {
+                    None if writes => Some((id, name.to_string())),
+                    _ => None,
+                },
                 ..ctx.clone()
             };
-            // The agent's own tools write as it, so what it changes is held for it.
             let mut sub = sub;
             sub.ctx.holder = ctx.holder.clone();
             sub.ctx.cancel = stop.clone();
+            if let Some(copy) = &copy {
+                // Its tools and its shell work in the copy, and may write there alone.
+                sub.ctx.root = copy.root.clone();
+                sub.ctx.sandbox = ctx.sandbox.as_ref().map(|s| {
+                    let mut s = (**s).clone();
+                    s.writable.retain(|w| !w.starts_with(&ctx.root));
+                    s.writable.push(copy.dir.clone());
+                    std::sync::Arc::new(s)
+                });
+                // The project's language servers read the project, not the copy.
+                sub.lsp = None;
+            }
             let short: String = task.chars().take(60).collect();
             ctx.left_running(
                 self.name(),
@@ -361,20 +394,48 @@ impl Tool for Delegate {
             )
             .await;
             let (answers, hooks, agent) = (w.answers.clone(), w.hooks.clone(), name.to_string());
+            let works = w.works.clone();
+            let asked_from = ctx.asked.lock().map(|a| a.len()).unwrap_or(0);
             tokio::spawn(async move {
                 let _slot = slot;
                 let out = finish(sub, task.clone(), agent.clone(), ctx.clone(), hooks).await;
                 // What it changed is free again for the session and the other agents.
                 ctx.claims.release(id);
                 ctx.left_running("delegate", id, None).await;
-                let said = match stop.is_cancelled() {
-                    true => format!(
-                        "The agent {agent}, started in the background on \"{task}\", was stopped by the user."
+                let answer = match stop.is_cancelled() {
+                    true => "nothing: the user stopped it".to_string(),
+                    false => out.content,
+                };
+                let said = match copy {
+                    None => format!(
+                        "The agent {agent}, started in the background on \"{task}\", answered:\n{answer}"
                     ),
-                    false => format!(
-                        "The agent {agent}, started in the background on \"{task}\", answered:\n{}",
-                        out.content
+                    // Stopped by the user: its work is not offered, and its copy stays.
+                    Some(copy) if stop.is_cancelled() => format!(
+                        "The agent {agent}, started in the background on \"{task}\", was \
+                         stopped by the user. What it did stays in its copy, {}, and is not \
+                         brought in.",
+                        copy.dir.display()
                     ),
+                    Some(copy) => match copy.patch().await {
+                        Ok(patch) if patch.is_empty() => {
+                            copy.remove().await;
+                            format!(
+                                "The agent {agent}, started in the background on \"{task}\", \
+                                 answered:\n{answer}\n\nIt changed nothing."
+                            )
+                        }
+                        _ => {
+                            let mut copy = copy;
+                            copy.answer = answer.clone();
+                            copy.asked_from = asked_from;
+                            let report = copy.report(&answer, ctx.max_output_chars).await;
+                            if let Ok(mut w) = works.lock() {
+                                w.insert(id, copy);
+                            }
+                            report
+                        }
+                    },
                 };
                 if let Some(tx) = answers {
                     let _ = tx.send(said).await;

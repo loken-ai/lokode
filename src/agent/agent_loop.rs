@@ -684,6 +684,8 @@ pub struct TurnTally {
     pub turn: u32,
     /// How many times a turn-end hook kept the turn going.
     pub held: u8,
+    /// How many times a proof of reconciling an agent's work was refused this turn.
+    pub proofs_refused: u8,
     /// What the turn-end hooks said at the answer, once they let it end.
     pub turn_end: Option<Vec<crate::agent::hooks::Ran>>,
 }
@@ -1681,6 +1683,9 @@ impl Agent {
         self.this_turn = TurnTally::begin();
         self.nudged = false;
         let asked = user_input.clone();
+        if let Ok(mut said) = self.ctx.asked.lock() {
+            said.push(user_input.chars().take(1000).collect());
+        }
         self.repeats.clear();
         self.from_guess.clear();
         self.barren = 0;
@@ -2108,6 +2113,17 @@ impl Agent {
                     self.close_step(record);
                     continue;
                 }
+                // Work an agent did in its own copy is brought in before the turn ends.
+                if let Some(waiting) = self.held_by_work() {
+                    let _ = events
+                        .send(AgentEvent::Notice(format!("the turn goes on: {waiting}")))
+                        .await;
+                    self.session.push(Message::user(format!(
+                        "Before the turn ends: {waiting}. Read its patch, then call take_work."
+                    )));
+                    self.close_step(record);
+                    continue;
+                }
                 // A turn-end hook that blocks hands its reason back, and the turn goes on.
                 if let Some(reason) = self.held_by_turn_end(&turn.text).await {
                     let _ = events
@@ -2338,6 +2354,17 @@ impl Agent {
                         }
                         self.repeats.clear();
                         self.record_change(&call.name, &events).await;
+                    }
+                    // A proof refused twice in a turn is a failed check like a write that did
+                    // not compile: the stronger model is asked to do the reconciling.
+                    if call.name == "take_work"
+                        && result.is_error
+                        && result.content.starts_with(crate::tools::worktree::REFUSED)
+                    {
+                        self.this_turn.proofs_refused += 1;
+                        if self.this_turn.proofs_refused >= Self::PROOFS_REFUSED_AT_MOST {
+                            record.after.check_passed = Some(false);
+                        }
                     }
                     if mutating && !result.is_error {
                         for path in changed_paths(&result.content) {
@@ -2658,7 +2685,7 @@ impl Agent {
         if out.is_error
             || !matches!(
                 tool,
-                "write_file" | "edit_file" | "edit_lines" | "apply_patch"
+                "write_file" | "edit_file" | "edit_lines" | "apply_patch" | "take_work"
             )
         {
             return None;
@@ -2749,6 +2776,30 @@ impl Agent {
 
     /// How many times turn-end hooks may keep one turn going.
     const HELD_AT_MOST: u8 = 2;
+
+    /// How many refused proofs of one turn raise the session to the stronger model.
+    const PROOFS_REFUSED_AT_MOST: u8 = 2;
+
+    /// What agents did in their own copies and is still to be brought in, when the turn may
+    /// still be kept going for it. Only the session that handed the work on is held.
+    fn held_by_work(&mut self) -> Option<String> {
+        if self.cfg.delegated || self.this_turn.held >= Self::HELD_AT_MOST {
+            return None;
+        }
+        let waiting: Vec<String> = self
+            .ctx
+            .works
+            .lock()
+            .ok()?
+            .values()
+            .map(|w| format!("work {} of the agent {}", w.id, w.agent))
+            .collect();
+        if waiting.is_empty() {
+            return None;
+        }
+        self.this_turn.held += 1;
+        Some(format!("{} waits to be brought in", waiting.join(", ")))
+    }
 
     /// Run the turn-end hooks on the answer. The reason they give when one blocks and the
     /// turn may still be kept going; otherwise what they said is kept for the end of the
@@ -3781,6 +3832,7 @@ mod tests {
             lsp: None,
             answers: None,
             depth: 1,
+            works: Default::default(),
         }))
     }
 
@@ -3872,6 +3924,7 @@ mod tests {
                     lsp: None,
                     answers: None,
                     depth: 1,
+                    works: Default::default(),
                 },
             )));
             let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);
@@ -3940,6 +3993,7 @@ mod tests {
                 lsp: None,
                 answers: None,
                 depth: 1,
+                works: Default::default(),
             },
         )));
         let mut agent = agent_with(&h, &here, ToolProtocol::Native, reg);
@@ -4097,6 +4151,7 @@ mod tests {
                 lsp: None,
                 answers: Some(answers),
                 depth: 1,
+                works: Default::default(),
             },
         )));
         let mut agent = agent_with(&h, &here, ToolProtocol::Native, reg);
@@ -4178,6 +4233,7 @@ mod tests {
                 lsp: None,
                 answers: None,
                 depth: 2,
+                works: Default::default(),
             },
         )));
         let mut agent = agent_with(&h, &backend, ToolProtocol::Native, reg);

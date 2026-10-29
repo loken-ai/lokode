@@ -649,8 +649,34 @@ api-key-env = "ANTHROPIC_API_KEY"
 - With `background`, an agent works while the turn goes on. Its answer is handed to the session
   at its next step, in this turn or the next. Stopping the turn does not stop it. It is listed in
   the rail and in `/jobs`, where enter stops it alone.
-- A file such an agent writes is its own until it answers. The session and the other agents are
-  refused it, before anyone is asked. Its changes are approved like any other.
+- In a project in git, an agent that changes files works in its own copy, a worktree in lokode's
+  state directory, made from the project as it stands: files not committed and files git does
+  not track included, ignored files left out. Its tools and its shell write there alone, and its
+  changes are approved like any other. Nothing reaches the project until the session brings the
+  work in.
+- Its answer comes with the patch and a number, and the session calls `take_work` with it. The
+  work comes in as one change `/undo` puts back. A turn does not end while work waits.
+
+| Since the agent started, the project | `take_work` |
+|---|---|
+| changed nothing | brings the work in |
+| changed files | writes nothing, and shows what changed and both sides of each file both touched |
+| changed files, and the session wrote those both touched | brings in the rest, given `merged` with a proof for each |
+
+- The review gives both objectives: the task the agent was given with what it said it did, and
+  the last questions asked since. It repeats neither the agent's patch nor an untouched file.
+- A proof names the file, the agent's goal, the project's goal and how the file serves both.
+  Each line either side added must be in the file, and each line either side removed must be
+  gone. A line left out on purpose goes in `dropped`, with why.
+- A refusal lists only the lines the proof does not account for, and writes nothing.
+- Once in, the files are checked like any write. An error comes from putting the two together,
+  and the session fixes it before the turn ends.
+- An agent stopped by the user is not brought in. Its copy stays, its path said.
+- A proof refused twice in a turn counts as a check that failed: with an `escalate` model named
+  in `[roles]`, the session carries on with it to do the reconciling.
+- Outside git, or in a project its repository does not track, such an agent writes in the
+  project. A file it writes is its own until it answers: the session and the other agents are
+  refused it, before anyone is asked.
 - The task is taken as written: no file is attached for it and the project is not searched
   for it.
 

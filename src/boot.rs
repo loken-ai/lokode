@@ -117,6 +117,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         editor: None,
         claims: Default::default(),
         holder: None,
+        works: Default::default(),
+        asked: Default::default(),
         policy: Arc::new(cfg.policy.clone()),
         auto_used: auto_used.clone(),
         honour_allow: !cfg.headless,
@@ -391,6 +393,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         lsp: Some(lsp.clone()),
         answers: Some(steer_tx.clone()),
         depth: cfg.delegate_depth.max(1),
+        works: ctx.works.clone(),
     });
     let (questions_tx, questions_rx) = tokio::sync::mpsc::channel(4);
     let _ = mcp_host.set(crate::mcp::host::Host {
@@ -403,6 +406,10 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     });
     model_notes.extend(delegation.unknown());
     model_notes.extend(skill_warnings);
+    // What an agent did in its own copy is taken, or left, by the session.
+    registry.register(crate::tools::worktree::TakeWork::new(
+        delegation.works.clone(),
+    ));
     registry.register(crate::tools::delegate::Delegate::new(delegation));
     let registry = Arc::new(registry);
 

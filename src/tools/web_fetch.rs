@@ -479,6 +479,8 @@ mod tests {
             editor: None,
             claims: Default::default(),
             holder: None,
+            works: Default::default(),
+            asked: Default::default(),
             policy: Arc::new(Default::default()),
             auto_used: Arc::new(Default::default()),
             honour_allow: true,

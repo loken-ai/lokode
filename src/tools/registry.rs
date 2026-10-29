@@ -85,6 +85,11 @@ pub struct ToolCtx {
     /// The agent working in the background this context belongs to, by number and name,
     /// `None` for the session and the agents it waits for.
     pub holder: Option<(u64, String)>,
+    /// The work agents did in their own copies, waiting for the session to bring it in.
+    pub works: crate::tools::worktree::Pending,
+    /// What the person asked this session, in order: the project's objectives when an
+    /// agent's work is reconciled with it.
+    pub asked: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 /// The files each agent working in the background has written, held until it answers so
