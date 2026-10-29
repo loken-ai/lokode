@@ -184,6 +184,8 @@ pub(crate) fn draw(
             rates: &state.rates,
             turns: &state.turns,
             engine: &state.engine,
+            power: state.power.as_ref(),
+            watts: &state.watts,
         }
         .render(f, area);
     }
@@ -349,6 +351,14 @@ mod tests {
         }];
         for rate in [38.0, 61.0, 88.0, 94.0, 90.0, 93.0] {
             state.note_rate(rate);
+        }
+        for watts in [120.0, 260.0, 305.0, 312.0] {
+            state.note_power(crate::backend::devices::Power {
+                watts,
+                limit: Some(450.0),
+                busy_percent: Some(87),
+                devices: 1,
+            });
         }
         state.engine = crate::agent::agent_loop::Engine {
             latest: Some(crate::backend::meter::Latest {

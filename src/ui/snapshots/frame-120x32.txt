@@ -16,16 +16,16 @@ The client waits on rx.await forever. I add timeout-secs:                       
   rust                                                                             ▐ ENGINE
   let reply = timeout(self.timeout, rx).await??;                                   ▐ qwen3-coder
                                                                                    ▐ ▄▆████ 93 tok/s
-? edit src/mcp/client.rs                                                           ▐ time    read 0.7s · write 3.1s
-    src/mcp/client.rs                                                              ▐ prompt  6.1k, 4.2k held
-    @@ -212 +212 @@                                                                ▐ cache   ▰▰▱▱▱▱▱▱▱▱ 15%
-    212 -     let reply = rx.await?;                                               ▐ drafts  82% kept
-    212 +     let reply = timeout(self.timeout, rx).await??;                       ▐ energy  ≈0.31 Wh  session ≈0.42 Wh
-  y once   a always (src/mcp/)   n or esc no   e no, and say why                   ▐
-                                                                                   ▐ TURNS TO PUT BACK
- ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files · 0.42 Wh         ▐   1  src/config.rs
-                                                                                   ▐ /undo <turn> puts one back
-! backend error: gave up after 3 attempts                                          ▐
+? edit src/mcp/client.rs                                                           ▐ power   ▄▇██ 312 W  87% busy
+    src/mcp/client.rs                                                              ▐ time    read 0.7s · write 3.1s
+    @@ -212 +212 @@                                                                ▐ prompt  6.1k, 4.2k held
+    212 -     let reply = rx.await?;                                               ▐ cache   ▰▰▱▱▱▱▱▱▱▱ 15%
+    212 +     let reply = timeout(self.timeout, rx).await??;                       ▐ drafts  82% kept
+  y once   a always (src/mcp/)   n or esc no   e no, and say why                   ▐ energy  ≈0.31 Wh  session ≈0.42 Wh
+                                                                                   ▐
+ ✓ 38.0s · 7 step(s) · 8.4k read, 1.1k written · changed 2 files · 0.42 Wh         ▐ TURNS TO PUT BACK
+                                                                                   ▐   1  src/config.rs
+! backend error: gave up after 3 attempts                                          ▐ /undo <turn> puts one back
 
 ❯
     ACT    qwen3-coder  demo  ctx 23%

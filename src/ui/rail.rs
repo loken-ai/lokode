@@ -53,6 +53,8 @@ pub struct Rail<'a> {
     pub rates: &'a VecDeque<f64>,
     pub turns: &'a [Turn],
     pub engine: &'a Engine,
+    pub power: Option<&'a crate::backend::devices::Power>,
+    pub watts: &'a VecDeque<f64>,
 }
 
 /// The colours of the window's parts, in the order the session measures them.
@@ -210,6 +212,25 @@ impl Rail<'_> {
         let t = theme();
         let mut out = Vec::new();
         let label = |s: &str| Span::styled(format!(" {s:<8}"), t.dim);
+        if let Some(power) = self.power {
+            let mut spans = vec![label("power")];
+            let room = inner.saturating_sub(24).min(self.watts.len());
+            if room > 1 {
+                spans.push(Span::styled(
+                    sparkline(self.watts, room),
+                    Style::default().fg(t.warn),
+                ));
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(
+                format!("{:.0} W", power.watts),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            if let Some(busy) = power.busy_percent {
+                spans.push(Span::styled(format!("  {busy}% busy"), t.dim));
+            }
+            out.push(Line::from(spans));
+        }
         if let Some(latest) = &self.engine.latest {
             let l = &latest.loken;
             let ms = |v: u64| crate::ui::chat::how_long(std::time::Duration::from_millis(v));
@@ -386,6 +407,8 @@ mod tests {
             rates: &rates,
             turns: &[],
             engine: &Engine::default(),
+            power: None,
+            watts: &VecDeque::new(),
         };
         let text = rail_text(&rail);
         assert!(text.iter().any(|l| l.starts_with(" ENGINE")));
@@ -431,6 +454,8 @@ mod tests {
             rates: &rates,
             turns: &turns,
             engine: &Engine::default(),
+            power: None,
+            watts: &VecDeque::new(),
         };
         let text = rail_text(&rail);
         assert!(
@@ -468,6 +493,8 @@ mod tests {
             rates: &rates,
             turns: &[],
             engine: &Engine::default(),
+            power: None,
+            watts: &VecDeque::new(),
         };
         let bar = line_text(&rail.window_bar(20));
         assert_eq!(bar.chars().filter(|&c| c == '█').count(), 5);

@@ -145,6 +145,10 @@ pub(crate) struct UiState {
     pub(crate) prefill: Option<(u64, u64)>,
     /// What the backend measured, as of the latest step.
     pub(crate) engine: crate::agent::agent_loop::Engine,
+    /// The power the backend's machine drew at the latest reading.
+    pub(crate) power: Option<crate::backend::devices::Power>,
+    /// The latest readings of that power, in watts, oldest first, for the sparkline.
+    pub(crate) watts: std::collections::VecDeque<f64>,
     /// Whether the terminal window has the focus, as it last said.
     pub(crate) focused: bool,
     /// The window title as it was last set.
@@ -529,6 +533,15 @@ impl UiState {
         self.step = 0;
         self.window = Default::default();
         self.rates.clear();
+    }
+
+    /// Note the power the machine draws, keeping the latest few readings.
+    pub(crate) fn note_power(&mut self, power: crate::backend::devices::Power) {
+        self.power = Some(power);
+        self.watts.push_back(power.watts);
+        while self.watts.len() > crate::ui::rail::RATES_KEPT {
+            self.watts.pop_front();
+        }
     }
 
     /// Note how fast a step came back, keeping the latest few for the sparkline.

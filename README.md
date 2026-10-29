@@ -56,8 +56,13 @@ Against a loken server, lokode reads what the server measured of each request an
 | how long the request waited, read the prompt and wrote the answer | the rail |
 | how far the server has read a long prompt | the status line, while it reads |
 | how full the key-value cache is | the rail |
+| the power the machine's accelerators draw, while a turn runs | the rail |
 | how much of a speculative draft the server kept | the rail |
 | the energy each request drew | the rail, the receipt, `/cost`, the session file and `-p --output json` |
+
+The power is read from the device listing loken serves to its own interface, every two
+seconds and only while a turn runs. It is shown as read, and never turned into an energy
+figure: that comes from the server, request by request.
 
 Energy is counted against what a request was for: a step, a read guessed ahead, a second
 opinion, a repaired reply or the probe at startup. It is marked `≈` when other requests

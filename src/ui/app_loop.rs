@@ -397,9 +397,30 @@ async fn run_ui(
         "Ask the model to do something… (Enter to send, Shift-Enter for newline)",
     );
 
+    // The power the backend's machine draws, read while a turn runs against a backend on
+    // this machine or network. A hosted one has no such listing to read.
+    let (busy_tx, busy_rx) = tokio::sync::watch::channel(false);
+    let (power_tx, mut power_rx) = mpsc::channel::<crate::backend::devices::Power>(4);
+    if crate::config::backend_is_nearby(&cfg.backend_url) {
+        if let Ok(http) = crate::tools::registry::tool_http_client() {
+            tokio::spawn(crate::backend::devices::follow(
+                http,
+                cfg.backend_url.clone(),
+                busy_rx,
+                power_tx,
+                shutdown.child_token(),
+            ));
+        }
+    }
+
     let mut events = EventStream::new();
 
     loop {
+        busy_tx.send_if_modified(|was| {
+            let changed = *was != state.busy;
+            *was = state.busy;
+            changed
+        });
         // The window's title and the tab's progress say what the session is doing, and are
         // written only when that changes.
         let project = cfg
@@ -488,6 +509,8 @@ async fn run_ui(
                 // thing the status line must never do.
                 state.waiting_since = Some(Instant::now());
             }
+
+            Some(power) = power_rx.recv() => state.note_power(power),
 
             Some(printed) = live.recv() => {
                 // Kept as one entry that grows rather than a line each: a build's output
