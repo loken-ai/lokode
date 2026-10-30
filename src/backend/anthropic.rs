@@ -59,7 +59,7 @@ impl AnthropicProvider {
             http: reqwest::Client::builder()
                 // A silence, not a duration: a stream the server keeps alive runs as long as it
                 // produces, and an answer that is not streamed is still bounded.
-                .read_timeout(std::time::Duration::from_secs(900))
+                .read_timeout(crate::backend::client::READ_TIMEOUT)
                 .user_agent(concat!("lokode/", env!("CARGO_PKG_VERSION")))
                 .default_headers(headers)
                 .build()?,

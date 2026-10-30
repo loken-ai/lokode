@@ -51,6 +51,9 @@ pub type ChunkStream = Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>;
 /// How many times to try again after a failure that looks temporary.
 const MAX_ATTEMPTS: usize = 3;
 
+/// How long a connection may stay silent before the client gives up.
+pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(900);
+
 /// Wait before the first retry; doubled each time after.
 const BACKOFF_BASE: Duration = Duration::from_millis(400);
 
@@ -99,7 +102,7 @@ impl BackendClient {
             http: reqwest::Client::builder()
                 // A silence, not a duration: a stream the server keeps alive runs as long as it
                 // produces, and an answer that is not streamed is still bounded.
-                .read_timeout(std::time::Duration::from_secs(900))
+                .read_timeout(READ_TIMEOUT)
                 .default_headers(map)
                 .build()
                 .expect("reqwest client"),
