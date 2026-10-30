@@ -1,6 +1,6 @@
 //! Separating a model's scratchpad from its answer.
 //!
-//! A reasoning model produces two kinds of text and the same semantic thing arrives four
+//! A reasoning model produces 2 kinds of text and the same semantic thing arrives 4
 //! ways: inline `<think>…</think>` in the content (loken, and any server that does not
 //! split), a `reasoning` field beside it (ollama, OpenRouter), a `reasoning_content` field
 //! (DeepSeek), or its own block type (Anthropic). None of those is in the OpenAI
@@ -152,7 +152,7 @@ mod tests {
         assert_eq!(out.reasoning, "middle");
     }
 
-    /// The case this is a state machine for: a tag split across two fragments.
+    /// The case this is a state machine for: a tag split across 2 fragments.
     #[test]
     fn a_tag_split_across_fragments_is_still_recognised() {
         let mut sp = ThinkSplitter::default();

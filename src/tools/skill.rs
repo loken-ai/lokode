@@ -2,7 +2,7 @@
 //!
 //! A skill is a directory holding a `SKILL.md`, in `~/.config/lokode/skills/` or in the
 //! project's `.lokode/skills/`, named by its directory, the project's taking the place of
-//! the user's. Its file opens with a description between two `---` lines, and the rest is
+//! the user's. Its file opens with a description between 2 `---` lines, and the rest is
 //! the know-how. The model sees each skill's name and description in the tool's
 //! description and loads one by name, or a file the skill keeps beside it. A window holds
 //! what is used, not everything that could be.

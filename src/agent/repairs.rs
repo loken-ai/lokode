@@ -125,10 +125,10 @@ impl Repairs {
     }
 }
 
-/// What makes two complaints the same complaint.
+/// What makes 2 complaints the same complaint.
 ///
 /// Line and column numbers, and the paths in front of them, are where it happened rather
-/// than what happened: the same mistake made twice is the same mistake at two places. What
+/// than what happened: the same mistake made twice is the same mistake at 2 places. What
 /// is left is the wording and the names in it, which is what a person would recognise.
 fn signature(said: &str) -> String {
     let line = said
@@ -165,7 +165,7 @@ fn signature(said: &str) -> String {
 /// The complaint with any "path:line:column:" in front of it removed.
 fn strip_place(line: &str) -> &str {
     let mut rest = line;
-    // Two numbered fields at most: a line and a column.
+    // 2 numbered fields at most: a line and a column.
     for _ in 0..2 {
         let Some((head, tail)) = rest.rsplit_once(':') else {
             break;
@@ -198,7 +198,7 @@ fn now() -> u64 {
 mod tests {
     use super::*;
 
-    /// The same mistake at two places is the same mistake: where it happened is not what
+    /// The same mistake at 2 places is the same mistake: where it happened is not what
     /// happened.
     #[test]
     fn a_complaint_is_recognised_wherever_it_happened() {

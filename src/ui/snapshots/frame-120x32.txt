@@ -9,7 +9,7 @@
                                                                                      src/mcp/client.rs            +3 -1
 The client waits on rx.await forever. I add timeout-secs:                            src/config.rs                +2 -0
 
-• one setting per server, thirty seconds unless it says otherwise                    CONTEXT                        23%
+• one setting per server, 30 seconds unless it says otherwise                        CONTEXT                        23%
 • a test against a server that never answers                                         ████████··························
                                                                                      █ instructions 10%  █ you 3%
   rust                                                                               █ model 4%  █ tools 6%

@@ -1,6 +1,6 @@
 //! A durable record of a session, one JSON object per line.
 //!
-//! Two jobs, and the first is the one that matters more often: when a session goes wrong
+//! 2 jobs, and the first is the one that matters more often: when a session goes wrong
 //! there is currently nothing left to look at afterwards. The history lives in memory,
 //! compaction discards the parts that fell out of the window, and the process takes the
 //! rest with it. A transcript is what makes a bad run answerable a day later.

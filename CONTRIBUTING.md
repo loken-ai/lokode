@@ -28,7 +28,7 @@ are the house style: each says which failure the code exists to prevent, so that
 changing it later knows what they would be giving up. A comment restating the line below it is
 worse than none.
 
-Commit messages do the same at a larger scale - the problem, then the resolution. `git log`
+Commit messages do the same at a larger scale: the problem, then the resolution. `git log`
 is the design record for this project.
 
 ## The parts to be careful with
@@ -36,7 +36,7 @@ is the design record for this project.
 **`src/sandbox/allowlist.rs`** is the only thing standing between the model and the rest of
 the filesystem. Its tests assert on consequences rather than on the shape of a path: the
 dangling-symlink case writes through the resolved path and checks nothing appeared outside.
-Keep new tests in that form - a path that merely *looks* wrong is not the failure.
+Keep new tests in that form: a path that merely *looks* wrong is not the failure.
 
 **`src/sandbox/approval.rs`** decides what an `[A]lways` covers. Widening a scope is a
 security change even when it reads like a convenience. If a prompt cannot state its scope in a
@@ -45,6 +45,23 @@ short phrase, the scope is probably wrong.
 **`src/agent/session.rs`** keeps the conversation inside the context window. The system
 message carries the tool manifest, a server that has to truncate keeps the tail, and so
 letting the history overflow is what silently removes the agent's knowledge of its own tools.
+
+## The ways in
+
+The terminal screen, `lokode acp`, `lokode serve` and `lokode attach` are 4 views of one
+engine, and none may drift from it. The events the engine sends are turned into what an editor
+reads in `src/acp/updates.rs`, and back into what the screen draws in `src/ui/remote.rs`. The
+page of `lokode serve` is plain HTML, CSS and JavaScript in `src/serve/`, embedded in the
+binary, with no build step and no dependency.
+
+A change to what the engine says to its interface touches all 4. `AgentEvent` is where to
+start, and a match that does not name a new event is a bug the compiler will not find for you.
+
+## Plugins from other agents
+
+`src/claude.rs` is the one place that knows another agent's names: the tools in a matcher, the
+events of a hook, the fields a hook script reads. Keep it so, and say in the plugin's listing
+what lokode leaves out rather than skipping it.
 
 ## Adding a tool
 

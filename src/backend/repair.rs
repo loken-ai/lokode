@@ -1,4 +1,4 @@
-//! Three-layer auto-repair for tool-call JSON.
+//! 3-layer auto-repair for tool-call JSON.
 //!
 //!  Layer 1 — Grammar (server-enforced via response_format=json_schema).
 //!            Lives in `backend::client`; this module is the

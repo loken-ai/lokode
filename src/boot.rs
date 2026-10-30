@@ -3,7 +3,7 @@
 //! The same work whether an interface or a script is going to drive it: build the registry,
 //! resolve which session this is, decide how tools will be asked for, and wire the pieces
 //! together. Written once here because the alternative - each entry point building its own -
-//! is how the tool list came to be declared in two places and drift.
+//! is how the tool list came to be declared in 2 places and drift.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -262,7 +262,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     ctx.planning = mode == crate::agent::agent_loop::Mode::Plan;
     // The standing instructions a person wrote, then what the background work has found
     // out: the cheaper half of what a session used to spend its first minutes
-    // rediscovering, in a paragraph rather than in a dozen searches.
+    // rediscovering, in a paragraph rather than in 12 searches.
     let learned = digest.preamble(crate::agent::digest::MAX_PREAMBLE_CHARS);
     let instructions = match (instructions, learned) {
         (Some(i), Some(l)) => Some(format!("{i}\n\nWhat earlier sessions found out here:\n{l}")),
@@ -290,7 +290,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let session_id = match earlier {
         Some(e) => {
             // Appending to the file it came from, rather than starting a new one: a
-            // session that is resumed three times should be one story, not four.
+            // session that is resumed 3 times should be one story, not 4.
             let (transcript, writer) = Transcript::create(session_path(&e.id)?)?;
             recorder = Some(writer);
             session = session.with_transcript(transcript, e.id.clone());
@@ -608,7 +608,7 @@ fn provider(
     }
 }
 
-/// The twelve tools, and the language-server pool two of them share.
+/// The tools, and the language-server pool some of them share.
 pub fn build_registry(root: PathBuf) -> (Registry, Arc<LspPool>) {
     build_registry_with(
         root,

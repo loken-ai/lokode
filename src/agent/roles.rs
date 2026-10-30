@@ -30,7 +30,7 @@ pub enum Role {
     /// clean up after a step whose change did not compile.
     Escalate,
     /// A second pair of eyes on a change, before it is written. Read-only work with one
-    /// question to answer, so a small model does it, and two models disagreeing is worth
+    /// question to answer, so a small model does it, and 2 models disagreeing is worth
     /// more than either of them alone.
     Review,
 }

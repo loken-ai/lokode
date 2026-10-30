@@ -59,8 +59,8 @@ impl TerminalGuard {
     /// captured mouse buys and costs.
     ///
     /// Paste is asked for as well. Without it a terminal hands pasted text over one
-    /// keystroke at a time, so every newline in it reads as the send key: pasting ten
-    /// lines of a stack trace asked ten questions, each of them a fragment.
+    /// keystroke at a time, so every newline in it reads as the send key: pasting 10
+    /// lines of a stack trace asked 10 questions, each of them a fragment.
     pub fn new() -> Result<Self> {
         enable_raw_mode()?;
         execute!(

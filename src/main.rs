@@ -19,8 +19,8 @@ mod default {
     /// the server's hold on the prompt it had already read is a prefix - so every
     /// compaction makes the next turn re-read the whole conversation. A window the work
     /// fits in is therefore faster than a smaller one, not merely roomier: measured on one
-    /// question against a thirty-billion-parameter model, twenty-four seconds here against
-    /// three hundred at a quarter of it, with the turns after the first answering in a
+    /// question against a 30-billion-parameter model, 24 seconds here against
+    /// 3 100 at a quarter of it, with the turns after the first answering in a
     /// quarter of a second instead of a minute.
     ///
     /// A ceiling, not an assumption: a backend whose model list states a smaller widest

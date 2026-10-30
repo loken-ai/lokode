@@ -10,7 +10,7 @@
 //! written into the digest. The queue and the digest both outlive the session, so the work
 //! is never repeated and never has to finish in one sitting.
 //!
-//! Three rules hold it in place. It runs only while nothing else does, it asks the server
+//! 3 rules hold it in place. It runs only while nothing else does, it asks the server
 //! at a priority that yields, and it changes nothing: it reads, and it writes one sentence
 //! into a file of sentences.
 
@@ -41,13 +41,13 @@ pub struct Discovery {
 /// How many turns may come back saying nothing before the background gives up.
 ///
 /// A question that is put back is asked again straight away, so a backend that is down
-/// would be hammered by a queue that never drains. Three is enough to ride out one bad
+/// would be hammered by a queue that never drains. 3 is enough to ride out one bad
 /// response and short enough that a real outage stops the loop rather than feeding it.
 const MAX_STALLS: u32 = 3;
 
 /// How many steps one question may take.
 ///
-/// Small deliberately. A question that needs a dozen tool calls is not a question, it is a
+/// Small deliberately. A question that needs 12 tool calls is not a question, it is a
 /// task, and a task belongs to the person whose turn it is.
 const STEPS_PER_QUESTION: usize = 4;
 
@@ -73,10 +73,10 @@ pub fn opening_questions() -> Vec<String> {
     ]
 }
 
-/// The first two sentences of an answer, or nothing when there is no answer in it.
+/// The first 2 sentences of an answer, or nothing when there is no answer in it.
 ///
-/// A model that was asked for two sentences and wrote a page still found something out.
-/// What follows the first two sentences is its reasoning, and the digest is read as fact.
+/// A model that was asked for 2 sentences and wrote a page still found something out.
+/// What follows the first 2 sentences is its reasoning, and the digest is read as fact.
 fn shorten(answer: &str) -> Option<String> {
     let answer = answer.trim();
     // The reasoning a thinking model shows is not part of what it found out.
@@ -100,7 +100,7 @@ fn shorten(answer: &str) -> Option<String> {
     }
     let short = if end > 0 { &answer[..end] } else { answer };
     let short = short.trim();
-    // Two sentences that run past this are not two sentences.
+    // 2 sentences that run past this are not 2 sentences.
     (!short.is_empty() && short.len() <= MAX_ANSWER_CHARS).then(|| short.to_string())
 }
 

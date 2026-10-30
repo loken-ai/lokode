@@ -3,7 +3,7 @@
 //! An agent is a prompt, the tools it may use, and the model it runs on. One is built in,
 //! `explore`, which searches the project to answer a question. Others are Markdown files
 //! in `~/.config/lokode/agents/` and in the project's `.lokode/agents/`, named by their
-//! file, the project's last. A file opens with a block of settings between two `---`
+//! file, the project's last. A file opens with a block of settings between 2 `---`
 //! lines, and the rest is the prompt.
 //!
 //! ```text

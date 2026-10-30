@@ -18,7 +18,7 @@ const MAX_HOPS: usize = 5;
 ///
 /// The extracted text is clamped to the conversation's budget afterwards, but that
 /// happens once the whole body is in memory - so a ceiling that only applies to the text
-/// does nothing about a server that offers a hundred gigabytes.
+/// does nothing about a server that offers 100 gigabytes.
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 pub struct WebFetch;

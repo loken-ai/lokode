@@ -119,7 +119,7 @@ pub(crate) async fn take_back(
 /// which is the same decision they make at a shell prompt. It still goes through the
 /// project root, because that is where the question they are asking lives.
 ///
-/// Bounded like any other result that lands in the pane, and the two streams are kept in
+/// Bounded like any other result that lands in the pane, and the 2 streams are kept in
 /// the order the command wrote them as far as reading them separately allows: what a
 /// failing command prints is usually the only thing worth having.
 pub(crate) async fn run_shell(
@@ -391,7 +391,7 @@ pub(crate) enum Ran {
     Resumed(Box<crate::agent::agent_loop::Resumed>),
 }
 
-/// Everything a command may need. One struct rather than nine arguments, since every new
+/// Everything a command may need. One struct rather than 9 arguments, since every new
 /// command was adding another to a call nobody could read.
 pub(crate) struct CommandCtx<'a> {
     pub(crate) checkpoints: Option<&'a Checkpoints>,
@@ -845,7 +845,7 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         return Ran::Said(out);
     }
     if verb == "approve" {
-        // What is in force, which is two things: what the configuration settles without
+        // What is in force, which is 2 things: what the configuration settles without
         // asking, and what was agreed to here. The second used to be invisible - a
         // session could be running commands unasked because of a key pressed an hour ago,
         // with nothing anywhere to say so and no way to take it back.

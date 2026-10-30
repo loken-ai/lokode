@@ -1,7 +1,7 @@
 //! `lokode serve`: the sessions of a project in a browser page, on this machine only.
 //!
 //! The page speaks the Agent Client Protocol, as an editor does. What lokode sends reaches
-//! every open page as a stream of events, and what a page sends is posted. Two requests of
+//! every open page as a stream of events, and what a page sends is posted. 2 requests of
 //! lokode's own complete the protocol for pages that come and go:
 //!
 //! | Request | Answer |

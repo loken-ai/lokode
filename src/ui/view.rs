@@ -21,7 +21,7 @@ pub(crate) fn draw(
     root: &Path,
     max_steps: usize,
 ) {
-    // No borders anywhere. They cost four columns and two lines, they land in
+    // No borders anywhere. They cost 4 columns and 2 lines, they land in
     // every selection made with the mouse, and they separate nothing that a blank
     // line and a prompt mark do not separate better.
     //
@@ -536,7 +536,7 @@ mod tests {
             }),
             Entry::Assistant(
                 "The client waits on `rx.await` forever. I add **timeout-secs**:\n\n\
-                 - one setting per server, thirty seconds unless it says otherwise\n\
+                 - one setting per server, 30 seconds unless it says otherwise\n\
                  - a test against a server that never answers\n\n\
                  ```rust\nlet reply = timeout(self.timeout, rx).await??;\n```"
                     .into(),
@@ -874,8 +874,8 @@ mod tests {
         typed: &'static str,
     }
 
-    /// The scenes a design pass looks at: a session at three widths, a turn at work, the
-    /// completion lists, a list a command opens, and two pages.
+    /// The scenes a design pass looks at: a session at 3 widths, a turn at work, the
+    /// completion lists, a list a command opens, and 2 pages.
     fn scenes() -> Vec<Scene> {
         use crate::ui::picker::{Choice, Kind, Picker};
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));

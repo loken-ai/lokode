@@ -1,6 +1,6 @@
 //! Handing a self-contained piece of work to a session of its own.
 //!
-//! The window is the scarce resource on a local model. A search that reads six files to
+//! The window is the scarce resource on a local model. A search that reads 6 files to
 //! answer one question spends the whole conversation's budget on text nobody needs
 //! afterwards - and once compaction drops it, what is left is the middle of a hunt with
 //! no beginning. Delegating gives that hunt its own window and brings back only its

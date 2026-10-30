@@ -15,7 +15,7 @@ pub struct Status {
     /// How much of the history budget the conversation occupies, as a percentage.
     ///
     /// Against the budget rather than the model's whole window: the budget is what
-    /// compaction defends, so a hundred here is where the oldest steps start being dropped
+    /// compaction defends, so 100 here is where the oldest steps start being dropped
     /// rather than where the model would refuse the request. Coloured as it approaches,
     /// because the first elision is the moment a session starts forgetting what it was
     /// told.
@@ -112,7 +112,7 @@ impl Status {
         ));
         let (badge, colour) = match (self.planning, self.accepting_writes) {
             (true, _) => (" PLAN ", theme().accent),
-            // Loudest of the three, because it is the one where things happen without
+            // Loudest of the 3, because it is the one where things happen without
             // being shown first.
             (false, true) => (" WRITE", theme().warn),
             (false, false) => (" ACT  ", theme().good),
@@ -230,7 +230,7 @@ impl Status {
         let mut used = 0usize;
         for pair in full.spans.chunks(2) {
             let cost: usize = pair.iter().map(|s| s.content.chars().count()).sum();
-            // Two columns kept back for the mark that says there is more.
+            // 2 columns kept back for the mark that says there is more.
             if used + cost + 2 > width {
                 break;
             }

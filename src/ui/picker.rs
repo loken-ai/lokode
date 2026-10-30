@@ -1,10 +1,10 @@
 //! A list you choose from, over the input, filtered by what is being typed.
 //!
-//! Three things used to need it and none had it: the commands, which had to be known by
-//! heart and typed without a mistake; the models, which arrived as sixty-eight lines
+//! 3 things used to need it and none had it: the commands, which had to be known by
+//! heart and typed without a mistake; the models, which arrived as 68 lines
 //! poured into the conversation; and the files, which had to be spelled out in full.
 //!
-//! One list, three sources. It opens on what is already typed, narrows at every keystroke,
+//! One list, 3 sources. It opens on what is already typed, narrows at every keystroke,
 //! and closes leaving nothing behind - a chooser is not part of the conversation.
 
 use ratatui::layout::Rect;
@@ -168,7 +168,7 @@ pub fn token_at(line: &str) -> Option<(Kind, usize, String)> {
         return match rest.split_once(char::is_whitespace) {
             None => Some((Kind::Command, 0, rest.to_string())),
             // One argument, and only while it is the last thing on the line: a command
-            // given two of them is being told something this cannot guess at.
+            // given 2 of them is being told something this cannot guess at.
             Some((verb, arg)) if !arg.contains(char::is_whitespace) => Some((
                 Kind::Argument(verb.to_string()),
                 line.len() - arg.len(),
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(token, "qwen");
         // The space is enough to offer the whole list.
         assert_eq!(token_at("/model ").unwrap().2, "");
-        // Two arguments in, the command is being told something this cannot guess at.
+        // 2 arguments in, the command is being told something this cannot guess at.
         assert!(token_at("/mcp server say something").is_none());
     }
 

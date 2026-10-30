@@ -353,7 +353,7 @@ mod new_directory_tests {
 /// the refusal with where the file actually is saves the round trip that would find it.
 ///
 /// Bounded on both sides: the walk stops once enough matches are in hand, and the answer
-/// names at most a few, because a refusal that lists a hundred paths is not an answer.
+/// names at most a few, because a refusal that lists 100 paths is not an answer.
 pub fn nearby(root: &Path, wanted: &Path) -> Vec<String> {
     const MOST: usize = 3;
     let Some(name) = wanted.file_name() else {

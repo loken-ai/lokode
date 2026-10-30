@@ -1,4 +1,4 @@
-//! The block of settings at the head of a Markdown file: `key: value` lines between two
+//! The block of settings at the head of a Markdown file: `key: value` lines between 2
 //! `---` lines. Agents, commands and skills are written this way.
 
 /// The settings of `text`, in order, and the rest of it. A file that does not open on

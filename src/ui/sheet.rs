@@ -260,7 +260,7 @@ fn window_rows(w: &Occupancy, width: usize) -> Vec<Line<'static>> {
     let mut bar = crate::ui::rail::window_bar(w, cells);
     bar.spans.remove(0);
     out.push(bar);
-    // A scale under the bar: where a quarter, a half, three quarters and all of it fall.
+    // A scale under the bar: where a quarter, a half, 3 quarters and all of it fall.
     let mut scale: Vec<char> = vec![' '; cells];
     for (share, mark) in [
         (0, "0"),

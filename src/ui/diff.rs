@@ -253,7 +253,7 @@ fn mark_pairs(rows: &mut [Row<'_>]) {
     }
 }
 
-/// The columns of `old` and of `new` that differ, word by word, or nothing when the two
+/// The columns of `old` and of `new` that differ, word by word, or nothing when the 2
 /// lines have too little in common for that to help.
 fn changed_words(old: &str, new: &str) -> (Marks, Marks) {
     let diff = TextDiff::from_words(old, new);
@@ -357,7 +357,7 @@ mod tests {
         );
     }
 
-    /// Two lines with nothing in common are a removal and an addition, nothing marked.
+    /// 2 lines with nothing in common are a removal and an addition, nothing marked.
     #[test]
     fn unrelated_lines_mark_nothing() {
         let (old, new) = changed_words("alpha beta gamma", "one two three four");

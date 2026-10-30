@@ -1,7 +1,7 @@
 //! The task list the model keeps while it works.
 //!
 //! A step counter says how far a turn has gone and nothing about what it is doing. On a
-//! task of a dozen steps, the person watching wants to know what is done, what is being
+//! task of 12 steps, the person watching wants to know what is done, what is being
 //! worked on and what is left - and a small model, whose window drops the beginning of
 //! the conversation first, needs the same list to remember the goal it was given.
 
@@ -118,7 +118,7 @@ impl Tool for UpdatePlan {
 
     async fn run(&self, _ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
         let a: Args = serde_json::from_value(args)?;
-        // At most a dozen: a list longer than the screen is one nobody reads, and it is
+        // At most 12: a list longer than the screen is one nobody reads, and it is
         // paid for in the window on every later step.
         if a.tasks.len() > 12 {
             return Ok(ToolOutput::err(

@@ -124,7 +124,7 @@ impl Sandbox {
         let fd = ruleset(&self.writable, &self.hidden, self.network)?;
         use std::os::fd::AsRawFd;
         let raw = fd.as_raw_fd();
-        // SAFETY: `restrict_after_fork` makes two syscalls and nothing else, no allocation
+        // SAFETY: `restrict_after_fork` makes 2 syscalls and nothing else, no allocation
         // and no locks, which is what a post-fork hook may do. `raw` stays open because
         // the caller keeps `fd` until the spawn is over.
         unsafe {
@@ -298,7 +298,7 @@ mod linux {
     ///
     /// Deliberately all of it: creating the ruleset and adding a rule per allowed directory
     /// both allocate and open files, and doing that between `fork` and `exec` in a process
-    /// with other threads can deadlock in the allocator. What is left for the child is two
+    /// with other threads can deadlock in the allocator. What is left for the child is 2
     /// bare syscalls.
     pub fn ruleset(writable: &[PathBuf], hidden: &[PathBuf], network: bool) -> io::Result<OwnedFd> {
         let Some(abi) = abi() else {
@@ -439,7 +439,7 @@ mod linux {
 
     /// Apply the ruleset to this process. Runs in the child, between `fork` and `exec`.
     ///
-    /// Two syscalls and nothing else: no allocation, no locks, nothing that another thread
+    /// 2 syscalls and nothing else: no allocation, no locks, nothing that another thread
     /// in the parent could have been holding when the fork happened.
     ///
     /// # Safety

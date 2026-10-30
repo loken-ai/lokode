@@ -113,12 +113,12 @@ impl Digest {
         };
         // Keyed by kind and subject, so a later wording of the same fact replaces the
         // earlier one and a statement about the layout never displaces one about the
-        // build. Two facts that share six words and a kind are the same fact stated
+        // build. 2 facts that share 6 words and a kind are the same fact stated
         // twice often enough that merging them is the better error.
         self.items
             .insert(format!("{}:{}", kind.label(), slug(text)), item);
         while self.items.len() > MAX_ITEMS {
-            // The oldest goes. A project that has changed enough to make forty statements
+            // The oldest goes. A project that has changed enough to make 40 statements
             // stale has changed enough that the oldest of them is the wrong one.
             if let Some(oldest) = self
                 .items
@@ -188,7 +188,7 @@ impl Digest {
         let mut out = String::new();
         for (kind, mut items) in by_kind {
             // Most recently learned first: what was found today is likelier to be true
-            // than what was found before the last three commits.
+            // than what was found before the last 3 commits.
             items.sort_by_key(|i| std::cmp::Reverse(i.learned_at));
             for item in items {
                 let line = format!("- {}: {}\n", kind.label(), item.text);
@@ -278,7 +278,7 @@ mod tests {
     use super::*;
 
     /// A fact stated again, in whatever words, replaces the earlier statement rather
-    /// than sitting beside it: a digest with three wordings of the test command is one
+    /// than sitting beside it: a digest with 3 wordings of the test command is one
     /// nobody trusts.
     #[test]
     fn restating_a_fact_replaces_it_and_a_different_subject_does_not() {

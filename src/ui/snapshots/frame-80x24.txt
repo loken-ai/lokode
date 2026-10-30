@@ -1,7 +1,7 @@
  lokode  /p/demo  main ●2                  qwen3-coder  127.0.0.1:11435  native
 The client waits on rx.await forever. I add timeout-secs:
 
-• one setting per server, thirty seconds unless it says otherwise
+• one setting per server, 30 seconds unless it says otherwise
 • a test against a server that never answers
 
   rust

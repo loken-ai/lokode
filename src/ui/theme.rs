@@ -182,7 +182,7 @@ impl Default for Theme {
     }
 }
 
-/// A colour as its three channels.
+/// A colour as its 3 channels.
 type Rgb = (u8, u8, u8);
 
 /// `a` moved towards `b` by `by` out of 255.

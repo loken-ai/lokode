@@ -1,7 +1,7 @@
 //! Where lokode keeps things on disk.
 //!
 //! The XDG base directories, read from the environment where it says so and falling back
-//! to the conventional places. Written out rather than taken from a crate: it is three
+//! to the conventional places. Written out rather than taken from a crate: it is 3
 //! variables and a home directory, and the fallbacks are the whole of the specification
 //! that matters here.
 
@@ -41,7 +41,7 @@ pub fn log_file() -> Option<PathBuf> {
 
 /// Guards the process-wide environment, so tests that set a variable do not race each
 /// other. One lock for the whole crate rather than one per module: `HOME` is read here and
-/// in `config`, and two locks around one environment guard nothing.
+/// in `config`, and 2 locks around one environment guard nothing.
 #[cfg(test)]
 pub(crate) fn with_env<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
     use std::sync::Mutex;

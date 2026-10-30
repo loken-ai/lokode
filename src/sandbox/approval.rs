@@ -42,7 +42,7 @@ impl ApprovalScope {
 
     /// The same, with paths written as the project sees them.
     ///
-    /// A prompt is read in a pane a few dozen columns wide, and the part of a path that
+    /// A prompt is read in a pane a few 12 columns wide, and the part of a path that
     /// says what is about to change is the part below the project root.
     pub fn describe_under(&self, root: &std::path::Path) -> String {
         match self {
@@ -179,7 +179,7 @@ pub struct SessionApprovals {
     /// Whether writes go ahead without being asked about, for as long as it is set.
     ///
     /// Writes and nothing else. A shell command and a request leaving the machine are the
-    /// two things a person most wants to see before they happen, and a mode meant to stop
+    /// 2 things a person most wants to see before they happen, and a mode meant to stop
     /// the interruptions of a long editing run must not quietly cover them as well.
     writes: AtomicBool,
 }

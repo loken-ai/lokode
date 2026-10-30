@@ -14,12 +14,18 @@ lokode --model qwen3-coder:latest --root .
 
 It speaks the OpenAI-compatible API, so it works against [loken](https://github.com/loken-ai/loken),
 ollama, vLLM, llama.cpp or any other server of that API. The default backend is
-`http://127.0.0.1:11435`. It also speaks the Anthropic Messages API.
+`http://127.0.0.1:11435`. It also speaks the Anthropic Messages API, and knows
+[17 providers](#which-provider) by name.
+
+Beside its own screen it serves editors over the Agent Client Protocol (`lokode acp`) and a
+browser page (`lokode serve`), and a terminal can attach to a session either serves
+(`lokode attach`). Plugins add commands, agents, skills, hooks, tool servers and language
+servers, including the plugins written for other coding agents.
 
 ## What it does
 
-It reads, searches and edits files under one root, runs commands and asks a language server.
-`--max-steps` caps the steps of one turn.
+It reads, searches and edits files under one root, runs commands in a sandbox and asks a
+language server. `--max-steps` caps the steps of one turn.
 
 The sections of this page. Those marked local rely on the model running on your machine.
 
@@ -38,10 +44,14 @@ The sections of this page. Those marked local rely on the model running on your 
 | [Background discovery](#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody waits, kept between sessions |
 | [Speculation](#using-it) *(local)* | the next read guessed while the model is still writing |
 | [The engine](#what-the-engine-measures) *(local)* | what loken measured of each request, its energy and the power of the machine |
-| [Agents](#handing-work-to-an-agent) | a search or a task handed to a named agent, in a window of its own |
+| [Sandbox](#where-it-is-careful) | the commands it runs write only in the project, and cannot read your credentials |
+| [Agents](#handing-work-to-an-agent) | a search or a task handed to a named agent, in a window of its own, in the background and in a copy of the project |
 | [Plans](#work-of-several-steps) | work of several steps kept as a list |
 | [Hooks](#hooks) | commands around a tool call and at the end of a turn |
-| [MCP](#tools-from-elsewhere) | tools, documents and prompts from another server |
+| [Commands, skills and plugins](#commands-written-as-files) | prompts, know-how and extensions kept as files, installed from git or a marketplace |
+| [MCP](#tools-from-elsewhere) | tools, documents and prompts from another server, signed in to when it asks |
+| [Providers](#which-provider) | 17 providers by name, or any server of the OpenAI API |
+| [Editors and browser](#in-an-editor) | `lokode acp` for Zed, JetBrains, Neovim, Emacs and VS Code, `lokode serve` for a page, `lokode attach` for a terminal |
 | [Headless](#without-the-interface) | one prompt, a JSON report, an exit code |
 
 ## What the engine measures
@@ -58,7 +68,7 @@ Against a loken server, lokode reads what the server measured of each request.
 | the energy each request drew | the rail, the receipt, `/cost`, the session file and `-p --output json` |
 
 The power comes from the device listing loken serves to its own interface. It is read every
-two seconds while a turn runs, and shown as read. The energy comes from the server, request by
+2 seconds while a turn runs, and shown as read. The energy comes from the server, request by
 request.
 
 Energy is counted by what a request was for: a step, a guessed read, a review, a repaired reply
@@ -125,7 +135,7 @@ A session in the middle of a turn, at 120 columns:
                                                                                      src/mcp/client.rs            +3 -1
 The client waits on rx.await forever. I add timeout-secs:                            src/config.rs                +2 -0
 
-• one setting per server, thirty seconds unless it says otherwise                    CONTEXT                        23%
+• one setting per server, 30 seconds unless it says otherwise                        CONTEXT                        23%
 • a test against a server that never answers                                         ████████··························
                                                                                      █ instructions 10%  █ you 3%
   rust                                                                               █ model 4%  █ tools 6%
@@ -279,7 +289,7 @@ backend on this machine or this network, never a hosted one. `speculate = false`
 A turn ends on a receipt: its time, its steps, what it read and wrote, the files it changed
 and its energy. A quick turn that changed nothing gets none.
 
-The loop declines three things:
+The loop declines 3 things:
 
 - a read already made this turn, with nothing written since, is answered with its result, and
   the model is told it repeats itself
@@ -290,11 +300,29 @@ The loop declines three things:
 `/retry <model>` asks another model. The transcript keeps both attempts, and `/undo` puts back
 the files of the first.
 
-A turn that gets nowhere is handed back early. Three steps in a row where every call failed or
-repeated itself end it, and so do six failed calls in a turn that changed nothing. The screen
+A turn that gets nowhere is handed back early. 3 steps in a row where every call failed or
+repeated itself end it, and so do 6 failed calls in a turn that changed nothing. The screen
 names the tool that kept failing.
 
 At an approval, a click on a badge answers like its key. `Enter` does nothing there.
+
+## The tools
+
+What the model can call. A tool that can change something, reach the network or run code is
+asked about first.
+
+| Tool | What it does | Asked |
+|---|---|---|
+| `read_file`, `list_dir`, `glob`, `grep` | read, list and search under the root | no |
+| `write_file`, `edit_file`, `edit_lines`, `apply_patch` | change files, as a diff to accept | yes |
+| `bash`, `run_tests` | run a command, or the project's tests, in the sandbox | yes, per command |
+| `web_fetch` | fetch a page from a public address | yes, per host |
+| `lsp_definition`, `lsp_references`, `lsp_implementations`, `lsp_hover`, `lsp_calls`, `lsp_symbols`, `lsp_diagnostics` | ask a language server | no |
+| `update_plan`, `submit_plan` | keep the task list, and put a plan to you | a plan, yes |
+| `delegate` | hand a task to an agent | no, what the agent does is asked |
+| `take_work` | bring in what an agent did in its own copy | no, its writes were asked in the copy |
+| `skill` | load a skill and the files it keeps | no |
+| `<server>__<tool>` | what a tool server offers | yes, unless it says it only reads |
 
 ## What runs
 
@@ -534,11 +562,11 @@ An objection from `review` stops the call and goes back to the model that propos
 reviewer that cannot be reached never blocks anything.
 
 A step whose change fails its check raises the session to `escalate` for the steps that follow,
-and says so. Two writes that pass bring it back down. A step that only reads moves nothing.
+and says so. 2 writes that pass bring it back down. A step that only reads moves nothing.
 
 What each model managed is remembered per project, outside the repository: how many of its
-last fifty writes passed their check. When the cheap model fails most of its writes in a
-project, the next turn starts on the stronger one and says so. It decides only after four
+last 50 writes passed their check. When the cheap model fails most of its writes in a
+project, the next turn starts on the stronger one and says so. It decides only after 4
 writes. `/why` says what is in force and on what evidence.
 
 While a plan is written, the `edit` model, or else the default one, is asked for in the
@@ -583,7 +611,7 @@ line boundary, and the session says so.
 ## Where the window stands
 
 The window is read from the backend's model list (`max_model_len`), and `--context-tokens`
-caps it. The status line shows how full it is: amber past three quarters, red once the oldest
+caps it. The status line shows how full it is: amber past 75%, red once the oldest
 steps start being elided. `/context` says what holds it, largest first: the instructions and
 the tools, what you said, what the model said, the tool results. `/compact` elides now.
 
@@ -669,13 +697,13 @@ api-key-env = "ANTHROPIC_API_KEY"
   Each line either side added must be in the file, and each line either side removed must be
   gone. A line left out on purpose goes in `dropped`, with why.
 - A refusal lists only the lines the proof does not account for, and writes nothing.
-- Once in, the files are checked like any write. An error comes from putting the two together,
+- Once in, the files are checked like any write. An error comes from putting both together,
   and the session fixes it before the turn ends.
-- When the project changed meanwhile, a model reads the two sides together once, and says what
+- When the project changed meanwhile, a model reads both sides together once, and says what
   would not work together: a name or signature one side changed and the other uses, the same
   thing done twice, behaviour that contradicts. It is the `review` role's model, or the
   session's. It is given the objectives and both sides' changes without their context, cut
-  short, and answers `OK` or five lines at most. What it finds is the session's to fix before
+  short, and answers `OK` or 5 lines at most. What it finds is the session's to fix before
   the turn ends.
 - An agent stopped by the user is not brought in. Its copy stays, its path said.
 - A proof refused twice in a turn counts as a check that failed: with an `escalate` model named
@@ -1095,7 +1123,7 @@ file only you can read. It goes in `Authorization: Bearer` for the OpenAI family
 
 The differences stop at the boundary: the system prompt, the tool results and the stream.
 Reasoning arrives as `<think>` tags, a `reasoning` field, a `reasoning_content` field or
-Anthropic's thinking blocks. All four are shown the same way, set apart, and never sent back to
+Anthropic's thinking blocks. All 4 are shown the same way, set apart, and never sent back to
 the model.
 
 ## How tools are called
@@ -1110,13 +1138,17 @@ The band says which protocol is in force.
 
 ## Configuring it
 
-Settings come from five places, and the narrower wins: a flag, the environment,
+Settings come from 5 places, and the narrower wins: a flag, the environment,
 `<root>/.lokode.toml`, `~/.config/lokode/config.toml`, the built-in default.
 
 ```toml
 # ~/.config/lokode/config.toml, or .lokode.toml in a project
 model = "qwen3-coder:latest"
 tool-protocol = "auto"          # auto | native | envelope
+
+[models."qwen3-coder:latest"]   # what one model needs, when it differs from [limits]
+context-tokens = 32768
+max-answer-tokens = 2048
 
 [backend]
 url = "http://127.0.0.1:11435"  # or provider = "openrouter", see Which provider
@@ -1141,6 +1173,28 @@ hidden = ["~/work/secrets"]
 [session]
 transcripts = true
 ```
+
+**Flags.**
+
+| Flag | What it does |
+|---|---|
+| `-m`, `--model` | the model, as the backend names it |
+| `-r`, `--root` | the project, `.` when not given |
+| `-u`, `--backend-url` | where the backend is |
+| `--provider` | a provider by name, in place of the configured backend |
+| `--backend-kind` | `openai` or `anthropic`, read off the url when not given |
+| `--header NAME=VALUE` | a header sent with every backend request, repeatable |
+| `--max-steps`, `--context-tokens`, `--max-answer-tokens` | the limits, over those of the configuration |
+| `--tool-protocol` | `auto`, `native` or `envelope` |
+| `--no-grammar` | turn off the server-side constraint on the envelope |
+| `--sandbox` | `workspace`, `read-only` or `off` |
+| `--plan`, `--accept-edits` | start planning, or writing without asking |
+| `--allow-host HOST` | let `web_fetch` reach a host on your own network |
+| `--trust-project` | take the project's guarded settings for this run |
+| `--resume ID`, `--continue` | come back to a recorded session |
+| `--no-transcript`, `--log-file` | what is kept of the session, and where the log goes |
+| `-p`, `--approve`, `--output` | one prompt without the screen, see [Without the interface](#without-the-interface) |
+| `--show-config` | print what everything resolved to |
 
 **A project's file.** Its settings that run programs or loosen approvals wait for trust.
 

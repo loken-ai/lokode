@@ -18,23 +18,22 @@
 //! - [`backend`] - the providers, the wire types, and the repair pass for the JSON a model
 //!   gets slightly wrong. [`backend::provider::Provider`] is the seam: everything about
 //!   whose API is answering lives behind it.
-//! - [`tools`] - the twelve things the agent can do, and the registry they are named in.
+//! - [`tools`] - the things the agent can do, and the registry they are named in.
 //! - [`sandbox`] - what the agent may touch, and what the user has agreed to.
 //! - [`config`] - settings, from a flag, the environment, a project file or a user file.
 //! - [`paths`] - where logs and transcripts live.
 //! - [`serve`] - the sessions of a project in a browser page, over the same protocol.
 //!
-//! # Two things worth knowing before changing anything
+//! # 2 things worth knowing before changing anything
 //!
 //! The system message carries the tool manifest, and a server that has to truncate a
 //! too-long conversation keeps the tail. So letting the history overflow the window removes
 //! the agent's knowledge of its own tools, which is why [`agent::session::Session`] compacts
 //! client-side and why a single tool result is sized against the window it has to fit in.
 //!
-//! The path sandbox in [`sandbox::allowlist`] confines every tool that takes a path. It does
-//! not confine `bash`, which by construction runs a shell - on Linux
-//! [`sandbox::confine`] can make everything outside the root read-only for one, but that is
-//! off unless asked for. See `SECURITY.md`.
+//! The path sandbox in [`sandbox::allowlist`] confines every tool that takes a path. A shell
+//! takes a string, so [`sandbox::confine`] confines the commands themselves, with Landlock
+//! on Linux and Seatbelt on macOS, and does so unless it is turned off. See `SECURITY.md`.
 
 pub mod acp;
 pub mod agent;

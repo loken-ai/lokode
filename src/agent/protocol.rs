@@ -1,6 +1,6 @@
 //! How a turn's tool calls travel, and the one shape the loop reads them in.
 //!
-//! Two ways of asking the same thing. The envelope makes the model emit a single JSON
+//! 2 ways of asking the same thing. The envelope makes the model emit a single JSON
 //! object, constrained by a grammar built from the tool schemas; the native protocol uses
 //! the server's own `tools` field and gets back `tool_calls`. Small local models are the
 //! reason the envelope exists and the reason it stays: a server that will not do native

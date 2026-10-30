@@ -204,7 +204,7 @@ impl ToolCtx {
     /// involved refers to it.
     ///
     /// The absolute path is what the tools work with and what the sandbox checks, but on
-    /// a narrow screen it is a line of scaffolding in front of the three words that
+    /// a narrow screen it is a line of scaffolding in front of the 3 words that
     /// matter, and the model does not address files that way either.
     pub fn short(&self, path: &Path) -> String {
         if let Ok(rel) = path.strip_prefix(&self.root) {
@@ -353,7 +353,7 @@ impl ToolCtx {
         }
         // A standing decision for writes, taken deliberately for a stretch of work. It
         // covers writes and nothing else: a command and a request leaving the machine stay
-        // asked about, because those are the two a person most wants to see coming.
+        // asked about, because those are the 2 a person most wants to see coming.
         if !insist && self.session_approvals.writes_accepted(&req.scope) {
             tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by accepting writes");
             return Approval::Proceed;
@@ -674,7 +674,7 @@ mod tests {
     }
 
     /// Truncating by byte count lands mid-character on anything but ASCII, and a `String`
-    /// cut there is not a `String` at all - it panics. Emoji are four bytes, so a ceiling
+    /// cut there is not a `String` at all - it panics. Emoji are 4 bytes, so a ceiling
     /// that is not a multiple of four falls inside one.
     #[tokio::test]
     async fn cutting_never_lands_inside_a_character() {

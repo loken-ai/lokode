@@ -411,7 +411,7 @@ impl Renderer {
         self.spaced = false;
     }
 
-    /// A table: columns as wide as their widest cell, the header bold and underlined, two
+    /// A table: columns as wide as their widest cell, the header bold and underlined, 2
     /// spaces between columns, and no rules.
     fn draw_table(&mut self, table: Table) {
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);

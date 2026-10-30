@@ -3,7 +3,7 @@
 //! A command is a prompt a person runs by name: `/review`, `/git:commit`. It lives in
 //! `~/.config/lokode/commands/` for every project or in the project's `.lokode/commands/`,
 //! the project's taking the place of the user's of the same name. A file in a directory
-//! is named after both, joined by `:`. A file may open with settings between two `---`
+//! is named after both, joined by `:`. A file may open with settings between 2 `---`
 //! lines:
 //!
 //! ```text

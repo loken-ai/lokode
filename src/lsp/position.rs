@@ -2,7 +2,7 @@
 //!
 //! The tools speak in characters, 1-indexed. A server counts code units of the encoding it
 //! agreed to at startup: UTF-16 unless it says otherwise. On a line with an accent or an
-//! emoji the two differ, and a column passed through unconverted points at the wrong place.
+//! emoji the 2 differ, and a column passed through unconverted points at the wrong place.
 
 /// The unit a server counts columns in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -60,7 +60,7 @@ pub fn chars(line: &str, units: u32, enc: Encoding) -> usize {
 mod tests {
     use super::*;
 
-    /// An accent takes two bytes and one UTF-16 unit, an emoji four bytes and two units.
+    /// An accent takes 2 bytes and one UTF-16 unit, an emoji 4 bytes and 2 units.
     #[test]
     fn a_column_is_counted_in_the_server_s_units() {
         let line = "é🙂x";

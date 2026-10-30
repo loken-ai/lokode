@@ -1,7 +1,7 @@
 //! The Anthropic Messages API.
 //!
 //! The first provider whose wire format is genuinely different rather than a dialect, and
-//! the reason the seam next door exists. Four things do not line up with the conversation
+//! the reason the seam next door exists. 4 things do not line up with the conversation
 //! the agent keeps internally, and each is translated here so that nothing above has to
 //! know:
 //!

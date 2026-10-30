@@ -1,7 +1,7 @@
 //! A list to choose from, opened by a command.
 //!
 //! A command could only ever print. So the one that changes the model printed the whole
-//! catalogue - eighty names on a page - and left the person to type one back exactly, from
+//! catalogue - 80 names on a page - and left the person to type one back exactly, from
 //! memory, with no completion on the argument and no sign of which one was already
 //! answering. That is a catalogue, not a choice.
 //!
@@ -48,7 +48,7 @@ impl Chooser {
             typed: String::new(),
             at: 0,
         };
-        // Open on what is in force. A list of eighty that opens on the first name makes
+        // Open on what is in force. A list of 80 that opens on the first name makes
         // the person find where they already are before they can move.
         if let Some(marked) = out.marked.clone() {
             if let Some(i) = out.shown().iter().position(|c| c.value == marked) {
@@ -119,9 +119,9 @@ impl Chooser {
 
     /// The rows to show, and where the highlight sits among them.
     ///
-    /// A window that follows the highlight rather than the top of the list: with eighty
-    /// names and twelve rows, walking down a list pinned to its first row shows the same
-    /// twelve names however far down the person has gone.
+    /// A window that follows the highlight rather than the top of the list: with 80
+    /// names and 12 rows, walking down a list pinned to its first row shows the same
+    /// 12 names however far down the person has gone.
     fn window(&self) -> (usize, usize) {
         let shown = self.shown().len();
         let rows = shown.min(ROWS);
@@ -178,7 +178,7 @@ mod tests {
         )
     }
 
-    /// A list of eighty that opens on the first name makes a person find where they are
+    /// A list of 80 that opens on the first name makes a person find where they are
     /// before they can move.
     #[test]
     fn the_list_opens_on_what_is_in_force() {

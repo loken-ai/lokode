@@ -1,4 +1,4 @@
-//! Settings, and the four places they can come from.
+//! Settings, and the 4 places they can come from.
 //!
 //! Every knob used to be a command-line flag and nothing else, so the model had to be
 //! retyped at every launch and a project could not say anything about how it wanted to be

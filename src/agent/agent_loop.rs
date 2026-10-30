@@ -61,7 +61,7 @@ impl Phase {
 /// Whether the agent may change anything.
 ///
 /// Planning is not a weaker set of approvals: it is a different question. A user who wants
-/// to know what would happen should not have to say no to fifteen prompts to find out, and
+/// to know what would happen should not have to say no to 15 prompts to find out, and
 /// an agent that has to ask before every step of a plan cannot describe the plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -180,7 +180,7 @@ pub enum AgentEvent {
     /// The model's scratchpad. Shown, never recorded, never sent back.
     Reasoning(String),
     ToolCall {
-        /// The id the result will carry, so the two can be put together.
+        /// The id the result will carry, so the 2 can be put together.
         id: String,
         name: String,
         args_pretty: String,
@@ -248,7 +248,7 @@ fn step_rate(attempt: &anyhow::Result<Completion>, model_ms: u64) -> Option<f64>
 /// what was written is what the tool says it wrote, and a call that was refused or failed
 /// says nothing to parse.
 ///
-/// The four shapes the write tools produce: "wrote P (N bytes)", "edited P", "patched P"
+/// The 4 shapes the write tools produce: "wrote P (N bytes)", "edited P", "patched P"
 /// once per file, and "applied N edit(s) to P".
 fn changed_paths(content: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -281,11 +281,11 @@ use crate::lsp::check::{CHECK_FAILED, CHECK_PASSED, NOT_CHECKED};
 ///
 /// The turn's user message is already in the history, and `Session::compact` drops whole
 /// steps by looking for user-message boundaries. Leaving a user message with no reply
-/// behind it puts two `user` roles in a row and moves a boundary the compactor reasons
+/// behind it puts 2 `user` roles in a row and moves a boundary the compactor reasons
 /// about, so an abandoned turn is closed off rather than left open.
 const TURN_ABANDONED: &str = "[this turn ended without an answer]";
 
-/// How long to wait between two pieces of a streaming answer before giving up on it.
+/// How long to wait between 2 pieces of a streaming answer before giving up on it.
 ///
 /// Between pieces only. A server that has started speaking and stops has stalled, and the
 /// gap says so whatever the prompt was.
@@ -345,9 +345,9 @@ fn last_is_parallel(registry: &Registry, run: &[ResolvedCall]) -> bool {
 
 /// How many steps may fail outright, one after another, before the turn is given back.
 ///
-/// Three is enough for a search that guesses wrong twice and then reads the tree, and
-/// short enough that a model repeating a broken idea costs three context reads and not
-/// sixteen.
+/// 3 is enough for a search that guesses wrong twice and then reads the tree, and
+/// short enough that a model repeating a broken idea costs 3 context reads and not
+/// 16.
 const BARREN_STEPS: u32 = 3;
 
 /// A guess in flight: the work, and the token that abandons it.
@@ -556,7 +556,7 @@ fn nearest_tool(reg: &Registry, wanted: &str) -> Option<String> {
         if shared == 0 {
             continue;
         }
-        // The first word is the verb, and two tools that share only a noun are not the
+        // The first word is the verb, and 2 tools that share only a noun are not the
         // same tool: read_file and list_files share "file" and do opposite things.
         let verb = usize::from(match (want.first(), have.first()) {
             (Some(w), Some(h)) => akin(h, w),
@@ -570,7 +570,7 @@ fn nearest_tool(reg: &Registry, wanted: &str) -> Option<String> {
     best.map(|(_, name)| name.clone())
 }
 
-/// What makes two calls the same call: the tool, and the arguments it was given.
+/// What makes 2 calls the same call: the tool, and the arguments it was given.
 fn repeat_key(call: &ResolvedCall) -> String {
     format!("{}\u{0}{}", call.name, call.arguments)
 }
@@ -672,8 +672,8 @@ pub struct AgentConfig {
 /// What one turn did, for the line that closes it.
 ///
 /// A turn ends with the model's answer and nothing about the turn: how long it took, what
-/// it changed, what it cost. Those are the three things a person checks before deciding
-/// whether to look at the diff, and all three were already known and thrown away.
+/// it changed, what it cost. Those are the 3 things a person checks before deciding
+/// whether to look at the diff, and all 3 were already known and thrown away.
 #[derive(Debug, Clone, Default)]
 pub struct TurnTally {
     pub files: Vec<String>,
@@ -1118,7 +1118,7 @@ impl Agent {
     ///
     /// Fire and forget, and at most one at a time: this is an optimisation, so it must
     /// never delay a turn, fail one, or queue up behind itself. The server decides whether
-    /// it can hold two models at once - that is its pressure protocol's job, not this
+    /// it can hold 2 models at once - that is its pressure protocol's job, not this
     /// one's - and if it cannot, the next use of the current model reloads it.
     fn preload(&self, model: &str) {
         if !self.cfg.preload || model == self.cfg.model || model.trim().is_empty() {
@@ -1153,7 +1153,7 @@ impl Agent {
     ///
     /// The configured figure is what this session asked for; the served one is what it
     /// got, which can be smaller because the checkpoint declares less or because the
-    /// cards held no more. Believing the larger of the two is the expensive mistake: the
+    /// cards held no more. Believing the larger of the 2 is the expensive mistake: the
     /// prompt goes out too big and the server cuts it from the front, taking the standing
     /// instructions and leaving an answer that is fluent and about the wrong thing.
     ///
@@ -1174,7 +1174,7 @@ impl Agent {
 
     /// Size the history to `window`, and say so when it moves.
     ///
-    /// One place, because the window is learned two ways - a backend that answers the
+    /// One place, because the window is learned 2 ways - a backend that answers the
     /// question, and a backend that cuts a prompt and is caught at it - and a session
     /// sized differently depending on which taught it would be a session whose budget
     /// depends on how it found out.
@@ -1194,7 +1194,7 @@ impl Agent {
         );
         self.session.set_window(window, reserve);
         // What a tool result may contribute is a share of the same window, so it moves
-        // with it: a history resized upward that still reads files in two-kilobyte pieces
+        // with it: a history resized upward that still reads files in 2-kilobyte pieces
         // has not gained anything worth having.
         self.ctx.max_output_chars = crate::agent::session::tool_output_chars(window, reserve);
         if previous != 0 {
@@ -1467,8 +1467,8 @@ impl Agent {
 
     /// Come back to a session recorded earlier.
     ///
-    /// The record is appended to rather than replaced, so a session resumed three times is
-    /// one story rather than four, and the model it was last using comes back with it.
+    /// The record is appended to rather than replaced, so a session resumed 3 times is
+    /// one story rather than 4, and the model it was last using comes back with it.
     async fn resume_session(&mut self, id: &str) -> Result<Resumed, String> {
         let dir = crate::paths::sessions_dir()
             .ok_or_else(|| "no home directory, so no sessions to come back to".to_string())?;
@@ -1631,7 +1631,7 @@ impl Agent {
     /// Run one turn to the end and hand back everything it said.
     ///
     /// The events channel is bounded. A caller that reads it only once the turn has
-    /// returned stops the turn at the sixty-fourth event and waits there forever, so a
+    /// returned stops the turn at the 60-fourth event and waits there forever, so a
     /// sub-session that reports its own progress has to be drained while it runs.
     pub async fn collect_turn(
         &mut self,
@@ -1814,8 +1814,8 @@ impl Agent {
         let validator = Validator::new(&turn_schema).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         for step in 0..self.cfg.max_steps {
-            // One build per step: a step that writes three files is one change, and asking
-            // three times costs three builds to learn the same thing.
+            // One build per step: a step that writes 3 files is one change, and asking
+            // 3 times costs 3 builds to learn the same thing.
             self.checked_this_step
                 .store(false, std::sync::atomic::Ordering::Relaxed);
             if cancel.is_cancelled() {
@@ -1824,7 +1824,7 @@ impl Agent {
             }
             // Before every call, not once per turn: a single tool result can be larger
             // than everything said so far, so the history can outgrow the window in the
-            // middle of a turn as easily as between two.
+            // middle of a turn as easily as between 2.
             // Anything said while the previous step ran joins the conversation here,
             // before the request is built, so the model reads it on this step rather
             // than after the turn it was meant to change.
@@ -2152,8 +2152,8 @@ impl Agent {
             // step will do it until the step limit.
             let mut called = 0usize;
             let mut fruitless = 0usize;
-            // Read-only calls in a run go together. A turn that asks to read three files
-            // waits for three round trips otherwise, one after another, for no reason -
+            // Read-only calls in a run go together. A turn that asks to read 3 files
+            // waits for 3 round trips otherwise, one after another, for no reason -
             // none of them can see what the others did. A mutating call ends the run: what
             // it changes is what the next call would read, and a checkpoint has to sit
             // between them to mean anything.
@@ -2405,7 +2405,7 @@ impl Agent {
             let barren = self.barren;
             let tools = record.after.tools.join(", ");
             self.close_step(record);
-            // Two shapes of the same thing. A run of steps where nothing worked at all,
+            // 2 shapes of the same thing. A run of steps where nothing worked at all,
             // and a turn that keeps failing here and there without ever changing
             // anything: the second is what a model that corrupts its own arguments looks
             // like, and it never trips the first.
@@ -2454,7 +2454,7 @@ impl Agent {
     /// how confident it feels; a coding agent can compile. So the cheap path is tried
     /// first and the expensive one is paid for only where it has been shown to be needed.
     ///
-    /// One rung, and down again after two clean steps. Two rungs would need evidence
+    /// One rung, and down again after 2 clean steps. 2 rungs would need evidence
     /// about which of them helps, and nothing here has that evidence yet.
     async fn reconsider_model(
         &mut self,
@@ -2707,7 +2707,7 @@ impl Agent {
             }
         }
         // Underneath them, the compiler, asked to compile and nothing else. Once per step,
-        // because a step that writes three files is one change.
+        // because a step that writes 3 files is one change.
         if self
             .checked_this_step
             .swap(true, std::sync::atomic::Ordering::Relaxed)
@@ -2724,10 +2724,10 @@ impl Agent {
     ///
     /// What the hook says is a notice rather than part of the conversation: the turn is
     /// over, so there is nothing left for the model to do about it, and the person is the
-    /// one who has to read that the formatter rewrote three files.
+    /// one who has to read that the formatter rewrote 3 files.
     async fn end_turn(&self, events: &mpsc::Sender<AgentEvent>) {
         // What the turn came to, in one line: how long, how many steps, what it cost and
-        // what it changed. All four were known and thrown away.
+        // what it changed. All 4 were known and thrown away.
         if let Some(receipt) = self.this_turn.receipt() {
             let _ = events.send(AgentEvent::Receipt(receipt)).await;
         }
@@ -2767,7 +2767,7 @@ impl Agent {
     /// Close an unanswered turn.
     ///
     /// The user message is already in the history; without a reply behind it the next
-    /// turn puts two `user` roles in a row, which is not a shape the compactor's
+    /// turn puts 2 `user` roles in a row, which is not a shape the compactor's
     /// boundary search expects.
     async fn abandon(&mut self, events: &mpsc::Sender<AgentEvent>, why: &str) {
         self.session.push(Message::assistant(TURN_ABANDONED));
@@ -3105,7 +3105,7 @@ impl Agent {
                 biased;
                 _ = cancel.cancelled() => return Err(anyhow::anyhow!("interrupted")),
                 // A server that stops speaking mid-answer would otherwise hold the turn
-                // until the client's own timeout, which is fifteen minutes of a interface
+                // until the client's own timeout, which is 15 minutes of a interface
                 // that says it is busy and is not.
                 _ = tokio::time::sleep(patience) => {
                     return Err(anyhow::anyhow!(
@@ -3251,7 +3251,7 @@ impl Agent {
         };
         // Refused here rather than at the approval prompt: planning is a question about
         // what would happen, and answering it must not depend on somebody declining
-        // fifteen times. The refusal names the mode so the model plans instead of
+        // 15 times. The refusal names the mode so the model plans instead of
         // retrying, and reads as this agent's rule rather than as the user saying no.
         if self.cfg.mode == Mode::Plan && tool.mutates() {
             tracing::info!(tool = name, "refused while planning");
@@ -3261,7 +3261,7 @@ impl Agent {
             ));
         }
         // Around a call that changes something, and around the reads a hook names: a hook
-        // on every read would run on the searches an agent does by the dozen.
+        // on every read would run on the searches an agent does by the 12.
         use crate::agent::hooks::{run_all, said, Event};
         let target = Some((name, tool.mutates()));
         let before = run_all(
@@ -4327,8 +4327,8 @@ mod tests {
         assert!(!names_word("the xread_file helper", "read_file"));
     }
 
-    /// The same read twice in one run is one read. The model gets two answers, because
-    /// two calls need two results, and the machine does the work once.
+    /// The same read twice in one run is one read. The model gets 2 answers, because
+    /// 2 calls need 2 results, and the machine does the work once.
     #[tokio::test]
     async fn the_same_read_twice_in_one_run_is_read_once() {
         let h = Harness::new(Answer::Yes);
@@ -4404,7 +4404,7 @@ mod tests {
     }
 
     /// A model that corrupts its own arguments alternates between calls that work and
-    /// calls that cannot, so it never gets nowhere three steps running. What it never
+    /// calls that cannot, so it never gets nowhere 3 steps running. What it never
     /// does is change anything.
     #[tokio::test]
     async fn a_turn_that_keeps_failing_and_changes_nothing_is_given_back() {
@@ -4779,7 +4779,7 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, AgentEvent::ToolResult { name, .. } if name == "read_file"))
             .count();
-        // The first read, then three that got nowhere.
+        // The first read, then 3 that got nowhere.
         assert_eq!(reads, 4, "the turn kept asking");
         assert!(
             events.iter().any(|e| matches!(e, AgentEvent::Notice(n)
@@ -4788,7 +4788,7 @@ mod tests {
         );
     }
 
-    /// A model repeating a broken idea costs a full context read per step. Three steps
+    /// A model repeating a broken idea costs a full context read per step. 3 steps
     /// where nothing worked is enough to hand the turn back.
     #[tokio::test]
     async fn a_turn_where_nothing_works_is_given_back() {
@@ -5276,7 +5276,7 @@ mod tests {
         );
     }
 
-    /// Two writes must not be grouped, or one checkpoint would cover both.
+    /// 2 writes must not be grouped, or one checkpoint would cover both.
     #[test]
     fn writes_are_never_grouped() {
         let reg = registry_of_all_tools();
@@ -5469,7 +5469,7 @@ mod tests {
             )),
             "the turn did not say why it started where it did: {events:?}"
         );
-        // What it was raised from is remembered, so two clean writes bring it back.
+        // What it was raised from is remembered, so 2 clean writes bring it back.
         assert_eq!(agent.escalated_from.as_deref(), Some("small"));
     }
 

@@ -404,7 +404,7 @@ impl Work {
         .await
     }
 
-    /// The files changed between two commits.
+    /// The files changed between 2 commits.
     async fn changed(&self, from: &str, to: &str) -> Result<Vec<String>> {
         Ok(self
             .pg(&["diff", "--name-only", "--no-renames", from, to])
@@ -560,7 +560,7 @@ impl Work {
         )
     }
 
-    /// What the coherence check is given: both objectives and the two sides' changes since
+    /// What the coherence check is given: both objectives and the 2 sides' changes since
     /// the agent started, without their context lines and cut short.
     async fn evidence(&self, sides: &Sides, asked: &[String]) -> String {
         // Without git's own headers, which say nothing the file names and hunks do not.
@@ -686,8 +686,8 @@ impl Work {
     }
 }
 
-/// Who checks that two changes made apart fit together once they are in one project: a
-/// model asked one question about the two changes, with nothing else of the session.
+/// Who checks that 2 changes made apart fit together once they are in one project: a
+/// model asked one question about the 2 changes, with nothing else of the session.
 #[derive(Clone)]
 pub struct Reviewer {
     pub backend: Arc<dyn crate::backend::provider::Provider>,
@@ -697,7 +697,7 @@ pub struct Reviewer {
 }
 
 impl Reviewer {
-    /// What does not fit between the two changes in `evidence`, a line a problem, or `None`
+    /// What does not fit between the 2 changes in `evidence`, a line a problem, or `None`
     /// when they fit or the check could not be made.
     pub async fn check(
         &self,
@@ -1134,7 +1134,7 @@ mod tests {
     }
 
     /// The coherence check is asked once, only when the project changed meanwhile, with the
-    /// two sides and the objectives and nothing else, and its objection is given back.
+    /// 2 sides and the objectives and nothing else, and its objection is given back.
     #[tokio::test]
     async fn the_coherence_check_reads_both_sides_once() {
         use crate::backend::wire::Message;

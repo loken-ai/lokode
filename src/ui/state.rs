@@ -32,7 +32,7 @@ pub(crate) fn what_was_said(messages: &[crate::backend::wire::Message]) -> Vec<E
 ///
 /// A sentence belongs in the thread, where it reads as what just happened. A page of it
 /// does not: it is read once, it is not part of the conversation, and left there it sits
-/// between two questions for the rest of the session.
+/// between 2 questions for the rest of the session.
 pub(crate) fn show(state: &mut UiState, verb: &str, reply: String) {
     use crate::ui::sheet::{Body, Sheet};
     // The window is drawn as the map the interface already holds, rather than as the
@@ -257,7 +257,7 @@ pub(crate) struct UiState {
     /// pane. It costs the terminal's own selection, and with it the terminal's own copy
     /// key - which is the one everybody's hands already know.
     pub(crate) mouse_ours: bool,
-    /// Whether the two ways of copying have been said this session.
+    /// Whether the 2 ways of copying have been said this session.
     pub(crate) said_how_to_copy: bool,
     /// What the backend serves, for finishing the name of one that is being typed. Asked
     /// for once and after a switch, since a backend's catalogue does not move under a
@@ -404,7 +404,7 @@ impl UiState {
     ///
     /// From the most recent because that is where a person is: what was said a moment ago
     /// is what they are usually trying to find again, and walking forward from the start
-    /// of a long session would make them press the key a hundred times to get there.
+    /// of a long session would make them press the key 100 times to get there.
     pub(crate) fn point_at_match(&mut self) {
         let Some((needle, nth)) = self.finding.clone() else {
             return;
@@ -544,7 +544,7 @@ impl UiState {
 
     /// Point at the entry before the one being pointed at, or at the newest.
     ///
-    /// Only the entries worth stopping on: pointing at every blank remark between two
+    /// Only the entries worth stopping on: pointing at every blank remark between 2
     /// steps makes the key useless for finding the step.
     pub(crate) fn point_back(&mut self) {
         let before = self.at_entry.unwrap_or(self.entries.len());
@@ -1061,7 +1061,7 @@ pub(crate) fn worth_pointing_at(e: &Entry) -> bool {
 /// How long an answer may be before it goes on a page of its own rather than into the
 /// conversation.
 ///
-/// Three lines is a sentence and its detail, which reads as something that just happened.
+/// 3 lines is a sentence and its detail, which reads as something that just happened.
 /// More than that is a document, and a document in the thread is in the way of everything
 /// after it.
 pub(crate) const SHEET_LINES: usize = 3;
@@ -1154,7 +1154,7 @@ mod tests {
         assert_eq!(state.step_running("shell"), None);
     }
 
-    /// Lines from two calls of one tool running side by side go to their own steps.
+    /// Lines from 2 calls of one tool running side by side go to their own steps.
     #[test]
     fn calls_side_by_side_keep_their_lines_apart() {
         let mut state = UiState::default();
@@ -1281,11 +1281,11 @@ mod tests {
         };
         state.content_lines = state.wrapped.len();
 
-        // At the foot of the conversation the last ten lines are shown, so the top row is
+        // At the foot of the conversation the last 10 lines are shown, so the top row is
         // line 90 and the bottom row is line 99.
         assert_eq!(state.spot_at(0, 0).unwrap().line, 90);
         assert_eq!(state.spot_at(0, 9).unwrap().line, 99);
-        // Scrolled back by five, everything moves with it.
+        // Scrolled back by 5, everything moves with it.
         state.scroll = 5;
         assert_eq!(state.spot_at(0, 0).unwrap().line, 85);
         assert_eq!(state.spot_at(0, 9).unwrap().line, 94);

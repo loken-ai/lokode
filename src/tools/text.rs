@@ -1,4 +1,4 @@
-//! Reading files as text, with the two refusals that keep a conversation usable.
+//! Reading files as text, with the 2 refusals that keep a conversation usable.
 //!
 //! Both happen before the bytes are in memory, which is the point: a ceiling applied to
 //! the string after the whole file has been loaded has already lost the argument.

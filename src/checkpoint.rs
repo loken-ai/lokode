@@ -1,6 +1,6 @@
 //! A history of what the agent changed, kept beside the project rather than in it.
 //!
-//! Approving a diff means agreeing to one change. It does not mean you can still see, four
+//! Approving a diff means agreeing to one change. It does not mean you can still see, 4
 //! turns later, everything that has happened since - and it certainly does not mean you can
 //! put any of it back. So every change the agent makes is committed to a git repository whose
 //! directory lives under the session's own state, with the project as its work tree.
@@ -72,7 +72,7 @@ impl Checkpoints {
     /// Open a history in a named directory.
     ///
     /// Where it lives is a parameter rather than something read from the environment, so
-    /// that two of these can exist at once without either having to know about the other.
+    /// that 2 of these can exist at once without either having to know about the other.
     pub async fn open_at(git_dir: PathBuf, root: &Path) -> Result<Self> {
         std::fs::create_dir_all(&git_dir)
             .with_context(|| format!("creating {}", git_dir.display()))?;
@@ -452,7 +452,7 @@ mod tests {
         assert!(found, "the hand edit became unreachable");
     }
 
-    /// Undoing twice walks two turns back rather than taking the same one twice.
+    /// Undoing twice walks 2 turns back rather than taking the same one twice.
     #[tokio::test]
     async fn undoing_again_goes_one_turn_further() {
         let f = fixture();

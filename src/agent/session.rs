@@ -45,7 +45,7 @@ const SMOOTHING: f64 = 0.3;
 /// Messages at the end of the history that are never dropped.
 ///
 /// A turn that cannot see the step it just took cannot carry on from it: it re-reads what
-/// it read, or answers about something it can no longer see. Four is the last call, its
+/// it read, or answers about something it can no longer see. 4 is the last call, its
 /// result, and the exchange before them.
 const KEEP_RECENT: usize = 4;
 
@@ -115,7 +115,7 @@ pub fn tool_output_chars(context_tokens: usize, reserve_tokens: usize) -> usize 
 
 /// What a reply's token count said about the request that produced it.
 ///
-/// The count is the only thing a backend says about how it read the prompt, and two very
+/// The count is the only thing a backend says about how it read the prompt, and 2 very
 /// different facts come out of it: the tokenizer's ratio, which sizes the history, and
 /// whether the prompt arrived whole.
 pub enum Observed {
@@ -229,7 +229,7 @@ impl Session {
     ///
     /// Used when the protocol changes mid-session: the system message states the contract
     /// the model is being held to, so it has to change with it. Rewritten rather than
-    /// appended, because two contradictory contracts is worse than either.
+    /// appended, because 2 contradictory contracts is worse than either.
     pub fn set_system_prompt(&mut self, prompt: String) {
         if let Some(first) = self.history.first_mut() {
             if first.role == "system" {
@@ -262,7 +262,7 @@ impl Session {
     /// How full the window is, as a percentage of the budget.
     ///
     /// Against the budget rather than the raw window, because the budget is what
-    /// compaction defends: at a hundred per cent the next step starts dropping messages,
+    /// compaction defends: at 100 per cent the next step starts dropping messages,
     /// which is the number worth watching.
     pub fn fullness_percent(&self) -> u8 {
         if self.budget_chars == 0 {
@@ -393,7 +393,7 @@ impl Session {
     /// Drop the oldest steps until the history is comfortably inside the budget, and
     /// report how many messages went.
     ///
-    /// Two invariants make this safe to do behind the model's back. The system message
+    /// 2 invariants make this safe to do behind the model's back. The system message
     /// stays: it carries the tool manifest and the response contract, and a server that
     /// has to truncate keeps the tail, so leaving the job to the server is precisely
     /// what removes the preamble. And a step is dropped whole - an assistant turn
@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn a_prompt_the_backend_only_partly_read_is_reported() {
         let mut s = Session::new("sys".into(), 32_768, 4096);
-        // Ten characters a token: no text does that, so the prompt was cut - and what was
+        // 10 characters a token: no text does that, so the prompt was cut - and what was
         // read is the window the backend serves.
         assert!(matches!(s.observe(100_000, 10_000), Observed::Cut(10_000)));
         // An ordinary ratio is measured, not read as damage.
@@ -826,7 +826,7 @@ mod context_tests {
     }
 
     /// The figure is against the budget, because the budget is what compaction defends:
-    /// a hundred per cent is the step at which the session starts forgetting.
+    /// 100 per cent is the step at which the session starts forgetting.
     #[test]
     fn fullness_is_measured_against_the_budget() {
         let s = filled();

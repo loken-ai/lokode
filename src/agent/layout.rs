@@ -14,7 +14,7 @@ use std::path::Path;
 ///
 /// Bounded by what it costs rather than by how deep it goes: the point of the map is that
 /// the model can name a file, and a map that stops at directory names cannot be used to
-/// name anything. Naming every source file in a project this size costs a few hundred
+/// name anything. Naming every source file in a project this size costs a few 100
 /// tokens, which is what one wrong guess costs anyway.
 const MOST_CHARS: usize = 2000;
 
@@ -24,7 +24,7 @@ const DEPTH: usize = 4;
 /// Every file the project holds, as its name and its path.
 ///
 /// One walk, written once: the map states what is there and the search reads what is in
-/// it, and two walks with different rules would disagree about what the project contains.
+/// it, and 2 walks with different rules would disagree about what the project contains.
 pub fn source_files(root: &Path) -> Vec<(String, std::path::PathBuf)> {
     ignore::WalkBuilder::new(root)
         .max_depth(Some(DEPTH))

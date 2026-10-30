@@ -370,7 +370,7 @@ impl Entry {
                 out.push(Line::from(""));
                 out
             }
-            // What the program says about itself, not what the model said. Two weights:
+            // What the program says about itself, not what the model said. 2 weights:
             // an ordinary remark recedes, and something that went wrong does not - an
             // error in the same grey as a footnote is an error nobody reads.
             Entry::Notice(s) => {
@@ -837,7 +837,7 @@ pub(crate) fn tokens(n: u64) -> String {
 }
 
 /// `left` and `right` on one row, `right` against the edge of `width` when both fit,
-/// two spaces after `left` when they do not or when there is no width to align to.
+/// 2 spaces after `left` when they do not or when there is no width to align to.
 fn beside(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
     let wide = |spans: &[Span<'static>]| -> usize {
         spans.iter().map(|s| s.content.chars().count()).sum()
@@ -928,7 +928,7 @@ mod tests {
     fn what_was_searched_for_is_picked_out_where_it_is() {
         let line = Line::from("the session compacts the session");
         let marked = mark_found(&line, "session");
-        // Same text, more spans: the two occurrences are cut out of the run around them.
+        // Same text, more spans: the 2 occurrences are cut out of the run around them.
         assert_eq!(line_text(&marked), line_text(&line));
         let lit: Vec<&str> = marked
             .spans
@@ -949,7 +949,7 @@ mod tests {
         // Nothing to look for leaves the line alone.
         assert_eq!(mark_found(&line, "").spans.len(), line.spans.len());
     }
-    /// What is taken is what the pane shows between the two ends.
+    /// What is taken is what the pane shows between the 2 ends.
     ///
     /// Both orders, because dragging upward is as ordinary as dragging down, and the
     /// partial first and last rows are where an off-by-one would go unnoticed: the text
@@ -1219,7 +1219,7 @@ pub struct Spot {
     pub column: usize,
 }
 
-/// The text between two spots, as the pane shows it.
+/// The text between 2 spots, as the pane shows it.
 ///
 /// Ends given in either order: what the mouse reports is where it was pressed and where it
 /// is now, and dragging upward is as ordinary as dragging down.

@@ -41,7 +41,7 @@ pub(crate) fn fresh_input(text: &str) -> TextArea<'static> {
 /// How long an offer to leave stands before it has to be made again.
 ///
 /// Long enough to be a deliberate second press, short enough that a Ctrl-C typed minutes
-/// apart is two interruptions rather than an exit.
+/// apart is 2 interruptions rather than an exit.
 pub(crate) const ASK_AGAIN_WITHIN: Duration = Duration::from_secs(3);
 
 /// What a key says about leaving.
@@ -138,7 +138,7 @@ pub(crate) fn quit_intent(k: &KeyEvent) -> Option<Quit> {
 /// Hand the line being typed to the editor named by the environment, and take back what
 /// comes out.
 ///
-/// The terminal is given up for as long as it runs and taken again afterwards, because two
+/// The terminal is given up for as long as it runs and taken again afterwards, because 2
 /// programs drawing on one screen is one program's output. `None` when nothing came back
 /// that was worth taking: an editor closed without saving has said no.
 pub(crate) async fn write_elsewhere(
@@ -378,7 +378,7 @@ mod tests {
         );
     }
 
-    /// Declining must stay reachable by the two gestures people already use to back out.
+    /// Declining must stay reachable by the 2 gestures people already use to back out.
     #[test]
     fn declining_is_reachable() {
         assert_eq!(

@@ -120,7 +120,7 @@ impl Tool for Bash {
         cmd.kill_on_drop(true);
         cmd.current_dir(&cwd);
 
-        // Read as it comes rather than at the end: a build that says nothing for two
+        // Read as it comes rather than at the end: a build that says nothing for 2
         // minutes cannot be told from one that has hung, and the line that says which
         // test failed is worth having before the suite finishes.
         cmd.stdin(std::process::Stdio::null());
@@ -514,7 +514,7 @@ mod tests {
 /// Shared with the test runner, which has the same problem in a longer form.
 ///
 /// The whole text is still returned: what the model reads has to be what ran, and a
-/// screen that showed the last twenty lines has not told it about the first hundred.
+/// screen that showed the last 20 lines has not told it about the first 100.
 pub(crate) async fn read_lines(
     stream: Option<impl tokio::io::AsyncRead + Unpin>,
     ctx: &ToolCtx,

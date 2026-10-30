@@ -58,7 +58,7 @@ pub struct Policy {
     /// put to the user again.
     ///
     /// A standing agreement is given for the work a person expects, and a loop that calls
-    /// a tool a thousand times is not that work. The cap is what keeps a policy from
+    /// a tool 1000 times is not that work. The cap is what keeps a policy from
     /// turning into an unattended session nobody asked for.
     #[serde(default = "default_max_auto")]
     pub max_auto: usize,

@@ -606,7 +606,7 @@ async fn run_ui(
         drawn?;
 
         // Nothing is happening, there is something to find out, and nobody is waiting:
-        // the three conditions together are what makes this free. One question at a time,
+        // the 3 conditions together are what makes this free. One question at a time,
         // so the machine is never given more than it was idle for.
         if !state.busy && discovering.is_none() && !state.discovery_stopped {
             if let Some(worker) = &discovery {
@@ -729,7 +729,7 @@ async fn run_ui(
 
             Some(printed) = live.recv() => {
                 // Kept as one entry that grows rather than a line each: a build's output
-                // is one thing happening, and a hundred entries would push the answer it
+                // is one thing happening, and 100 entries would push the answer it
                 // belongs to off the screen.
                 match printed.what {
                     crate::tools::registry::Live::Printed(tail) => {
@@ -910,7 +910,7 @@ async fn run_ui(
                 // Pasted text arrives whole, so the newlines in it are newlines. Handed
                 // over a keystroke at a time - which is what a terminal does when nobody
                 // has asked otherwise - every one of them was the send key, and pasting
-                // ten lines asked ten questions made of fragments.
+                // 10 lines asked 10 questions made of fragments.
                 match evt {
                     Event::FocusGained => {
                         state.focused = true;
@@ -1477,7 +1477,7 @@ async fn run_ui(
                                 true
                             }
                             // A command or a command's argument is the whole line, so taking
-                            // it with enter also sends it: one key, not two. A file is a word
+                            // it with enter also sends it: one key, not 2. A file is a word
                             // in a sentence, and the sentence carries on after it.
                             KeyCode::Enter if !nothing_left_to_complete(&input, &state.picker) => {
                                 let sends = !matches!(
@@ -1507,7 +1507,7 @@ async fn run_ui(
                             // the key every agent puts it on. A command for it exists and
                             // nobody finds a command they have to read about first.
                             //
-                            // Three settings rather than two: reading without changing
+                            // 3 settings rather than 2: reading without changing
                             // anything, changing with every change shown first, and a
                             // stretch of editing where the changes go through. The third
                             // was only reachable by writing a file or by answering the
@@ -1794,7 +1794,7 @@ async fn run_ui(
                                 state.at_entry = None;
                                 continue;
                             }
-                            // The two ends of the conversation, which had no key at all:
+                            // The 2 ends of the conversation, which had no key at all:
                             // getting back to where a long session started meant holding
                             // page-up, and getting back to now meant holding page-down.
                             KeyCode::Home => {
@@ -1815,7 +1815,7 @@ async fn run_ui(
                                 continue;
                             }
                             // What was just cleared, before what was sent: it is the more
-                            // recent of the two and the one a person is reaching for.
+                            // recent of the 2 and the one a person is reaching for.
                             KeyCode::Up if at_start(&input) && input.is_empty() && state.draft.is_some() => {
                                 if let Some(draft) = state.draft.take() {
                                     input = fresh_input(&draft);
@@ -1997,7 +1997,7 @@ async fn run_ui(
                                             // reads as what just happened. A page of it
                                             // does not: it is read once, it is not part of
                                             // the conversation, and left there it sits
-                                            // between two questions for the rest of the
+                                            // between 2 questions for the rest of the
                                             // session.
                                             // Refreshed first, so a page drawn from the
                                             // state shows the state as it is now.
@@ -2144,7 +2144,7 @@ async fn run_ui(
                     // A long instruction written where writing is comfortable. The line
                     // grows to a few rows and then scrolls, which is right for a sentence
                     // and wrong for a specification: the editor a person already knows is
-                    // a better place to write thirty lines than a box six rows tall.
+                    // a better place to write 30 lines than a box 6 rows tall.
                     if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         let carried = input.lines().join("\n");
@@ -2180,7 +2180,7 @@ async fn run_ui(
                     }
                     input.input(key);
                     // Opened, narrowed or closed by what is now on the line, rather than
-                    // by the key that was pressed: the two cannot disagree that way.
+                    // by the key that was pressed: the 2 cannot disagree that way.
                     state.picker = open_picker(
                         &input,
                         state.picker.take(),

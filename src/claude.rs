@@ -753,7 +753,7 @@ mod tests {
         );
     }
 
-    /// The four forms of a source are read.
+    /// The 4 forms of a source are read.
     #[test]
     fn a_marketplace_names_its_sources() {
         let (about, plugins) = marketplace_from(

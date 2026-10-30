@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// How many recent writes are remembered per model.
 ///
 /// A project changes - its code, its conventions, the models available - so evidence has
-/// to age out. Fifty is enough to be more than noise and short enough that a month-old
+/// to age out. 50 is enough to be more than noise and short enough that a month-old
 /// judgement does not decide today's.
 const REMEMBERED: usize = 50;
 

@@ -21,7 +21,7 @@ use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 const MAX_DEPTH: usize = 12;
 
 pub struct McpTool {
-    /// `<server>__<tool>`, so two servers offering `search` do not collide and neither can
+    /// `<server>__<tool>`, so 2 servers offering `search` do not collide and neither can
     /// take the name of a built-in.
     name: String,
     description: String,

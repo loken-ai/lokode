@@ -133,7 +133,7 @@ impl Tool for ListDir {
             entries.push(format!("{kind}  {size:>10}  {name}"));
         }
         entries.sort();
-        // Clamped like every other result. A directory of ten thousand files is rarer than
+        // Clamped like every other result. A directory of 10 1000 files is rarer than
         // a large file, but the ceiling exists because one result must not be able to
         // displace the conversation, and that is true here too.
         Ok(ToolOutput::ok(ctx.clamp(entries.join("\n"))))

@@ -12,7 +12,7 @@
                                                                                                                              CONTEXT                        23%
 The client waits on rx.await forever. I add timeout-secs:                                                                    ████████··························
                                                                                                                              █ instructions 10%  █ you 3%
-• one setting per server, thirty seconds unless it says otherwise                                                            █ model 4%  █ tools 6%
+• one setting per server, 30 seconds unless it says otherwise                                                                █ model 4%  █ tools 6%
 • a test against a server that never answers
                                                                                                                              ENGINE
   rust                                                                                                                       qwen3-coder

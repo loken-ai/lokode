@@ -12,10 +12,10 @@ Nothing below has been audited by anybody.
 
 **Path confinement.** Every tool that takes a path resolves it through one function, which
 canonicalises the target and refuses anything that does not land under `--root`. It refuses a
-symlink that leaves the root, and a symlink whose target does not exist yet - the two-step
+symlink that leaves the root, and a symlink whose target does not exist yet: the 2-step
 version, where creating the link is itself an allowed operation. A file may be created under
-directories that do not exist yet; the check applies to where the write would land, not to how
-the path was written. Resolution and use are separate steps, so a link swapped between the two
+directories that do not exist yet. The check applies to where the write would land, not to how
+the path was written. Resolution and use are separate steps, so a link swapped in between
 would defeat it: the guarantee is against a confused model, not against another process on the
 machine racing it.
 
@@ -30,8 +30,8 @@ built-in.
 running the test suite and fetching a URL each require a decision. `Enter` is not one of the
 accepting keys.
 
-**Scoped agreements.** `[A]lways` is remembered against what the prompt showed - this exact
-command, writes by this tool under this directory, requests to this host - so agreeing to one
+**Scoped agreements.** `[A]lways` is remembered against what the prompt showed: this exact
+command, writes by this tool under this directory, requests to this host. So agreeing to one
 `ls` does not hand over the shell. A command is matched in full rather than by the program at
 the front of it, because `ls` and `ls; rm -rf ~` share a first word. An agreement is kept for
 the project in `$XDG_DATA_HOME/lokode/agreements.json` and holds in its later sessions.
@@ -51,6 +51,13 @@ exception.
 **Bounded reads.** A file over 8 MiB is refused rather than loaded, a response body is
 streamed against a ceiling, and a file that is not text is refused rather than delivered as a
 screenful of replacement characters.
+
+**`lokode serve` listens on this machine only.** It binds 127.0.0.1, prints an address with a
+random token, and then asks for that token in a cookie that cannot be read by a script and is
+not sent across sites. Every request's `Host` and `Origin` is checked, so a page elsewhere
+cannot reach it through your browser. Whoever can reach the port and holds the token can
+answer your approvals: reach it from another machine through an ssh tunnel, not by listening
+wider.
 
 **Atomic writes.** Files are replaced by writing beside them and renaming, so an interruption
 leaves the old contents or the new ones. A multi-file patch is applied wholly or not at all.
@@ -101,27 +108,51 @@ lifecycle scripts, `pytest` imports `conftest.py`. Approving it on a repository 
 read is approving whatever that repository wants to run.
 
 **Nothing is redacted.** `.env`, `~/.aws/credentials` inside the root, a `.git/config` with a
-token in it - all readable by the model if they are under the root, and all recorded in the
-session transcript. The transcript is written with your umask; nothing in it is encrypted.
+token in it. All of it is readable by the model if it is under the root, and all of it is
+recorded in the session transcript. The transcript is written with your umask, and nothing in
+it is encrypted.
 
 **The change history holds copies of your files.** `/undo` and `/diff` work because every
 change is committed to a git repository under `$XDG_DATA_HOME/lokode/checkpoints/<session>`,
 whose work tree is the project. It therefore contains full copies of everything under the root
-that is not ignored - including anything sensitive - and it outlives the session. It respects
+that is not ignored, including anything sensitive, and it outlives the session. It respects
 the project's `.gitignore`, so what git would not track it does not keep, but that is the only
 filter. Delete the directory when you are done with the session.
 
 **An MCP server is a third party with your privileges.** It is a program you configured, and
 `lokode` starts it with the project as its working directory. Nothing here confines what it
-does — the path sandbox governs this agent's own file tools, not another process. Every call
+does. The path sandbox governs this agent's own file tools, not another process. Every call
 to one of its tools is approved and the approval names the server, but approving a call is
 approving whatever that program does with it.
 
-**The model is not trusted, but it is believed.** Tool arguments are validated and repaired,
-and a call to a tool that does not exist is refused. What is not checked is intent: a
-well-formed call to delete the right file is indistinguishable from a well-formed call to
-delete the wrong one. Approval is the only thing between the two, which is why the prompts try
-to say what they are actually asking.
+**A plugin runs programs with your privileges.** Its hooks, tool servers and language servers
+are programs. Installing one shows what it runs and asks, and an update that changes what runs
+asks again. `--yes` takes both without asking, which is what a script needs and what you
+should not give to a source you have not read. A marketplace is a git repository whose plugins
+you chose to list. An archive is unpacked as ordinary files, without links, names that leave
+the directory or special permission bits. A plugin written for another coding agent is read
+the same way and runs the same way.
+
+**An editor that starts `lokode acp` is trusted as you are.** It names the project and the tool
+servers a session starts, and it answers the approvals. A project's settings that wait for
+trust stay out of such a session, since nobody can be asked: run `lokode` in the project once
+to trust them.
+
+**A tool server can ask the model and you.** A question it puts to the model is approved first,
+and a form it puts to you is yours to fill or decline. A token you signed in with is kept in
+`mcp-tokens.json` in the data directory, readable by you alone, and a server's tools are not
+reached by a token meant for another.
+
+**An agent in the background works in a copy of the project.** The copy holds the files git
+does not track, ignored files left out, and the objects it is made of are kept in the
+repository's own store until git collects them. Its writes and commands are asked about as
+yours are, in the copy, and `take_work` brings in what it did without asking again. A copy
+whose work is left stays on disk with its path said.
+
+**Intent is not checked.** Tool arguments are validated and repaired, and a call to a tool
+that does not exist is refused. A well-formed call to delete the right file is
+indistinguishable from a well-formed call to delete the wrong one. Approval is the only thing
+between them, so the prompts say what they ask.
 
 **Prompt injection is not addressed.** Content read from a file or fetched from the web
 reaches the model as ordinary text. A repository that contains instructions aimed at an agent

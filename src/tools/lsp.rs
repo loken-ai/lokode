@@ -119,7 +119,7 @@ pub struct LspAt {
 }
 
 impl LspAt {
-    /// The five tools that answer about one symbol.
+    /// The 5 tools that answer about one symbol.
     pub fn all(pool: &Arc<LspPool>) -> Vec<Self> {
         [
             Op::Definition,
@@ -690,7 +690,7 @@ mod tests {
     use crate::tools::harness::{Answer, Harness};
     use serde_json::json;
 
-    /// A language server that answers the parts of the protocol these two tools use.
+    /// A language server that answers the parts of the protocol these 2 tools use.
     ///
     /// Written out by the test rather than kept as a fixture so it cannot drift from the
     /// test that runs it. It reports the document version back inside the diagnostic, which
@@ -926,7 +926,7 @@ while True:
         assert!(after.content.contains("version 2"), "{}", after.content);
 
         // Hover reaches the same server, which had its own request answered rather than
-        // taken for an answer. The column is sent in UTF-16 units: the emoji counts two.
+        // taken for an answer. The column is sent in UTF-16 units: the emoji counts 2.
         h.write("a.rs", "// 🙂 x\n");
         let hover = LspAt {
             pool: pool.clone(),
