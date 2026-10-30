@@ -15,6 +15,9 @@ use tokio::sync::Mutex;
 
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
+/// The most tasks a list, or steps a plan, may hold.
+const MAX_TASKS: usize = 12;
+
 /// Where one task stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -120,10 +123,10 @@ impl Tool for UpdatePlan {
         let a: Args = serde_json::from_value(args)?;
         // At most 12: a list longer than the screen is one nobody reads, and it is
         // paid for in the window on every later step.
-        if a.tasks.len() > 12 {
-            return Ok(ToolOutput::err(
-                "keep the list to twelve tasks or fewer; group the rest".to_string(),
-            ));
+        if a.tasks.len() > MAX_TASKS {
+            return Ok(ToolOutput::err(format!(
+                "keep the list to {MAX_TASKS} tasks or fewer; group the rest"
+            )));
         }
         let text = TaskList::render(&a.tasks);
         self.tasks.set(a.tasks).await;
@@ -185,10 +188,10 @@ impl Tool for SubmitPlan {
                  update_plan",
             ));
         }
-        if p.steps.len() > 12 {
-            return Ok(ToolOutput::err(
-                "keep the plan to twelve steps or fewer; group the rest".to_string(),
-            ));
+        if p.steps.len() > MAX_TASKS {
+            return Ok(ToolOutput::err(format!(
+                "keep the plan to {MAX_TASKS} steps or fewer; group the rest"
+            )));
         }
         let shown = format!(
             "{}\n\n{}",
@@ -280,13 +283,15 @@ mod tests {
     #[tokio::test]
     async fn an_overlong_list_is_refused() {
         let h = Harness::new(Answer::Yes);
-        let rows: Vec<(String, &str)> = (0..13).map(|i| (format!("task {i}"), "todo")).collect();
+        let rows: Vec<(String, &str)> = (0..=MAX_TASKS)
+            .map(|i| (format!("task {i}"), "todo"))
+            .collect();
         let pairs: Vec<(&str, &str)> = rows.iter().map(|(w, s)| (w.as_str(), *s)).collect();
         let tool = UpdatePlan {
             tasks: Arc::new(TaskList::default()),
         };
         let out = tool.run(&h.ctx, args(&pairs)).await.unwrap();
         assert!(out.is_error);
-        assert!(out.content.contains("twelve"), "{out:?}");
+        assert!(out.content.contains(&MAX_TASKS.to_string()), "{out:?}");
     }
 }
