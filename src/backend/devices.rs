@@ -1,8 +1,8 @@
 //! What a loken server says about its accelerators: the power they draw now.
 //!
-//! Read from the device listing the server already serves to its own interface. Shown as it
-//! is said, never integrated into an energy figure: the energy of a request is the server's
-//! measurement, carried with the request.
+//! Read from the device listing the server already serves to its own interface.
+//! Shown as it is said, never integrated into an energy figure.
+//! The energy of a request is the server's measurement, carried with the request.
 
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ const LISTING: &str = "/api/distributed/devices";
 /// How long one reading may take before it is given up.
 const READ_FOR: Duration = Duration::from_secs(2);
 
-/// How often the power is read while a turn runs: as often as loken's own interface does.
+/// How often the power is read while a turn runs.
 const EVERY: Duration = Duration::from_secs(2);
 
 /// How many readings in a row may fail before a server is taken to have no listing.
@@ -26,7 +26,7 @@ pub struct Power {
     pub watts: f64,
     /// Their power limits summed, when every one of them states one.
     pub limit: Option<f64>,
-    /// How busy the busiest of them is, in per cent.
+    /// How busy the busiest of them is, as a percentage.
     pub busy_percent: Option<u8>,
     /// How many devices reported power.
     pub devices: usize,
@@ -34,9 +34,11 @@ pub struct Power {
 
 /// Read the power of the server at `base` while `busy` says a turn runs, and send it on.
 ///
-/// Between turns it waits on `busy` and nothing wakes it. It ends when `stop` fires, when
-/// nobody is listening any more, or when the server has failed to answer several times in
-/// a row, which is a server with no such listing.
+/// Between turns it waits on `busy` and nothing wakes it.
+/// It ends when `stop` fires.
+/// It ends when nobody is listening any more.
+/// It ends when the server has failed to answer `MISSES` readings in a row, which is a
+/// server with no such listing.
 pub async fn follow(
     http: reqwest::Client,
     base: String,
@@ -73,8 +75,8 @@ pub async fn follow(
     }
 }
 
-/// One reading from the server at `base`, or `None` when it has no listing or no device
-/// in it reports power.
+/// One reading from the server at `base`.
+/// It is `None` when the server has no listing or no device in it reports power.
 pub async fn read(http: &reqwest::Client, base: &str) -> Option<Power> {
     let url = format!("{}{LISTING}", base.trim_end_matches('/'));
     let resp = http.get(&url).timeout(READ_FOR).send().await.ok()?;

@@ -1,27 +1,23 @@
 //! Finding the passages a question is about, before the question is asked.
 //!
-//! The project is on this disk and the search is mechanical, but the loop used to leave
-//! the whole of it to the model: which file, whether to look at all, when to stop. A small
-//! local model does the cheapest thing instead, which is to answer from the one file it
-//! could name, and nothing noticed.
+//! The search is done here, mechanically.
+//! The distinctive words of the question are looked for in the project.
+//! The best matches travel with the question.
+//! The model starts from what is actually there.
 //!
-//! So the search is done here. The distinctive words of the question are looked for in the
-//! project, the best matches travel with it, and the model starts from what is actually
-//! there rather than from what it can guess. Bounded, deterministic, and nothing is hidden:
-//! what was attached is named to the person who asked.
+//! The search is bounded and deterministic.
+//! What was attached is named to the person who asked.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The most the passages may take, whatever the window.
 ///
-/// A ceiling on top of the caller's budget, not instead of it: the passages are what the
-/// question arrives with, not what the turn is for, and a model handed the whole project
-/// has no room left to read the part that matters.
+/// A ceiling on top of the caller's budget.
+/// The passages leave the model room to read the part that matters.
 const MOST_CHARS: usize = 3000;
 
-/// How many files the passages may come from. Enough to see a thing in its places, few
-/// enough that a common word does not fill the window with itself.
+/// How many files the passages may come from.
 const MOST_FILES: usize = 6;
 
 /// How many matching lines are taken from one file.
@@ -40,12 +36,11 @@ pub struct Found {
 
 /// Look for what the question is about, in the project.
 ///
-/// `budget` is what the passages may occupy, capped at `MOST_CHARS`. It follows the
-/// window: on a small one, passages sized for a large window would leave no room for the
-/// reading they are meant to start.
+/// `budget` is what the passages may occupy, capped at `MOST_CHARS`.
+/// It follows the window.
 ///
-/// `None` when the question has no distinctive word to look for, or when nothing in the
-/// project carries one: an empty section in front of a model says the project is empty.
+/// `None` when the question has no distinctive word to look for.
+/// `None` when nothing in the project carries one.
 pub fn passages(asked: &str, root: &Path, budget: usize) -> Option<Found> {
     let budget = budget.min(MOST_CHARS);
     let terms = terms(asked);
@@ -53,8 +48,8 @@ pub fn passages(asked: &str, root: &Path, budget: usize) -> Option<Found> {
         return None;
     }
     // Per file: which of the terms it carries, how much of it does, and the first lines
-    // that show it. One pass, so that a file the budget cuts short is still known to carry
-    // every term it carries: the count decides the ranking, the lines only illustrate it.
+    // that show it.
+    // The count decides the ranking, the lines only illustrate it.
     let mut hits: BTreeMap<String, (usize, usize, Vec<String>)> = BTreeMap::new();
     for entry in crate::agent::layout::source_files(root) {
         let Ok(text) = std::fs::read_to_string(&entry.1) else {
@@ -89,9 +84,8 @@ pub fn passages(asked: &str, root: &Path, budget: usize) -> Option<Found> {
     if hits.is_empty() {
         return None;
     }
-    // The files that carry the most of what was asked about, first. On a question with one
-    // distinctive word every file that has it ties, so the one that has it most often wins:
-    // alphabetical order would answer a question about the session with the agent loop.
+    // The files that carry the most of what was asked about come first.
+    // Files that carry the same words rank by how often they carry them.
     let mut ranked: Vec<(String, usize, usize, Vec<String>)> = hits
         .into_iter()
         .map(|(name, (n, weight, lines))| (name, n, weight, lines))
@@ -122,13 +116,11 @@ pub fn passages(asked: &str, root: &Path, budget: usize) -> Option<Found> {
 
 /// The words worth looking for in a question.
 ///
-/// The ones a project would use: long enough to be a name rather than grammar, and not one
-/// of the words every question is made of. Lowercased, because a search that misses
-/// `Session` when asked about `session` is a search that finds nothing.
+/// The ones a project would use: long enough to be a name rather than grammar.
+/// They are not one of the words every question is made of.
+/// They are lowercased.
 fn terms(asked: &str) -> Vec<String> {
-    // Long enough to be a name, and not one of the words every question is made of. The
-    // list is longer than a stop list for prose because a word like "work" or "here"
-    // appears in every file of every project, and finds nothing by finding everything.
+    // Words every question is made of, and words that appear in every file of a project.
     const GRAMMAR: [&str; 61] = [
         "the", "and", "for", "with", "what", "does", "this", "that", "from", "are", "you", "can",
         "how", "why", "when", "where", "who", "was", "were", "have", "has", "had", "not", "but",
@@ -137,14 +129,11 @@ fn terms(asked: &str) -> Vec<String> {
         "make", "made", "need", "want", "like", "just", "also", "some", "more", "most", "then",
         "than", "into", "over", "only", "very", "much", "about",
     ];
-    // Words that turn what follows them into something to leave out. A question that
-    // names a file in order to exclude it - "from the sources but not the README" - was
-    // read as a question about that file, and the one thing the person asked to be left
-    // alone came back ranked first, with an instruction to read further from it.
+    // Words that turn what follows them into something to leave out.
+    // A file named after one of them is left out of the search.
     //
-    // Narrow on purpose: only the words immediately after one of these, and only until
-    // the next comma or the end of the clause. Anything cleverer would be guessing at the
-    // shape of a sentence, and guessing wrong here drops what the question was about.
+    // Only the words immediately after one of these are left out.
+    // They are left out until the next comma or the end of the clause.
     const EXCEPT: [&str; 6] = ["not", "without", "except", "excluding", "besides", "ignore"];
     let mut excluded: Vec<String> = Vec::new();
     let mut dropping = false;
@@ -162,7 +151,7 @@ fn terms(asked: &str) -> Vec<String> {
             if !bare.is_empty() && !GRAMMAR.contains(&bare.as_str()) {
                 excluded.push(bare);
             }
-            // A comma ends the aside; so does the end of what was said.
+            // A comma ends the aside, and so does the end of what was said.
             if token.ends_with(',') || token.ends_with(';') {
                 dropping = false;
             }
@@ -219,9 +208,7 @@ mod tests {
 
     /// A file named in order to be left out is not what the question is about.
     ///
-    /// Asked "from the sources but not the README", the search took README for the
-    /// subject, ranked it first, and put it in front of the model with an instruction to
-    /// read further from it - the one file the person had asked it to leave alone.
+    /// Asked "from the sources but not the README", the search does not look for README.
     #[test]
     fn a_word_named_to_be_excluded_is_not_searched_for() {
         assert_eq!(
@@ -229,7 +216,7 @@ mod tests {
             vec!["using", "lokode"]
         );
         assert!(!terms("describe compaction without the digest").contains(&"digest".into()));
-        // The aside ends at the comma: what comes after it is the question again.
+        // The aside ends at the comma.
         assert!(terms("not the readme, how does compaction work").contains(&"compaction".into()));
     }
 
@@ -249,7 +236,7 @@ mod tests {
         assert!(!found.text.contains("unrelated"), "{}", found.text);
     }
 
-    /// An empty section in front of a model says the project is empty.
+    /// A question that matches nothing attaches no section.
     #[test]
     fn a_question_that_matches_nothing_attaches_nothing() {
         let dir = project();
@@ -257,8 +244,8 @@ mod tests {
         assert!(passages("what does this do", dir.path(), MOST_CHARS).is_none());
     }
 
-    /// Carrying more of the question beats carrying one word of it often, and among files
-    /// that carry the same words the one that carries them most often comes first.
+    /// Carrying more of the question beats carrying one word of it often.
+    /// Among files that carry the same words, the one that carries them most often comes first.
     #[test]
     fn the_files_that_carry_the_question_come_first() {
         let dir = tempfile::tempdir().unwrap();
@@ -274,8 +261,8 @@ mod tests {
         assert_eq!(found.files, vec!["both.rs", "dense.rs", "thin.rs"]);
     }
 
-    /// The budget follows the window, and one file always comes back: passages sized for
-    /// a large window would leave a small one no room for the reading they start.
+    /// The budget follows the window.
+    /// One file always comes back.
     #[test]
     fn a_small_window_gets_smaller_passages() {
         let dir = tempfile::tempdir().unwrap();
@@ -289,9 +276,7 @@ mod tests {
         let wide = passages("compaction", dir.path(), MOST_CHARS).expect("found");
         let narrow = passages("compaction", dir.path(), 1).expect("found");
         assert_eq!(wide.files.len(), 4);
-        // Never nothing: a budget too small for one file still returns that file, because
-        // a question about the project answered from no passage at all is the defect this
-        // exists to fix.
+        // A budget too small for one file still returns that file.
         assert_eq!(narrow.files.len(), 1);
     }
 

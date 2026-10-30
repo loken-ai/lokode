@@ -21,10 +21,10 @@ use crate::tools::registry::{Registry, ToolCtx, ToolOutput};
 
 /// What the loop is doing between one visible thing and the next.
 ///
-/// A turn spends most of its time where nothing is printed: the request has gone out and
-/// the model is reading a context that can be thousands of tokens, or a command is running
-/// under a tool. Without a word for those the interface looks identical to one that has
-/// stopped, which is what a user reports as "nothing is happening".
+/// A turn spends most of its time where nothing is printed: the request has gone out and the model
+/// is reading a context that can be thousands of tokens, or a command is running under a tool.
+/// Without a word for those the interface looks identical to one that has stopped, which is what a
+/// user reports as "nothing is happening".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Phase {
     /// The history is being fitted to the window before the request goes out.
@@ -60,12 +60,12 @@ impl Phase {
 
 /// Whether the agent may change anything.
 ///
-/// Planning is not a weaker set of approvals: it is a different question. A user who wants
-/// to know what would happen should not have to say no to 15 prompts to find out, and
-/// an agent that has to ask before every step of a plan cannot describe the plan.
+/// Planning is not a weaker set of approvals: it is a different question.
+/// A user who wants to know what would happen should not have to say no to 15 prompts to find out,
+/// and an agent that has to ask before every step of a plan cannot describe the plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
-    /// Reads and searches; every tool that changes something is refused before it runs.
+    /// Reads and searches.|Every tool that changes something is refused before it runs.
     Plan,
     #[default]
     Act,
@@ -82,9 +82,10 @@ impl Mode {
 
 /// Something the interface asks of the agent between turns.
 ///
-/// The agent runs in its own task and owns the session, so a question about the session -
-/// which model, how full the window is - cannot be answered from the interface's side. It
-/// is asked here and answered on the channel the asker holds.
+/// The agent runs in its own task and owns the session.
+/// A question about the session cannot be answered from the interface's side.
+/// Examples are which model answers and how full the window is.
+/// It is asked here and answered on the channel the asker holds.
 pub enum Control {
     /// Start a tool server again, and take its tools again.
     /// With `spec`, a server the session does not have is started as configured.
@@ -106,8 +107,8 @@ pub enum Control {
     Clear {
         reply: tokio::sync::oneshot::Sender<String>,
     },
-    /// The window the backend turned out to serve, found out while the session was
-    /// already on screen.
+    /// The window the backend turned out to serve, found out while the session was already on
+    /// screen.
     SeeWindow(usize),
     /// Come back to a session recorded earlier, by its id.
     Resume {
@@ -116,8 +117,8 @@ pub enum Control {
     },
     /// Hold the session to a tool protocol, once something has found out which one works.
     Protocol(ToolProtocol),
-    /// Take the conversation back to the last thing the user asked and hand it back, so it
-    /// can be asked again - of another model, or of the same one from a clean start.
+    /// Take the conversation back to the last thing the user asked and hand it back.
+    /// It can then be asked again, of another model or of the same one from a clean start.
     Retry {
         model: Option<String>,
         reply: tokio::sync::oneshot::Sender<Result<String, String>>,
@@ -135,9 +136,10 @@ pub enum Control {
     Compact {
         reply: tokio::sync::oneshot::Sender<String>,
     },
-    /// What the status line has to show and cannot know: the model answering now, and how
-    /// full the window is. Both can change under it - by a command, by the mode, by a
-    /// failed check - so it asks rather than remembering what it was told at startup.
+    /// What the status line has to show and cannot know.
+    /// The model answering now, and how full the window is.
+    /// Both can change under the interface, by a command, by the mode or by a failed check.
+    /// So the status line asks rather than remembering what it was told at startup.
     Status {
         reply: tokio::sync::oneshot::Sender<StatusReport>,
     },
@@ -149,11 +151,11 @@ pub enum Control {
     Why {
         reply: tokio::sync::oneshot::Sender<String>,
     },
-    /// Something that happened outside the conversation, for the conversation to know
-    /// about: the output of a command the person ran themselves.
+    /// Something that happened outside the conversation, for the conversation to know about: the
+    /// output of a command the person ran themselves.
     ///
-    /// Answered between turns like every other request here, so a note never lands in a
-    /// history a request is half-built against.
+    /// Answered between turns like every other request here, so a note never lands in a history a
+    /// request is half-built against.
     Note(String),
 }
 
@@ -177,7 +179,8 @@ pub enum AgentEvent {
     Phase(Phase),
     AssistantDelta(String),
     AssistantText(String),
-    /// The model's scratchpad. Shown, never recorded, never sent back.
+    /// The model's scratchpad.
+    /// Shown, never recorded, never sent back.
     Reasoning(String),
     ToolCall {
         /// The id the result will carry, so the 2 can be put together.
@@ -189,7 +192,8 @@ pub enum AgentEvent {
         id: String,
         name: String,
         output: ToolOutput,
-        /// How long the call ran. Zero for an answer that was already known.
+        /// How long the call ran.
+        /// Zero for an answer that was already known.
         took: std::time::Duration,
         origin: Origin,
     },
@@ -207,8 +211,9 @@ pub enum AgentEvent {
     Steered(String),
     /// A question asked from another screen of the same session.
     Asked(String),
-    /// A turn the session began by itself, on what an agent working in the background
-    /// answered while nothing else ran. The token stops it.
+    /// A turn the session began by itself, on what an agent working in the background answered
+    /// while nothing else ran.
+    /// The token stops it.
     Begun(CancellationToken),
     /// How tool calls travel, once something has found out what the backend does.
     Protocol(ToolProtocol),
@@ -216,14 +221,14 @@ pub enum AgentEvent {
     Window(crate::agent::session::Occupancy),
     /// How fast the last step came back, in tokens a second.
     ///
-    /// A turn that takes a minute with nothing on screen looks the same as a turn that
-    /// has stalled. This is the one number that tells them apart.
+    /// A turn that takes a minute with nothing on screen looks the same as a turn that has stalled.
+    /// This is the one number that tells them apart.
     Rate(f64),
     /// What is being done in the background, or nothing once it is done.
     ///
-    /// Work that belongs to no turn still takes time - holding a model ready is a minute
-    /// on a cold server - and a screen that says nothing about it is a screen that looks
-    /// broken.
+    /// Work that belongs to no turn still takes time.
+    /// Holding a model ready is an example.
+    /// A screen that says nothing about it looks broken.
     Background(Option<(String, CancellationToken)>),
     /// What the backend serves, for completing the name of one that is being typed.
     Models(Vec<String>),
@@ -234,8 +239,8 @@ pub enum AgentEvent {
 
 /// How fast a step came back, in tokens a second, when the backend said enough to tell.
 ///
-/// Nothing is reported for a step that failed or for a backend that counts nothing: a made
-/// up number on a status line is worse than an empty space where one would be.
+/// Nothing is reported for a step that failed or for a backend that counts nothing: a made up
+/// number on a status line is worse than an empty space where one would be.
 fn step_rate(attempt: &anyhow::Result<Completion>, model_ms: u64) -> Option<f64> {
     let usage = attempt.as_ref().ok()?.usage?;
     if model_ms == 0 || usage.completion_tokens == 0 {
@@ -244,12 +249,12 @@ fn step_rate(attempt: &anyhow::Result<Completion>, model_ms: u64) -> Option<f64>
     Some(usage.completion_tokens as f64 * 1000.0 / model_ms as f64)
 }
 
-/// The files a write tool says it changed, read from the result rather than the arguments:
-/// what was written is what the tool says it wrote, and a call that was refused or failed
-/// says nothing to parse.
+/// The files a write tool says it changed, read from the result rather than the arguments: what was
+/// written is what the tool says it wrote, and a call that was refused or failed says nothing to
+/// parse.
 ///
-/// The 4 shapes the write tools produce: "wrote P (N bytes)", "edited P", "patched P"
-/// once per file, and "applied N edit(s) to P".
+/// The 4 shapes the write tools produce: "wrote P (N bytes)", "edited P", "patched P" once per
+/// file, and "applied N edit(s) to P".
 fn changed_paths(content: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in content.lines() {
@@ -279,32 +284,31 @@ use crate::lsp::check::{CHECK_FAILED, CHECK_PASSED, NOT_CHECKED};
 
 /// Left in the transcript when a turn ends without the model having answered.
 ///
-/// The turn's user message is already in the history, and `Session::compact` drops whole
-/// steps by looking for user-message boundaries. Leaving a user message with no reply
-/// behind it puts 2 `user` roles in a row and moves a boundary the compactor reasons
-/// about, so an abandoned turn is closed off rather than left open.
+/// The turn's user message is already in the history, and `Session::compact` drops whole steps by
+/// looking for user-message boundaries.
+/// Leaving a user message with no reply behind it puts 2 `user` roles in a row and moves a boundary
+/// the compactor reasons about, so an abandoned turn is closed off rather than left open.
 const TURN_ABANDONED: &str = "[this turn ended without an answer]";
 
 /// How long to wait between 2 pieces of a streaming answer before giving up on it.
 ///
-/// Between pieces only. A server that has started speaking and stops has stalled, and the
-/// gap says so whatever the prompt was.
+/// Between pieces only.
+/// A server that has started speaking and stops has stalled, and the gap says so whatever the
+/// prompt was.
 const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The slowest prefill worth waiting through, in tokens a second.
 ///
-/// The wait for the first token is not a gap in an answer: it is the server reading the
-/// prompt, and it grows with the prompt. Held to the same figure as the gaps after it, a
-/// long window is unusable by construction - the client gives up on every request large
-/// enough to be the reason the window was asked for. Slow enough to cover a large model
-/// spread over consumer cards; anything below it is a server in trouble, not a server
-/// working.
+/// The wait for the first token is the server reading the prompt, and it grows with the prompt.
+/// It is not a gap in an answer, so it is not held to the gap allowed between pieces.
+/// The figure covers a large model spread over several devices.
+/// A prefill slower than it means a server in trouble.
 const SLOWEST_PREFILL: usize = 60;
 
 /// How long to wait for the first piece of an answer to a prompt of `chars`.
 ///
-/// Never shorter than the gap allowed between pieces, so a short prompt is judged by the
-/// same rule it always was.
+/// Never shorter than the gap allowed between pieces, so a short prompt is judged by the same rule
+/// it always was.
 fn first_token_timeout(chars: usize) -> std::time::Duration {
     let tokens = chars / crate::agent::session::CHARS_PER_TOKEN;
     std::time::Duration::from_secs((tokens / SLOWEST_PREFILL) as u64).max(STREAM_IDLE_TIMEOUT)
@@ -312,10 +316,10 @@ fn first_token_timeout(chars: usize) -> std::time::Duration {
 
 /// Split a turn's calls into runs that may go at once.
 ///
-/// A read-only call cannot see what another one did, so several of them are independent and
-/// the order they finish in does not matter. A mutating call is a boundary on both sides:
-/// what it changes is what a later call would read, and the checkpoint taken after it has to
-/// describe that call alone.
+/// A read-only call cannot see what another one did, so several of them are independent and the
+/// order they finish in does not matter.
+/// A mutating call is a boundary on both sides: what it changes is what a later call would read,
+/// and the checkpoint taken after it has to describe that call alone.
 ///
 /// A call to a tool that does not exist is its own run, because the answer is a refusal and
 /// grouping it with anything would only obscure which call was refused.
@@ -345,9 +349,8 @@ fn last_is_parallel(registry: &Registry, run: &[ResolvedCall]) -> bool {
 
 /// How many steps may fail outright, one after another, before the turn is given back.
 ///
-/// 3 is enough for a search that guesses wrong twice and then reads the tree, and
-/// short enough that a model repeating a broken idea costs 3 context reads and not
-/// 16.
+/// 3 is enough for a search that guesses wrong twice and then reads the tree, and short enough that
+/// a model repeating a broken idea costs 3 context reads and not 16.
 const BARREN_STEPS: u32 = 3;
 
 /// A guess in flight: the work, and the token that abandons it.
@@ -370,8 +373,8 @@ struct Guess {
 impl Guess {
     /// Ask which read is coming, make it, and hand back what a repeat of it would find.
     ///
-    /// Read-only by construction: a guess that would change something is dropped rather
-    /// than run, because the point is that being wrong is free.
+    /// Read-only by construction: a guess that would change something is dropped rather than run,
+    /// because the point is that being wrong is free.
     async fn run(self, cancel: CancellationToken) -> Option<(String, ToolOutput)> {
         let names: Vec<&str> = self
             .registry
@@ -427,17 +430,18 @@ impl Guess {
             _ = cancel.cancelled() => return None,
             out = tool.run(&self.ctx, arguments) => out.ok()?,
         };
-        // A guess that failed teaches the next step nothing and would be served as an
-        // answer. Only what worked is worth keeping.
+        // A guess that failed teaches the next step nothing and would be served as an answer.
+        // Only what worked is worth keeping.
         (!out.is_error).then_some((key, out))
     }
 }
 
 /// The one thing a local agent must never do.
 ///
-/// A model used to a chat window asks for the file to be pasted in. Here the project is on
-/// this disk and the tools are in its hand, so asking is a turn spent to be told what it
-/// could have read, and a person who has to paste their own code has no use for an agent.
+/// A model used to a chat window asks for the file to be pasted in.
+/// Here the project is on this disk and the tools are in its hand, so asking is a turn spent to be
+/// told what it could have read, and a person who has to paste their own code has no use for an
+/// agent.
 const NEVER_ASK: &str = "The project is on this disk and you have tools for it. Never ask \
                          the user to paste, provide or share a file, its contents or its \
                          path: list, search and read it yourself. Ask only about what is \
@@ -447,28 +451,28 @@ const NEVER_ASK: &str = "The project is on this disk and you have tools for it. 
 
 /// How much of a call's arguments a reviewer is shown.
 ///
-/// Enough to see what the change is, bounded because a whole-file write is the whole file
-/// and the question is about the shape of the change rather than every line of it.
+/// Enough to see what the change is, bounded because a whole-file write is the whole file and the
+/// question is about the shape of the change rather than every line of it.
 const REVIEW_ARG_CHARS: usize = 4000;
 
 /// How long an objection may be and still be one.
 ///
-/// A reviewer that writes a paragraph is discussing the change rather than objecting to
-/// it, and a paragraph in front of the model is a paragraph it will argue with.
+/// A reviewer that writes a paragraph is discussing the change rather than objecting to it, and a
+/// paragraph in front of the model is a paragraph it will argue with.
 const REVIEW_SAID_CHARS: usize = 400;
 
 /// How many calls may fail in a turn that has changed nothing before it is given back.
 ///
-/// Counted across the turn rather than in a row, because a model that gets its own
-/// arguments wrong alternates between calls that work and calls that cannot, and never
-/// fails often enough in a row to be stopped by the other rule.
+/// Counted across the turn rather than in a row, because a model that gets its own arguments wrong
+/// alternates between calls that work and calls that cannot, and never fails often enough in a row
+/// to be stopped by the other rule.
 const FAILED_CALLS: u32 = 6;
 
 /// Whether the question is one the project itself answers.
 ///
-/// Only where the person has said so. A question about Rust, or about what a word means,
-/// is answered from what the model knows and reading the project would be beside the
-/// point; a question about this code is not.
+/// Only where the person has said so.
+/// A question about Rust, or about what a word means, is answered from what the model knows.
+/// A question about this code is answered by reading the project.
 fn asks_about_the_project(asked: &str) -> bool {
     const ABOUT_HERE: [&str; 10] = [
         "the source",
@@ -494,13 +498,14 @@ const NOT_LOOKED: &str = "You answered without reading anything from the project
 
 /// Whether a name in the catalogue is something a turn could be had with.
 ///
-/// A server that does more than text lists what it does: voices, transcribers, image
-/// pipelines, an encoder or two. None of them can answer a question, and offering them to
-/// somebody choosing a model is offering a choice that cannot work.
+/// A server that does more than text lists what it does: voices, transcribers, image pipelines, an
+/// encoder or two.
+/// None of them can answer a question, and offering them to somebody choosing a model is offering a
+/// choice that cannot work.
 ///
-/// Judged on the name, which is all the catalogue gives. A name that says nothing either
-/// way is kept: refusing to offer a model because its name was unfamiliar would be worse
-/// than listing one that turns out to be a transcriber.
+/// Judged on the name, which is all the catalogue gives.
+/// A name that says nothing either way is kept: refusing to offer a model because its name was
+/// unfamiliar would be worse than listing one that turns out to be a transcriber.
 pub fn can_hold_a_conversation(name: &str) -> bool {
     const NOT_A_CHAT: [&str; 14] = [
         "whisper",
@@ -524,9 +529,9 @@ pub fn can_hold_a_conversation(name: &str) -> bool {
 
 /// Whether the text is a failure the server wrote into the stream rather than an answer.
 ///
-/// A server that fails part-way through generation reports it in the content, where it
-/// arrives shaped exactly like what the model said: same field, same stream, no error
-/// status. Nothing distinguishes it except that it is a bracketed error and nothing else.
+/// A server that fails part-way through generation reports it in the content, where it arrives
+/// shaped exactly like what the model said: same field, same stream, no error status.
+/// Nothing distinguishes it except that it is a bracketed error and nothing else.
 pub fn is_backend_failure(text: &str) -> bool {
     let text = text.trim();
     text.starts_with('[') && text.to_lowercase().contains("error")
@@ -534,9 +539,9 @@ pub fn is_backend_failure(text: &str) -> bool {
 
 /// The registered tool whose name is closest to one that does not exist.
 ///
-/// Closest by the words in the name rather than by edit distance: an invented name is a
-/// paraphrase, `list_files` for `list_dir` or `run_command` for `bash`, and the letters
-/// have less to say about that than the words do.
+/// Closest by the words in the name rather than by edit distance: an invented name is a paraphrase,
+/// `list_files` for `list_dir` or `run_command` for `bash`, and the letters have less to say about
+/// that than the words do.
 fn nearest_tool(reg: &Registry, wanted: &str) -> Option<String> {
     let parts = |s: &str| -> Vec<String> {
         s.split(['_', '-', ' '])
@@ -556,8 +561,8 @@ fn nearest_tool(reg: &Registry, wanted: &str) -> Option<String> {
         if shared == 0 {
             continue;
         }
-        // The first word is the verb, and 2 tools that share only a noun are not the
-        // same tool: read_file and list_files share "file" and do opposite things.
+        // The first word is the verb, and 2 tools that share only a noun are not the same tool:
+        // read_file and list_files share "file" and do opposite things.
         let verb = usize::from(match (want.first(), have.first()) {
             (Some(w), Some(h)) => akin(h, w),
             _ => false,
@@ -577,8 +582,8 @@ fn repeat_key(call: &ResolvedCall) -> String {
 
 /// A result the model has already been given, handed back with the fact said plainly.
 ///
-/// Said rather than hidden: a model that is repeating itself has lost its place, and the
-/// only thing that changes that is being told.
+/// Said rather than hidden: a model that is repeating itself has lost its place, and the only thing
+/// that changes that is being told.
 fn said_before(known: &ToolOutput) -> ToolOutput {
     ToolOutput {
         content: format!("{SAID_BEFORE}\n{}", known.content),
@@ -590,12 +595,13 @@ fn said_before(known: &ToolOutput) -> ToolOutput {
 const SAID_BEFORE: &str = "you already ran this and nothing has been written since, so \
                            the answer is the one you had:";
 
-/// Whether an answer is a tool call the model had to write out because it was never
-/// given the tools.
+/// Whether an answer is a tool call the model had to write out because it was never given the
+/// tools.
 ///
-/// The shape varies with the model - `read_file('a.rs')`, `read_file src/a.rs` in a shell
-/// fence, the JSON it would have sent - so the test is the name itself, as a word. A model
-/// that names a tool it did not call was not given it.
+/// The shape varies with the model: `read_file('a.rs')`, `read_file src/a.rs` in a shell
+/// fence, or the JSON it would have sent.
+/// The test is the name itself, as a word.
+/// A model that names a tool it did not call was not given it.
 fn calls_a_tool_in_prose(reg: &Registry, text: &str) -> bool {
     reg.iter().any(|(name, _)| names_word(text, name))
 }
@@ -630,9 +636,10 @@ pub struct AgentConfig {
     /// Whether to have the backend hold the next model ready while other work runs.
     /// Only ever true for a backend near enough for a load to be worth hiding.
     pub preload: bool,
-    /// Which model guesses the next read while this one thinks, and `None` for a session
-    /// that does no guessing. Resolved once, from what the backend already holds: a model
-    /// that would have to be loaded first is an eviction, not a guess.
+    /// Which model guesses the next read while this one thinks, and `None` for a session that does
+    /// no guessing.
+    /// Resolved once, from what the backend already holds: a model that would have to be loaded
+    /// first is an eviction, not a guess.
     pub guess_with: Option<String>,
     /// Which model does which kind of work, when the project says.
     pub roles: crate::agent::roles::Roles,
@@ -642,38 +649,41 @@ pub struct AgentConfig {
     pub context_tokens: usize,
     /// What each named model needs, when it differs from the default.
     pub models: std::collections::BTreeMap<String, crate::config::ModelSection>,
-    /// The standing instructions the preamble carries, kept so a protocol change or a
-    /// model change can rebuild the preamble without reading the files again.
+    /// The standing instructions the preamble carries, kept so a protocol change or a model change
+    /// can rebuild the preamble without reading the files again.
     pub instructions: Option<String>,
-    /// Where a chosen model is written down for the next session. `None` remembers
-    /// nothing, which is what a test and a one-shot run both want.
+    /// Where a chosen model is written down for the next session.
+    /// `None` remembers nothing, which is what a test and a one-shot run both want.
     pub remember_model_in: Option<std::path::PathBuf>,
     pub grammar_enabled: bool,
     pub max_steps: usize,
     pub max_answer_tokens: usize,
-    /// How to ask for tools. Changed at most once per session, when a backend turns out
-    /// not to support the native protocol.
+    /// How to ask for tools.
+    /// Changed at most once per session, when a backend turns out not to support the native
+    /// protocol.
     pub protocol: ToolProtocol,
     /// Whether a refusal of native tool calls may drop the session to the envelope.
     ///
-    /// False when the user pinned a protocol: asking for one and silently getting the
-    /// other is worse than being told the backend cannot do what was asked.
+    /// False when the user pinned a protocol: asking for one and silently getting the other is
+    /// worse than being told the backend cannot do what was asked.
     pub allow_fallback: bool,
     /// The protocol cell a delegated or background session reads when it starts.
     ///
-    /// Which protocol works is the backend's property, so a session that finds out has to
-    /// put the answer somewhere the sessions started after it will look.
+    /// Which protocol works is the backend's property, so a session that finds out has to put the
+    /// answer somewhere the sessions started after it will look.
     pub shared_protocol: Option<crate::agent::protocol::SharedProtocol>,
-    /// Whether the turn was handed over by another session. Its question is taken as
-    /// written: no file named in it is attached and the project is not searched for it.
+    /// Whether the turn was handed over by another session.
+    /// Its question is taken as written: no file named in it is attached and the project is not
+    /// searched for it.
     pub delegated: bool,
 }
 
 /// What one turn did, for the line that closes it.
 ///
-/// A turn ends with the model's answer and nothing about the turn: how long it took, what
-/// it changed, what it cost. Those are the 3 things a person checks before deciding
-/// whether to look at the diff, and all 3 were already known and thrown away.
+/// A turn ends with the model's answer and nothing about the turn: how long it took, what it
+/// changed, what it cost.
+/// Those are the 3 things a person checks before deciding whether to look at the diff, and all 3
+/// were already known and thrown away.
 #[derive(Debug, Clone, Default)]
 pub struct TurnTally {
     pub files: Vec<String>,
@@ -791,9 +801,9 @@ impl Receipt {
 
 /// What the status line asks the agent for between turns.
 ///
-/// Everything here can change under the interface while a turn runs - a role switch, a
-/// backend that turned out not to do native tool calls - and none of it is readable from
-/// the interface's side, because the agent owns the session.
+/// Everything here can change under the interface while a turn runs.
+/// Examples are a role switch and a backend that does not do native tool calls.
+/// None of it is readable from the interface's side, because the agent owns the session.
 pub struct StatusReport {
     pub model: String,
     pub window: crate::agent::session::Occupancy,
@@ -803,8 +813,8 @@ pub struct StatusReport {
 /// A session that has been come back to.
 pub struct Resumed {
     pub id: String,
-    /// What was said in it, for putting back on screen: a conversation the model can see
-    /// and the person cannot is worse than no conversation at all.
+    /// What was said in it, for putting back on screen: a conversation the model can see and the
+    /// person cannot is worse than no conversation at all.
     pub messages: Vec<Message>,
     /// What the model was changed to, when the session was last using another one.
     pub model: Option<String>,
@@ -824,8 +834,8 @@ pub struct Models {
 
 /// What a session has spent, so far.
 ///
-/// The server already counts the tokens and nothing showed them: a person deciding
-/// whether to hand the agent a large file has no way to know what the last one cost.
+/// The server already counts the tokens and nothing showed them: a person deciding whether to hand
+/// the agent a large file has no way to know what the last one cost.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Spend {
     pub prompt_tokens: u64,
@@ -862,14 +872,14 @@ impl Spend {
 pub struct Agent {
     /// What this turn changed and what it cost, for the line that closes it.
     pub this_turn: TurnTally,
-    /// Whether the compiler has already been asked about this step. Shared rather than
-    /// owned because the calls of one run are dispatched together.
+    /// Whether the compiler has already been asked about this step.
+    /// Shared rather than owned because the calls of one run are dispatched together.
     pub checked_this_step: std::sync::atomic::AtomicBool,
-    /// Whether this turn has already been asked to go and look. Once: a nudge that
-    /// repeats is an argument.
+    /// Whether this turn has already been asked to go and look.
+    /// Once: a nudge that repeats is an argument.
     pub nudged: bool,
-    /// The window the history is currently sized to, so the server saying the same thing
-    /// again costs nothing and saying something new is noticed.
+    /// The window the history is currently sized to, so the server saying the same thing again
+    /// costs nothing and saying something new is noticed.
     pub window_in_use: usize,
     /// Steps in a row where every tool call failed and nothing was written.
     pub barren: u32,
@@ -877,45 +887,48 @@ pub struct Agent {
     pub failures: u32,
     /// Answers that came from a guess rather than from the model having asked before.
     ///
-    /// Served plainly: a model that is handed what it was about to ask for is not
-    /// repeating itself, and telling it that it is would be a lie about its own turn.
+    /// Served plainly: a model that is handed what it was about to ask for is not repeating itself,
+    /// and telling it that it is would be a lie about its own turn.
     pub from_guess: std::collections::HashSet<String>,
     /// Read-only calls already answered in this turn, by tool and arguments.
     ///
-    /// A model that has lost its place asks the same question again, and a run can hold
-    /// the same call twice. The answer cannot have changed: it is cleared the moment
-    /// anything writes, so what is served from here is what running it would return.
+    /// A model that has lost its place asks the same question again, and a run can hold the same
+    /// call twice.
+    /// The answer cannot have changed: it is cleared the moment anything writes, so what is served
+    /// from here is what running it would return.
     pub repeats: std::collections::HashMap<String, ToolOutput>,
     /// The model the session was on when planning began, to be given back on leaving it.
     pub before_plan: Option<String>,
-    /// What each model has managed in this project, learned from the writes that did and
-    /// did not check out.
+    /// What each model has managed in this project, learned from the writes that did and did not
+    /// check out.
     pub history: crate::agent::history::ModelHistory,
-    /// What fixed a complaint here before, so the same one does not cost the same steps
-    /// twice.
+    /// What fixed a complaint here before, so the same one does not cost the same steps twice.
     pub repairs: crate::agent::repairs::Repairs,
     /// The same backend at a priority that yields, for work nobody is waiting on.
     pub background: Option<Arc<dyn crate::backend::provider::Provider>>,
-    /// The model this session was on before a failed check raised it, and how many clean
-    /// steps have passed since. `None` when nothing has been raised.
+    /// The model this session was on before a failed check raised it, and how many clean steps have
+    /// passed since.
+    /// `None` when nothing has been raised.
     pub escalated_from: Option<String>,
     pub clean_steps: usize,
-    /// Whether a model is being held ready right now, so a second request cannot queue
-    /// behind the first.
+    /// Whether a model is being held ready right now, so a second request cannot queue behind the
+    /// first.
     pub warming: Arc<std::sync::atomic::AtomicBool>,
     /// What this session has spent.
     pub spend: Spend,
-    /// What each step asked for and what it cost. Recorded before anything routes on it,
-    /// because a claim that one arrangement is faster needs the other one measured too.
+    /// What each step asked for and what it cost.
+    /// Recorded before anything routes on it, because a claim that one arrangement is faster needs
+    /// the other one measured too.
     pub steps: Vec<crate::agent::steps::StepRecord>,
-    /// The language servers, for checking a file the agent has just written. `None`
-    /// leaves writes unchecked, which is what a test without a server wants.
+    /// The language servers, for checking a file the agent has just written.
+    /// `None` leaves writes unchecked, which is what a test without a server wants.
     pub lsp: Option<Arc<crate::lsp::LspPool>>,
-    /// Lines the user typed while a turn was running. Drained at a step boundary, which
-    /// is where the history can take a user message without moving a boundary the
-    /// compactor reasons about.
+    /// Lines the user typed while a turn was running.
+    /// Drained at a step boundary, which is where the history can take a user message without
+    /// moving a boundary the compactor reasons about.
     pub steer: mpsc::Receiver<String>,
-    /// Whoever answers. The loop knows nothing about which API it is.
+    /// Whoever answers.
+    /// The loop knows nothing about which API it is.
     pub backend: Arc<dyn Provider>,
     pub registry: Arc<Registry>,
     pub session: Session,
@@ -923,22 +936,23 @@ pub struct Agent {
     pub ctx: ToolCtx,
     /// Records what the agent changes, so a turn can be shown or taken back.
     pub checkpoints: Option<Arc<Checkpoints>>,
-    /// The task list the model keeps, when this session keeps one, so it outlives a resume
-    /// and an elision.
+    /// The task list the model keeps, when this session keeps one, so it outlives a resume and an
+    /// elision.
     pub tasks: Option<Arc<crate::tools::plan::TaskList>>,
     /// The tool servers, so a change to what one offers reaches the next turn.
     pub mcp: crate::mcp::Clients,
-    /// Which turn this is, counted from one. Checkpoints are labelled with it, which is
-    /// what lets `/undo` take back a turn rather than a single tool call.
+    /// Which turn this is, counted from one.
+    /// Checkpoints are labelled with it, which is what lets `/undo` take back a turn rather than a
+    /// single tool call.
     pub turn: u32,
 }
 
 impl Agent {
     /// The preamble, which states the contract the chosen protocol actually enforces.
     ///
-    /// In the native protocol the tools travel in their own field and the server states
-    /// the calling convention itself, so repeating a JSON schema here would describe a
-    /// shape the model is not being asked for.
+    /// In the native protocol the tools travel in their own field and the server states the calling
+    /// convention itself, so repeating a JSON schema here would describe a shape the model is not
+    /// being asked for.
     pub fn build_system_prompt(
         reg: &Registry,
         protocol: ToolProtocol,
@@ -946,9 +960,8 @@ impl Agent {
         instructions: Option<&str>,
     ) -> String {
         let mut prompt = Self::contract(reg, protocol);
-        // Stated in the contract rather than only enforced at dispatch: a model that
-        // knows it is planning writes a plan, where one that is merely refused writes the
-        // same call again.
+        // Stated in the contract rather than only enforced at dispatch: a model that knows it is
+        // planning writes a plan, where one that is merely refused writes the same call again.
         if mode == Mode::Plan {
             prompt.push_str(
                 "\n\nYou are PLANNING. Read, search and ask, but do not change anything: \
@@ -958,8 +971,8 @@ impl Agent {
                  changes.",
             );
         }
-        // Last, and named as the project's own: a model that has read the contract first
-        // is less likely to take a project's wording for the calling convention.
+        // Last, and named as the project's own: a model that has read the contract first is less
+        // likely to take a project's wording for the calling convention.
         if let Some(text) = instructions.map(str::trim).filter(|t| !t.is_empty()) {
             prompt.push_str(
                 "\n\nStanding instructions for this project and this user. Follow them \
@@ -997,8 +1010,8 @@ impl Agent {
 
     /// Swap protocol and rewrite the preamble to match.
     ///
-    /// The system message states the contract, so changing how tools are asked for
-    /// without changing it would leave the model reading instructions for the other one.
+    /// The system message states the contract, so changing how tools are asked for without changing
+    /// it would leave the model reading instructions for the other one.
     fn fall_back_to_envelope(&mut self) {
         self.cfg.protocol = ToolProtocol::Envelope;
         if let Some(shared) = &self.cfg.shared_protocol {
@@ -1030,9 +1043,7 @@ impl Agent {
             let share = (chars * 100).checked_div(size).unwrap_or(0);
             lines.push(format!("  {share:>3}%  {kind}"));
         }
-        lines.push(
-            "past a hundred per cent the oldest steps are elided; /compact does it now".to_string(),
-        );
+        lines.push("past 100% the oldest steps are elided; /compact does it now".to_string());
         lines.join("\n")
     }
 
@@ -1049,16 +1060,17 @@ impl Agent {
             });
         }
         self.rebuild_preamble();
-        // Planning is where reasoning is worth paying for and acting is where being over
-        // quickly is, so the mode carries its model with it when the project named one.
-        // Said out loud, because a model that changed without anyone announcing it would
-        // make the next answer's character unexplainable.
+        // Planning is where reasoning is worth paying for and acting is where being over quickly
+        // is, so the mode carries its model with it when the project named one.
+        // Said out loud, because a model that changed without anyone announcing it would make the
+        // next answer's character unexplainable.
         let role = match mode {
             Mode::Plan => crate::agent::roles::Role::Plan,
             Mode::Act => crate::agent::roles::Role::Chat,
         };
-        // Planning is long and ends in acting, so the model acting will use is loaded
-        // while the plan is being written. By the time /act is typed it is resident.
+        // Planning is long and ends in acting, so the model acting will use is loaded while the
+        // plan is being written.
+        // By the time /act is typed it is resident.
         if mode == Mode::Plan {
             let next = self
                 .cfg
@@ -1070,9 +1082,9 @@ impl Agent {
                 self.preload(&next);
             }
         }
-        // Leaving planning gives back the model planning was entered from, whether or not
-        // a chat role names one: a mode that borrows a model has to return it, or the
-        // session quietly finishes the day on the model it planned with.
+        // Leaving planning gives back the model planning was entered from, whether or not a chat
+        // role names one: a mode that borrows a model has to return it, or the session quietly
+        // finishes the day on the model it planned with.
         let target = match mode {
             Mode::Act => self
                 .cfg
@@ -1112,14 +1124,14 @@ impl Agent {
 
     /// Have the backend hold `model` ready, behind whatever is happening now.
     ///
-    /// A load is seconds of reading gigabytes onto a card. Asked for while a tool runs or
-    /// while a plan is being written, those seconds are spent inside time that was going
-    /// to pass anyway, and the switch that follows costs nothing.
+    /// Asked for while a tool runs or while a plan is being written, the load is spent inside time
+    /// that passes anyway.
+    /// The switch that follows then costs nothing.
     ///
-    /// Fire and forget, and at most one at a time: this is an optimisation, so it must
-    /// never delay a turn, fail one, or queue up behind itself. The server decides whether
-    /// it can hold 2 models at once - that is its pressure protocol's job, not this
-    /// one's - and if it cannot, the next use of the current model reloads it.
+    /// Fire and forget, and at most one at a time.
+    /// It never delays a turn, fails one, or queues up behind itself.
+    /// The server decides whether it can hold 2 models at once.
+    /// If it cannot, the next use of the current model reloads it.
     fn preload(&self, model: &str) {
         if !self.cfg.preload || model == self.cfg.model || model.trim().is_empty() {
             return;
@@ -1151,14 +1163,15 @@ impl Agent {
 
     /// Shrink the history to the window the server says it actually served.
     ///
-    /// The configured figure is what this session asked for; the served one is what it
-    /// got, which can be smaller because the checkpoint declares less or because the
-    /// cards held no more. Believing the larger of the 2 is the expensive mistake: the
-    /// prompt goes out too big and the server cuts it from the front, taking the standing
-    /// instructions and leaving an answer that is fluent and about the wrong thing.
+    /// The configured figure is what this session asked for.
+    /// The served figure is what it got, and it can be smaller.
+    /// The larger of the 2 must not be believed.
+    /// A prompt sent too big is cut from the front by the server, which drops the standing
+    /// instructions.
     ///
-    /// A ceiling, never a raise. A server serving a larger window because somebody else
-    /// asked for one is not an invitation to fill it.
+    /// A ceiling, never a raise.
+    /// A server serving a larger window because somebody else asked for one is not an invitation to
+    /// fill it.
     async fn adopt_served_window(&mut self, events: &mpsc::Sender<AgentEvent>) {
         let Some(served) = self.backend.served_window() else {
             return;
@@ -1174,10 +1187,8 @@ impl Agent {
 
     /// Size the history to `window`, and say so when it moves.
     ///
-    /// One place, because the window is learned 2 ways - a backend that answers the
-    /// question, and a backend that cuts a prompt and is caught at it - and a session
-    /// sized differently depending on which taught it would be a session whose budget
-    /// depends on how it found out.
+    /// One place sizes the history, whichever way the window was learned.
+    /// A backend either answers the question, or cuts a prompt and is caught at it.
     async fn adopt_window(&mut self, window: usize, events: &mpsc::Sender<AgentEvent>) {
         if window == 0 || window == self.window_in_use {
             return;
@@ -1193,9 +1204,9 @@ impl Agent {
                 .unwrap_or(self.cfg.max_answer_tokens),
         );
         self.session.set_window(window, reserve);
-        // What a tool result may contribute is a share of the same window, so it moves
-        // with it: a history resized upward that still reads files in 2-kilobyte pieces
-        // has not gained anything worth having.
+        // What a tool result may contribute is a share of the same window, so it moves with it: a
+        // history resized upward that still reads files in 2-kilobyte pieces has not gained
+        // anything worth having.
         self.ctx.max_output_chars = crate::agent::session::tool_output_chars(window, reserve);
         if previous != 0 {
             let _ = events
@@ -1207,8 +1218,8 @@ impl Agent {
         }
     }
 
-    /// Take the window a model needs and forget what the last one taught, which every
-    /// model change has to do whether a person asked for it or a role did.
+    /// Take the window a model needs and forget what the last one taught, which every model change
+    /// has to do whether a person asked for it or a role did.
     fn forget_model_calibration(&mut self, model: &str) {
         let per_model = self.cfg.models.get(model);
         let context = per_model
@@ -1226,8 +1237,9 @@ impl Agent {
         self.window_in_use = context;
     }
 
-    /// Answer one control request. Between turns, which is where the session can change
-    /// under the model without a request being half-built against the old one.
+    /// Answer one control request.
+    /// Between turns, which is where the session can change under the model without a request being
+    /// half-built against the old one.
     pub async fn control(&mut self, request: Control, events: &mpsc::Sender<AgentEvent>) {
         match request {
             Control::Model { name, reply } => {
@@ -1291,14 +1303,15 @@ impl Agent {
                 let _ = reply.send(said);
             }
             Control::Note(text) => {
-                // As something the person said, because that is what it is: they ran the
-                // command and they are handing over what it printed. A role of its own
-                // would be a role every backend renders differently.
+                // As something the person said, because that is what it is: they ran the command
+                // and they are handing over what it printed.
+                // A role of its own would be a role every backend renders differently.
                 self.session.push(Message::user(text));
             }
             Control::Protocol(protocol) => {
-                // Only where the protocol was left open. A session told which protocol to
-                // speak keeps speaking it, and is told when the backend disagrees.
+                // Only where the protocol was left open.
+                // A session told which protocol to speak keeps speaking it, and is told when the
+                // backend disagrees.
                 if self.cfg.allow_fallback && self.cfg.protocol != protocol {
                     self.cfg.protocol = protocol;
                     if let Some(shared) = &self.cfg.shared_protocol {
@@ -1357,8 +1370,8 @@ impl Agent {
         }
     }
 
-    /// What the session spent, as a page: the totals, the energy by what it was for when
-    /// the backend measures it, and the last steps, most recent first.
+    /// What the session spent, as a page: the totals, the energy by what it was for when the
+    /// backend measures it, and the last steps, most recent first.
     fn spend_page(&self) -> String {
         let s = &self.spend;
         if s.steps == 0 {
@@ -1467,8 +1480,8 @@ impl Agent {
 
     /// Come back to a session recorded earlier.
     ///
-    /// The record is appended to rather than replaced, so a session resumed 3 times is
-    /// one story rather than 4, and the model it was last using comes back with it.
+    /// The record is appended to rather than replaced, so a session resumed 3 times is one story
+    /// rather than 4, and the model it was last using comes back with it.
     async fn resume_session(&mut self, id: &str) -> Result<Resumed, String> {
         let dir = crate::paths::sessions_dir()
             .ok_or_else(|| "no home directory, so no sessions to come back to".to_string())?;
@@ -1511,8 +1524,8 @@ impl Agent {
 
     /// What could be answering, for a list to be chosen from.
     ///
-    /// Only what can hold a conversation: a backend that also serves speech and image
-    /// models offers them here too, and none of them can take a turn.
+    /// Only what can hold a conversation: a backend that also serves speech and image models offers
+    /// them here too, and none of them can take a turn.
     async fn models_on_offer(&self) -> Result<Models, String> {
         let served = self
             .backend
@@ -1541,10 +1554,10 @@ impl Agent {
 
     /// Switch to `name`, or describe what is on offer when there is none.
     ///
-    /// A backend that cannot list its models is not a backend that cannot serve one, so a
-    /// name is taken on trust when the listing fails. A name the backend does list and
-    /// does not serve is refused, because the alternative is a session that fails on every
-    /// turn with a message from the server.
+    /// A backend that cannot list its models is not a backend that cannot serve one, so a name is
+    /// taken on trust when the listing fails.
+    /// A name the backend does list and does not serve is refused, because the alternative is a
+    /// session that fails on every turn with a message from the server.
     async fn switch_model(&mut self, name: Option<String>) -> String {
         let listed = self.backend.models().await;
         let Some(name) = name else {
@@ -1582,17 +1595,16 @@ impl Agent {
             return format!("already on {name}");
         }
         let previous = std::mem::replace(&mut self.cfg.model, name.clone());
-        // A window belongs to a model, and so does the tokenizer the budget was
-        // calibrated against; carrying either over is carrying a measurement of the
-        // model that just left.
+        // A window belongs to a model, and so does the tokenizer the budget was calibrated against.
+        // Carrying either over carries a measurement of the model that just left.
         self.forget_model_calibration(&name);
         let context = self.session.budget_chars();
         if let Some(t) = self.session.transcript() {
             t.append(crate::agent::transcript::Record::Model { name: name.clone() });
         }
         tracing::info!(from = %previous, to = %name, context, "model changed");
-        // Remembered for the next session. Failing to write is worth saying and is not
-        // worth refusing the switch over.
+        // Remembered for the next session.
+        // Failing to write is worth saying and is not worth refusing the switch over.
         let Some(path) = self.cfg.remember_model_in.clone() else {
             return format!("now on {name}, window {context}");
         };
@@ -1605,16 +1617,19 @@ impl Agent {
         }
     }
 
-    /// Run one user turn end-to-end. Loops model→tools→model until the
-    /// model emits zero tool_calls, `max_steps` is reached, or `cancel` fires.
+    /// Run one user turn end-to-end.
+    /// Loops model, tools, model until the model emits zero tool_calls, `max_steps` is reached, or
+    /// `cancel` fires.
     ///
-    /// `cancel` is created by the UI before the input is handed over, so the side that
-    /// has to react to a keystroke already holds the handle it needs. It is stored on the
-    /// tool context for the length of the turn, which is how a tool waiting on a
-    /// subprocess learns that the user has stopped caring about the answer.
-    /// The model for one kind of work: what the project named for that role, else the
-    /// session's own model. Nothing here decides anything - it answers what is available
-    /// to whoever is deciding.
+    /// `cancel` is created by the UI before the input is handed over.
+    /// The side that reacts to a keystroke thus already holds the handle it needs.
+    /// It is stored on the tool context for the length of the turn.
+    /// A tool waiting on a subprocess learns from it that the user has stopped waiting.
+    ///
+    /// The model for one kind of work: what the project named for that role, else the session's own
+    /// model.
+    /// Nothing here decides anything.
+    /// It answers what is available to whoever is deciding.
     pub fn model_for(&self, role: crate::agent::roles::Role) -> String {
         self.cfg
             .roles
@@ -1630,9 +1645,10 @@ impl Agent {
 
     /// Run one turn to the end and hand back everything it said.
     ///
-    /// The events channel is bounded. A caller that reads it only once the turn has
-    /// returned stops the turn at the 60-fourth event and waits there forever, so a
-    /// sub-session that reports its own progress has to be drained while it runs.
+    /// The events channel is bounded.
+    /// A caller that reads it only once the turn has returned stops the turn at the 60-fourth event
+    /// and waits there forever, so a sub-session that reports its own progress has to be drained
+    /// while it runs.
     pub async fn collect_turn(
         &mut self,
         user_input: String,
@@ -1657,9 +1673,9 @@ impl Agent {
         cancel: CancellationToken,
         events: mpsc::Sender<AgentEvent>,
     ) -> Result<()> {
-        // What this project taught, applied once, at the start. The ladder reacts to a
-        // change that has already failed to compile, which costs a bad step every time;
-        // the memory of those steps is what lets a turn start where the last one ended.
+        // What this project taught is applied once, at the start.
+        // The ladder reacts to a change that has already failed to compile.
+        // The memory of those steps lets a turn start where the last one ended.
         if let Some(stronger) = self
             .cfg
             .roles
@@ -1694,8 +1710,8 @@ impl Agent {
         self.barren = 0;
         self.failures = 0;
 
-        // The cap on what a policy may grant is about one piece of work, so it starts
-        // again with each turn rather than running out over a session.
+        // The cap on what a policy may grant is about one piece of work, so it starts again with
+        // each turn rather than running out over a session.
         self.ctx
             .auto_used
             .store(0, std::sync::atomic::Ordering::Relaxed);
@@ -1718,11 +1734,11 @@ impl Agent {
             chars = user_input.len(),
             "turn started"
         );
-        // A file the person named travels with the question rather than being fetched
-        // after it: they have already decided it is relevant, and on a local model the
-        // round trip that would fetch it costs seconds.
-        // What the hooks make of the question: refused, or sent with what they add. The
-        // session's own hooks go with its first question.
+        // A file the person named travels with the question rather than being fetched after it:
+        // they have already decided it is relevant, and on a local model the round trip that would
+        // fetch it costs seconds.
+        // What the hooks make of the question: refused, or sent with what they add.
+        // The session's own hooks go with its first question.
         let mut hooks_said = Vec::new();
         if !self.cfg.delegated {
             use crate::agent::hooks::{run_all, said, Event};
@@ -1783,14 +1799,11 @@ impl Agent {
                 )))
                 .await;
         }
-        // And what the project itself has to say about the question. The search is
-        // mechanical and the project is on this disk, but the loop used to leave the whole
-        // of it to the model: which file, whether to look at all, when to stop. A small
-        // model does the cheapest thing instead, which is to answer from the one file it
-        // could name. Done here, the turn starts from what is there.
+        // And what the project itself has to say about the question.
+        // The search for the relevant files is done here, so the turn starts from what is there.
         //
-        // Not when files were named: the person has already said what is relevant, and
-        // guessing over the top of that is guessing against them.
+        // Not when files were named.
+        // The person has already said what is relevant.
         let mut text = expanded.text;
         for note in hooks_said {
             text.push_str(&format!("\n\n{note}"));
@@ -1814,20 +1827,20 @@ impl Agent {
         let validator = Validator::new(&turn_schema).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         for step in 0..self.cfg.max_steps {
-            // One build per step: a step that writes 3 files is one change, and asking
-            // 3 times costs 3 builds to learn the same thing.
+            // One build per step: a step that writes 3 files is one change, and asking 3 times
+            // costs 3 builds to learn the same thing.
             self.checked_this_step
                 .store(false, std::sync::atomic::Ordering::Relaxed);
             if cancel.is_cancelled() {
                 self.abandon(&events, "interrupted").await;
                 return Ok(());
             }
-            // Before every call, not once per turn: a single tool result can be larger
-            // than everything said so far, so the history can outgrow the window in the
-            // middle of a turn as easily as between 2.
-            // Anything said while the previous step ran joins the conversation here,
-            // before the request is built, so the model reads it on this step rather
-            // than after the turn it was meant to change.
+            // Before every call, not once per turn: a single tool result can be larger than
+            // everything said so far, so the history can outgrow the window in the middle of a turn
+            // as easily as between 2.
+            // Anything said while the previous step ran joins the conversation here, before the
+            // request is built, so the model reads it on this step rather than after the turn it
+            // was meant to change.
             while let Ok(said) = self.steer.try_recv() {
                 self.session.push(Message::user(said.clone()));
                 let _ = events.send(AgentEvent::Steered(said)).await;
@@ -1863,9 +1876,8 @@ impl Agent {
                     .await;
             }
             let sent_chars = self.session.size_chars();
-            // Opened before the request goes out: everything here is what a decision
-            // about which model to ask could have used, which is the point of recording
-            // it while nothing is deciding anything yet.
+            // Opened before the request goes out.
+            // It holds what a decision about which model to ask could have used.
             let mut record = crate::agent::steps::StepRecord {
                 turn: self.turn,
                 model: self.cfg.model.clone(),
@@ -1889,21 +1901,19 @@ impl Agent {
                 after: Default::default(),
             };
             self.adopt_served_window(&events).await;
-            // Sent every step rather than at the end of the turn: a window filling up is
-            // something to see while there is still time to compact, not afterwards.
+            // Sent every step rather than at the end of the turn: a window filling up is something
+            // to see while there is still time to compact, not afterwards.
             let _ = events
                 .send(AgentEvent::Window(self.session.measure()))
                 .await;
             let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
             let asked_at = std::time::Instant::now();
-            // The card is busy with one model and idle for everything else. A small model
-            // can spend that time guessing which file the answer is going to ask for, and
-            // a read has no effect to undo when the guess is wrong.
+            // A small model guesses which file the answer is going to ask for while the answer is
+            // written.
+            // A read has no effect to undo when the guess is wrong.
             //
-            // Abandoned the moment the answer arrives. A guess is worth having only if it
-            // lands first, and one that has not must never be something the turn waits on:
-            // a server busy loading the model it was asked about would otherwise hold up
-            // the very turn it was meant to shorten.
+            // Abandoned the moment the answer arrives.
+            // A guess that has not landed first is never something the turn waits on.
             let guessing = self.start_guess(&cancel);
             let mut attempt = self.stream_one(&turn_schema, &cancel, &events).await;
             if let Some((handle, stop)) = guessing {
@@ -1919,8 +1929,8 @@ impl Agent {
             if let Some(rate) = step_rate(&attempt, record.after.model_ms) {
                 let _ = events.send(AgentEvent::Rate(rate)).await;
             }
-            // What the backend measured, when it measures anything: the request just made,
-            // this turn and the session.
+            // What the backend measured, when it measures anything: the request just made, this
+            // turn and the session.
             let ledger = crate::backend::meter::ledger();
             if let Some(latest) = ledger.latest() {
                 let _ = events
@@ -1932,9 +1942,10 @@ impl Agent {
                     .await;
             }
 
-            // A backend that will not take native tool calls says so by refusing the
-            // request. Nothing has been said to the user yet, so the same step can be run
-            // again under the protocol that does not need the server's cooperation.
+            // A backend that will not take native tool calls says so by refusing the request.
+            // Nothing has been said to the user at that point.
+            // The same step can be run again under the protocol that does not need the server's
+            // cooperation.
             if let Err(e) = &attempt {
                 if self.cfg.allow_fallback
                     && self.cfg.protocol == ToolProtocol::Native
@@ -1955,10 +1966,10 @@ impl Agent {
                 }
             }
 
-            // A backend can also take the tool definitions and drop them. Nothing fails:
-            // the model is simply never told it has tools, and writes the call it wanted
-            // to make into its answer. The tell is an answer that names a tool the model
-            // was given no way to call.
+            // A backend can also take the tool definitions and drop them.
+            // Nothing fails: the model is simply never told it has tools, and writes the call it
+            // wanted to make into its answer.
+            // The tell is an answer that names a tool the model was given no way to call.
             if self.cfg.allow_fallback
                 && self.cfg.protocol == ToolProtocol::Native
                 && step == 0
@@ -1997,8 +2008,8 @@ impl Agent {
                 }
             };
 
-            // The server's count is the only tokenizer this client can reach, so it is
-            // what the chars-per-token estimate is corrected against.
+            // The server's count is the only tokenizer this client can reach, so it is what the
+            // chars-per-token estimate is corrected against.
             self.spend.steps += 1;
             self.this_turn.steps += 1;
             record.after.finish_reason = completion.finish_reason.clone();
@@ -2015,10 +2026,10 @@ impl Agent {
                     crate::agent::session::Observed::Budget(note) => {
                         let _ = events.send(AgentEvent::Notice(note)).await;
                     }
-                    // The backend cut the prompt, and what it read is the window it
-                    // serves. Saying so and carrying on would send the next step the same
-                    // way: the history is sized to what was learned, which is the same
-                    // thing done when a backend answers the question directly.
+                    // The backend cut the prompt, and what it read is the window it serves.
+                    // Saying so and carrying on would send the next step the same way: the history
+                    // is sized to what was learned, which is the same thing done when a backend
+                    // answers the question directly.
                     crate::agent::session::Observed::Cut(read) => {
                         self.adopt_window(read, &events).await;
                         let _ = events
@@ -2030,8 +2041,8 @@ impl Agent {
                     }
                 }
             }
-            // A response stopped by the token limit is a truncated JSON object. Without
-            // this it goes into the repair path looking like a model that cannot write
+            // A response stopped by the token limit is a truncated JSON object.
+            // Without this it goes into the repair path looking like a model that cannot write
             // JSON, and the repair fails for a reason nobody is told.
             tracing::info!(
                 step = step + 1,
@@ -2080,9 +2091,9 @@ impl Agent {
                 let _ = events
                     .send(AgentEvent::AssistantText(turn.text.clone()))
                     .await;
-                // A server that fails part-way through generation puts the failure in the
-                // content, where it reads as the model's answer. Said plainly, because a
-                // turn that ends on one has not been answered.
+                // A server that fails part-way through generation puts the failure in the content,
+                // where it reads as the model's answer.
+                // Said plainly, because a turn that ends on one has not been answered.
                 if is_backend_failure(&turn.text) {
                     let _ = events
                         .send(AgentEvent::Notice(
@@ -2099,12 +2110,11 @@ impl Agent {
             if turn.calls.is_empty() {
                 // A question about the project, answered without opening the project.
                 //
-                // The loop ends a turn the moment the model stops calling tools, which
-                // takes the model's word for it that the question has been engaged with.
-                // A model that answers about a codebase from its own memory, or from the
-                // one file it happened to read, is answering a different question, and
-                // nothing here noticed. It is told once, and only once: a nudge that
-                // repeats is an argument.
+                // The loop ends a turn the moment the model stops calling tools, which takes the
+                // model's word for it that the question has been engaged with.
+                // A model that answers about a codebase from its own memory, or from the one file
+                // it happened to read, is answering a different question, and nothing here noticed.
+                // It is told once, and only once: a nudge that repeats is an argument.
                 if !self.nudged && asks_about_the_project(&asked) && self.this_turn.steps <= 1 {
                     self.nudged = true;
                     let _ = events
@@ -2146,23 +2156,25 @@ impl Agent {
             }
             record.after.tools = turn.calls.iter().map(|c| c.name.clone()).collect();
 
-            // Whether this step got anywhere. A call that failed learned nothing, and a
-            // call already answered this turn learned nothing either: the memo saves the
-            // work but not the round trip, and a model asking the same question every
-            // step will do it until the step limit.
+            // Whether this step got anywhere.
+            // A call that failed learned nothing, and a call already answered this turn learned
+            // nothing either: the memo saves the work but not the round trip, and a model asking
+            // the same question every step will do it until the step limit.
             let mut called = 0usize;
             let mut fruitless = 0usize;
-            // Read-only calls in a run go together. A turn that asks to read 3 files
-            // waits for 3 round trips otherwise, one after another, for no reason -
-            // none of them can see what the others did. A mutating call ends the run: what
-            // it changes is what the next call would read, and a checkpoint has to sit
-            // between them to mean anything.
+            // Read-only calls in a run go together.
+            // A turn that reads 3 files would otherwise wait for 3 round trips, one after another.
+            // None of the calls can see what the others did.
+            //
+            // A mutating call ends the run.
+            // What it changes is what the next call would read.
+            // A checkpoint has to sit between them to mean anything.
             for run in runs(&self.registry, turn.calls) {
                 if cancel.is_cancelled() {
-                    // Every call the model just made needs a result, even the ones that
-                    // will never run: the assistant turn listing them is already in the
-                    // history, and a call with no answer behind it describes an action
-                    // whose outcome the model cannot see.
+                    // Every call the model just made needs a result, even the ones that will never
+                    // run: the assistant turn listing them is already in the history, and a call
+                    // with no answer behind it describes an action whose outcome the model cannot
+                    // see.
                     for call in run {
                         self.session
                             .push(Message::tool("[error] interrupted by user", call.id));
@@ -2170,9 +2182,8 @@ impl Agent {
                     continue;
                 }
 
-                // Announced before any of them starts, in the order the model asked, so
-                // the screen reads as a list of what is happening rather than as whatever
-                // finished first.
+                // Announced before any of them starts, in the order the model asked, so the screen
+                // reads as a list of what is happening rather than as whatever finished first.
                 for call in &run {
                     let args_pretty =
                         serde_json::to_string_pretty(&call.arguments).unwrap_or_default();
@@ -2190,9 +2201,8 @@ impl Agent {
                         run.iter().map(|c| c.name.clone()).collect(),
                     )))
                     .await;
-                // The same trade inside a turn: a test suite or a build is seconds
-                // during which the card is idle, and the model the next mode will want
-                // can be read in behind it.
+                // A test suite or a build runs for a while inside a turn.
+                // The model the next mode will want can be read in behind it.
                 if self.cfg.mode == Mode::Plan {
                     if let Some(next) = self
                         .cfg
@@ -2203,9 +2213,9 @@ impl Agent {
                         self.preload(&next);
                     }
                 }
-                // A second pair of eyes on anything that changes something, when the
-                // project has named a model for it. Asked before the write rather than
-                // after, because after is a file to put back.
+                // A second pair of eyes on anything that changes something, when the project has
+                // named a model for it.
+                // Asked before the write rather than after, because after is a file to put back.
                 let mut objections: std::collections::HashMap<String, String> = Default::default();
                 if self
                     .cfg
@@ -2233,10 +2243,10 @@ impl Agent {
                         }
                     }
                 }
-                // What actually runs. A read-only call this turn already made, with
-                // nothing written since, has an answer: running it again spends a round
-                // trip to be told the same thing, and a model that is going in circles
-                // does exactly that.
+                // What actually runs.
+                // A read-only call this turn already made, with nothing written since, has an
+                // answer: running it again spends a round trip to be told the same thing, and a
+                // model that is going in circles does exactly that.
                 let mut fresh: Vec<&ResolvedCall> = Vec::new();
                 let mut plan: Vec<Result<usize, (ToolOutput, Origin)>> =
                     Vec::with_capacity(run.len());
@@ -2254,8 +2264,8 @@ impl Agent {
                     }
                     let key = repeat_key(call);
                     if let Some(known) = self.repeats.get(&key) {
-                        // Handed what it was about to ask for, or told it is going in
-                        // circles: the same answer, and only one of them is true.
+                        // Handed what it was about to ask for, or told it is going in circles: the
+                        // same answer, and only one of them is true.
                         plan.push(Err(match self.from_guess.remove(&key) {
                             true => (known.clone(), Origin::Guessed),
                             false => (said_before(known), Origin::Repeated),
@@ -2309,18 +2319,17 @@ impl Agent {
                         call.id,
                     ));
 
-                    // After the call rather than before it: the state to return to is the
-                    // one that preceded this turn, and that was recorded when the turn
-                    // before it ended. Recording here also means a tool that changed
-                    // nothing leaves nothing behind.
+                    // After the call rather than before it: the state to return to is the one that
+                    // preceded this turn, and that was recorded when the turn before it ended.
+                    // Recording here also means a tool that changed nothing leaves nothing behind.
                     let mutating = self
                         .registry
                         .get(&call.name)
                         .map(|t| t.mutates())
                         .unwrap_or(false);
                     if !mutating {
-                        // Only a read is worth remembering, and only until something
-                        // writes: after that the answer it would give is a new answer.
+                        // Only a read is worth remembering, and only until something writes: after
+                        // that the answer it would give is a new answer.
                         self.repeats.insert(key, result.clone());
                     } else if !result.is_error {
                         self.repeats.clear();
@@ -2358,8 +2367,8 @@ impl Agent {
                         self.repeats.clear();
                         self.record_change(&call.name, &events).await;
                     }
-                    // A proof refused twice in a turn is a failed check like a write that did
-                    // not compile: the stronger model is asked to do the reconciling.
+                    // A proof refused twice in a turn is a failed check like a write that did not
+                    // compile: the stronger model is asked to do the reconciling.
                     if call.name == "take_work"
                         && result.is_error
                         && result.content.starts_with(crate::tools::worktree::REFUSED)
@@ -2374,16 +2383,15 @@ impl Agent {
                             self.this_turn.touched(&path);
                         }
                         record.after.wrote = true;
-                        // The objective signal a cascade would escalate on. Recorded now,
-                        // used by nothing yet.
+                        // The objective signal of whether the model needs a higher rung.
                         // Passed or failed only when a check could tell.
                         record.after.check_passed = match crate::lsp::check::read(&result.content) {
                             Some((crate::lsp::check::Outcome::Failed, _)) => Some(false),
                             Some((crate::lsp::check::Outcome::Passed, _)) => Some(true),
                             _ => None,
                         };
-                        // What fixed this before, and what this is fixing now. A complaint
-                        // is held until a change makes it go away, and the pair is what
+                        // What fixed this before, and what this is fixing now.
+                        // A complaint is held until a change makes it go away, and the pair is what
                         // the next occurrence arrives with.
                         match result.content.split_once(CHECK_FAILED) {
                             Some((_, said)) => self.repairs.failed(said),
@@ -2405,10 +2413,10 @@ impl Agent {
             let barren = self.barren;
             let tools = record.after.tools.join(", ");
             self.close_step(record);
-            // 2 shapes of the same thing. A run of steps where nothing worked at all,
-            // and a turn that keeps failing here and there without ever changing
-            // anything: the second is what a model that corrupts its own arguments looks
-            // like, and it never trips the first.
+            // 2 shapes of the same thing.
+            // A run of steps where nothing worked at all, and a turn that keeps failing here and
+            // there without ever changing anything: the second is what a model that corrupts its
+            // own arguments looks like, and it never trips the first.
             let stuck = if barren >= BARREN_STEPS {
                 Some(format!("{barren} steps in a row that got nowhere"))
             } else if self.failures >= FAILED_CALLS && self.this_turn.files.is_empty() {
@@ -2420,8 +2428,8 @@ impl Agent {
                 None
             };
             if let Some(why) = stuck {
-                // A turn that changed something before it lost its way left the change
-                // behind, and the way back is worth naming while it is still the last one.
+                // A turn that changed something before it lost its way left the change behind, and
+                // the way back is worth naming while it is still the last one.
                 let back = if self.this_turn.files.is_empty() {
                     String::new()
                 } else {
@@ -2449,13 +2457,12 @@ impl Agent {
 
     /// Raise or lower the model from what the last step actually did.
     ///
-    /// The signal is objective: the language server read the file the agent had just
-    /// written and found something wrong with it. A router in a chat can only ask a model
-    /// how confident it feels; a coding agent can compile. So the cheap path is tried
-    /// first and the expensive one is paid for only where it has been shown to be needed.
+    /// The signal is objective: the language server read the file the agent had just written and
+    /// found something wrong with it.
+    /// The cheap path is tried first.
+    /// The expensive one is used only where it has been shown to be needed.
     ///
-    /// One rung, and down again after 2 clean steps. 2 rungs would need evidence
-    /// about which of them helps, and nothing here has that evidence yet.
+    /// One rung, and down again after 2 clean steps.
     async fn reconsider_model(
         &mut self,
         last: &crate::agent::steps::StepRecord,
@@ -2492,11 +2499,11 @@ impl Agent {
             return;
         }
 
-        // Down again once the work is going well, so the expensive model is paid for
-        // where it was needed and not for the rest of the turn. Only a write that checked
-        // out counts: a step that read a file says nothing about whether the cheaper
-        // model can produce a change that compiles, and taking it as evidence would send
-        // the session back down on the strength of two searches.
+        // Down again once the work is going well, so the expensive model is paid for where it was
+        // needed and not for the rest of the turn.
+        // Only a write that checked out counts: a step that read a file says nothing about whether
+        // the cheaper model can produce a change that compiles, and taking it as evidence would
+        // send the session back down on the strength of two searches.
         if self.escalated_from.is_some() && last.after.check_passed == Some(true) {
             self.clean_steps += 1;
             if self.clean_steps < 2 {
@@ -2520,8 +2527,8 @@ impl Agent {
 
     /// Keep one step's measurement, and write it where a later session can read it.
     fn close_step(&mut self, record: crate::agent::steps::StepRecord) {
-        // A write that did or did not check out is the only thing here worth remembering
-        // past the session: it is the evidence the next one starts from.
+        // A write that did or did not check out is the only thing here worth remembering past the
+        // session: it is the evidence the next one starts from.
         if let Some(passed) = record.after.check_passed {
             self.history.record(&record.model, passed);
         }
@@ -2538,8 +2545,8 @@ impl Agent {
         if let Some(t) = self.session.transcript() {
             t.append(crate::agent::transcript::Record::Step(record.clone()));
         }
-        // Bounded: a long session's steps are on disk, and what is kept here is only what
-        // a person or a later decision would look back over.
+        // Bounded: a long session's steps are on disk, and what is kept here is only what a person
+        // or a later decision would look back over.
         self.steps.push(record);
         if self.steps.len() > 200 {
             self.steps.remove(0);
@@ -2548,34 +2555,35 @@ impl Agent {
 
     /// The read the next step is most likely to ask for, done while the model is thinking.
     ///
-    /// The card answering the turn is busy; everything else on the machine is not. A small
-    /// model is asked which single read-only call is coming, that call is made, and its
-    /// answer is put where a repeat would find it. A wrong guess costs time that was being
-    /// spent waiting anyway, and a right one takes a whole round trip out of the turn.
+    /// A small model is asked which single read-only call is coming.
+    /// That call is made, and its answer is put where a repeat would find it.
+    /// A wrong guess costs time that was being spent waiting anyway.
+    /// A right one takes a whole round trip out of the turn.
     ///
-    /// Read-only by construction: a guess that would change something is dropped rather
-    /// than run, because the point is that being wrong is free.
+    /// Read-only by construction.
+    /// A guess that would change something is dropped rather than run.
     fn start_guess(&self, cancel: &CancellationToken) -> Option<Guessing> {
         let model = self.cfg.guess_with.clone()?;
         let stop = cancel.child_token();
         let asked = Guess {
-            // At a priority that yields: a guess must never be in front of the answer the
-            // person is waiting for, and the cluster can put it on another node.
+            // At a priority that yields: a guess must never be in front of the answer the person is
+            // waiting for, and the cluster can put it on another node.
             backend: self
                 .background
                 .clone()
                 .unwrap_or_else(|| self.backend.clone()),
             registry: self.registry.clone(),
             ctx: {
-                // A guess may not ask the person for anything. Being wrong has to stay
-                // free, and a question is not free: it takes attention for a read nobody
-                // asked for, and the guess is abandoned the moment the answer arrives -
-                // which left the question on screen, unanswerable, for something that was
-                // never going to happen. Observed with a guessed web fetch.
+                // A guess may not ask the person for anything.
+                // A question takes attention for a read nobody asked for.
+                // The guess is abandoned the moment the answer arrives, which would leave the
+                // question on screen,
+                // unanswerable.
                 //
-                // Refused where it is asked rather than filtered by a list of tools: the
-                // sender has nothing listening, so anything that would ask is declined,
-                // including whatever is added later.
+                // Refused where it is asked rather than filtered by a list of tools.
+                // The sender has nothing listening, so anything that would ask is declined,
+                // including tools
+                // added later.
                 let mut ctx = self.ctx.clone();
                 let (unheard, _) = tokio::sync::mpsc::channel(1);
                 ctx.approval = unheard;
@@ -2610,12 +2618,13 @@ impl Agent {
 
     /// What a second model says about a change, before it is written.
     ///
-    /// Asked of a different model than the one proposing the change: the value is in the
-    /// disagreement, and a model checking its own work agrees with itself. Read-only, one
-    /// question, so the smallest model in the house can answer it.
+    /// Asked of a different model than the one proposing the change.
+    /// A model checking its own work agrees with itself.
+    /// Read-only, one question.
     ///
-    /// `None` means no objection - which is also what a reviewer that could not be reached
-    /// means. A review that fails must not be able to stop the work.
+    /// `None` means no objection.
+    /// It is also what a reviewer that could not be reached gives.
+    /// A review that fails must not be able to stop the work.
     async fn second_opinion(
         &self,
         call: &ResolvedCall,
@@ -2675,10 +2684,10 @@ impl Agent {
 
     /// Diagnostics for a file a write tool just changed, when there are any.
     ///
-    /// The path is read from the tool's own result rather than from its arguments: what
-    /// was written is what the tool says it wrote, and a refused or failed call says
-    /// nothing to parse. Never fails a write: a language server that is missing, slow or
-    /// silent leaves the result as it was.
+    /// The path is read from the tool's own result rather than from its arguments: what was written
+    /// is what the tool says it wrote, and a refused or failed call says nothing to parse.
+    /// Never fails a write: a language server that is missing, slow or silent leaves the result as
+    /// it was.
     async fn verify_written(
         &self,
         tool: &str,
@@ -2694,8 +2703,8 @@ impl Agent {
             return None;
         }
         let written = changed_paths(&out.content);
-        // The language servers first: they are running, they know the project, and they
-        // say what this write changed in what they report.
+        // The language servers first: they are running, they know the project, and they say what
+        // this write changed in what they report.
         let mut unchecked = None;
         if let Some(lsp) = self.lsp.as_ref() {
             let paths: Vec<_> = written.iter().map(|n| self.ctx.root.join(n)).collect();
@@ -2706,8 +2715,8 @@ impl Agent {
                 None => {}
             }
         }
-        // Underneath them, the compiler, asked to compile and nothing else. Once per step,
-        // because a step that writes 3 files is one change.
+        // Underneath them, the compiler, asked to compile and nothing else.
+        // Once per step, because a step that writes 3 files is one change.
         if self
             .checked_this_step
             .swap(true, std::sync::atomic::Ordering::Relaxed)
@@ -2722,29 +2731,29 @@ impl Agent {
 
     /// Run the turn-end hook, if there is one, and close the turn.
     ///
-    /// What the hook says is a notice rather than part of the conversation: the turn is
-    /// over, so there is nothing left for the model to do about it, and the person is the
-    /// one who has to read that the formatter rewrote 3 files.
+    /// What the hook says is a notice rather than part of the conversation: the turn is over, so
+    /// there is nothing left for the model to do about it, and the person is the one who has to
+    /// read that the formatter rewrote 3 files.
     async fn end_turn(&self, events: &mpsc::Sender<AgentEvent>) {
-        // What the turn came to, in one line: how long, how many steps, what it cost and
-        // what it changed. All 4 were known and thrown away.
+        // What the turn came to, in one line: how long, how many steps, what it cost and what it
+        // changed.
+        // All 4 were known and thrown away.
         if let Some(receipt) = self.this_turn.receipt() {
             let _ = events.send(AgentEvent::Receipt(receipt)).await;
         }
-        // What the turn's requests drew, by purpose, kept with the conversation so the
-        // cost of a session can be read back from its file.
+        // What the turn's requests drew, by purpose, kept with the conversation so the cost of a
+        // session can be read back from its file.
         let energy = self.this_turn.energy().by_purpose();
         if !energy.is_empty() {
             if let Some(t) = self.session.transcript() {
                 t.append(crate::agent::transcript::Record::Energy(energy));
             }
         }
-        // Written at the end of a turn rather than after every step: losing it costs a
-        // memory, not a session, and a turn is the unit a person would call a piece of
-        // work anyway.
+        // Written at the end of a turn rather than after every step: losing it costs a memory, not
+        // a session, and a turn is the unit a person would call a piece of work anyway.
         self.history.save();
-        // The hooks run here when the turn ended some other way than an answer, and what
-        // they said at the answer is told now.
+        // The hooks run here when the turn ended some other way than an answer, and what they said
+        // at the answer is told now.
         let rans = match self.this_turn.turn_end.clone() {
             Some(rans) => rans,
             None => {
@@ -2766,14 +2775,14 @@ impl Agent {
 
     /// Close an unanswered turn.
     ///
-    /// The user message is already in the history; without a reply behind it the next
-    /// turn puts 2 `user` roles in a row, which is not a shape the compactor's
-    /// boundary search expects.
+    /// The user message is already in the history.
+    /// Without a reply behind it the next turn puts 2 `user` roles in a row.
+    /// The compactor's boundary search does not expect that shape.
     async fn abandon(&mut self, events: &mpsc::Sender<AgentEvent>, why: &str) {
         self.session.push(Message::assistant(TURN_ABANDONED));
         let _ = events.send(AgentEvent::Notice(why.to_string())).await;
-        // The hook runs here too: an abandoned turn can have changed files, and that is
-        // exactly when a formatter or a test suite is worth running.
+        // The hook runs here too: an abandoned turn can have changed files, and that is exactly
+        // when a formatter or a test suite is worth running.
         self.end_turn(events).await;
     }
 
@@ -2783,8 +2792,9 @@ impl Agent {
     /// How many refused proofs of one turn raise the session to the stronger model.
     const PROOFS_REFUSED_AT_MOST: u8 = 2;
 
-    /// What agents did in their own copies and is still to be brought in, when the turn may
-    /// still be kept going for it. Only the session that handed the work on is held.
+    /// What agents did in their own copies and is still to be brought in, when the turn may still
+    /// be kept going for it.
+    /// Only the session that handed the work on is held.
     fn held_by_work(&mut self) -> Option<String> {
         if self.cfg.delegated || self.this_turn.held >= Self::HELD_AT_MOST {
             return None;
@@ -2804,9 +2814,9 @@ impl Agent {
         Some(format!("{} waits to be brought in", waiting.join(", ")))
     }
 
-    /// Run the turn-end hooks on the answer. The reason they give when one blocks and the
-    /// turn may still be kept going; otherwise what they said is kept for the end of the
-    /// turn.
+    /// Run the turn-end hooks on the answer.
+    /// Returns the reason they give when one blocks and the turn may still be kept going.
+    /// Otherwise what they said is kept for the end of the turn.
     async fn held_by_turn_end(&mut self, answer: &str) -> Option<String> {
         if self.cfg.hooks.turn_end.is_empty() {
             return None;
@@ -2834,8 +2844,8 @@ impl Agent {
         }
     }
 
-    /// Tell the session-end hooks the session is over. What they say is not kept: nobody
-    /// is left to read it in the conversation.
+    /// Tell the session-end hooks the session is over.
+    /// What they say is not kept: nobody is left to read it in the conversation.
     pub async fn end_session(&self) {
         if self.cfg.delegated || self.cfg.hooks.session_end.is_empty() {
             return;
@@ -2871,8 +2881,8 @@ impl Agent {
         input
     }
 
-    /// Take again the tools of each server that said they changed, so this turn offers
-    /// what the servers offer now.
+    /// Take again the tools of each server that said they changed, so this turn offers what the
+    /// servers offer now.
     async fn take_changed_tools(&mut self, events: &mpsc::Sender<AgentEvent>) {
         let changed: Vec<_> = crate::mcp::snapshot(&self.mcp)
             .into_iter()
@@ -2902,8 +2912,8 @@ impl Agent {
         self.rebuild_preamble();
     }
 
-    /// Have the note left where steps are elided carry the task list, so the model keeps
-    /// the goal when the call that set it is elided.
+    /// Have the note left where steps are elided carry the task list, so the model keeps the goal
+    /// when the call that set it is elided.
     async fn carry_tasks(&mut self) {
         let carry = match &self.tasks {
             Some(list) => {
@@ -2920,8 +2930,8 @@ impl Agent {
         self.session.set_carry(carry);
     }
 
-    /// The agent a line opens on with `@`, and the rest of the line, when the agent is one
-    /// the delegation knows and no file of the project has that name.
+    /// The agent a line opens on with `@`, and the rest of the line, when the agent is one the
+    /// delegation knows and no file of the project has that name.
     fn agent_named<'a>(&self, line: &'a str) -> Option<(&'a str, &'a str)> {
         let rest = line.trim_start().strip_prefix('@')?;
         let (name, task) = rest.split_once(char::is_whitespace)?;
@@ -2938,8 +2948,8 @@ impl Agent {
 
     /// Commit what a tool just changed, if a history is being kept.
     ///
-    /// A failure to record is reported and not fatal: losing the ability to undo is bad,
-    /// and refusing to continue the turn over it would be worse.
+    /// A failure to record is reported and not fatal: losing the ability to undo is bad, and
+    /// refusing to continue the turn over it would be worse.
     async fn record_change(&self, tool: &str, events: &mpsc::Sender<AgentEvent>) {
         let Some(cp) = &self.checkpoints else { return };
         match cp.snapshot(tool, self.turn).await {
@@ -2971,15 +2981,15 @@ impl Agent {
             ToolProtocol::Native => {
                 let mut calls = Vec::new();
                 for (id, name, arguments) in completion.calls.finish() {
-                    // The arguments come over as a string of JSON the model wrote, so they
-                    // are wrong in the same ways the envelope's are, and earn the same
-                    // tolerant parse. What is not repaired here is the name: a call to a
-                    // tool that does not exist is refused by `dispatch_tool`, which tells
-                    // the model so and lets it try again.
+                    // The arguments come over as a string of JSON the model wrote, so they are
+                    // wrong in the same ways the envelope's are, and earn the same tolerant parse.
+                    // What is not repaired here is the name: a call to a tool that does not exist
+                    // is refused by `dispatch_tool`, which tells the model so and lets it try
+                    // again.
                     let arguments = repair::tolerant_parse(&arguments).unwrap_or(Value::Null);
                     calls.push(ResolvedCall {
-                        // A server that omits the id leaves us to invent one; it will only
-                        // ever be matched against the result we return for it.
+                        // A server that omits the id leaves us to invent one.
+                        // The invented id is only matched against the result returned for it.
                         id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                         name,
                         arguments,
@@ -3010,13 +3020,13 @@ impl Agent {
         }
     }
 
-    /// Put the assistant's turn into the history in the form the protocol expects to see
-    /// it again.
+    /// Put the assistant's turn into the history in the form the protocol expects to see it again.
     ///
-    /// The model is shown its own previous turn on the next request, so it has to be
-    /// recorded the way that protocol reads: `tool_calls` on the message natively, and the
-    /// serialised envelope otherwise. Recording it in the other one's shape is how a model
-    /// ends up unable to see what it just asked for.
+    /// The model is shown its own previous turn on the next request, so it has to be recorded the
+    /// way that protocol reads: `tool_calls` on the message natively, and the serialised envelope
+    /// otherwise.
+    /// Recording it in the other one's shape is how a model ends up unable to see what it just
+    /// asked for.
     fn record_assistant_turn(&mut self, turn: &ModelTurn) -> Result<()> {
         match self.cfg.protocol {
             ToolProtocol::Native if !turn.calls.is_empty() => {
@@ -3060,11 +3070,11 @@ impl Agent {
         events: &mpsc::Sender<AgentEvent>,
     ) -> Result<Completion> {
         let native = self.cfg.protocol == ToolProtocol::Native;
-        // The grammar constrains the envelope. Under the native protocol there is no
-        // envelope to constrain, and forcing this schema would demand an object the model
-        // is not being asked to produce.
-        // Asked for only when the provider can actually hold the model to it. A server
-        // that cannot enforce a schema is not sent one: the request would be accepted and
+        // The grammar constrains the envelope.
+        // Under the native protocol there is no envelope to constrain, and forcing this schema
+        // would demand an object the model is not being asked to produce.
+        // Asked for only when the provider can actually hold the model to it.
+        // A server that cannot enforce a schema is not sent one: the request would be accepted and
         // the constraint quietly not applied, which is worse than not asking.
         let grammar = match (
             native,
@@ -3093,20 +3103,19 @@ impl Agent {
         };
 
         let mut out = Completion::default();
-        // Said once each: the phase is what the status line holds until the next one, not
-        // a line per token.
+        // Said once each: the phase is what the status line holds until the next one, not a line
+        // per token.
         let (mut answering, mut thinking) = (false, false);
-        // The first piece is waited for differently from the ones after it: reading the
-        // prompt takes as long as the prompt is long, and a stall is a stall whatever
-        // was asked.
+        // The first piece is waited for differently from the ones after it: reading the prompt
+        // takes as long as the prompt is long, and a stall is a stall whatever was asked.
         let mut patience = first_token_timeout(self.session.size_chars());
         loop {
             let next = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(anyhow::anyhow!("interrupted")),
-                // A server that stops speaking mid-answer would otherwise hold the turn
-                // until the client's own timeout, which is 15 minutes of a interface
-                // that says it is busy and is not.
+                // A server that stops speaking mid-answer would otherwise hold the turn until
+                // the client gives up, after `READ_TIMEOUT`.
+                // The interface would say it is busy for all that time, and it would not be.
                 _ = tokio::time::sleep(patience) => {
                     return Err(anyhow::anyhow!(
                         "backend sent nothing for {}s",
@@ -3133,9 +3142,9 @@ impl Agent {
                     out.text.push_str(&p);
                     let _ = events.send(AgentEvent::AssistantDelta(p)).await;
                 }
-                // Shown as it arrives and then dropped. It is deliberately not appended to
-                // `out.text`: the scratchpad is not the answer, and replaying it into the
-                // history would teach the next turn that it was.
+                // Shown as it arrives and then dropped.
+                // It is deliberately not appended to `out.text`: the scratchpad is not the answer,
+                // and replaying it into the history would teach the next turn that it was.
                 StreamEvent::Reasoning(p) => {
                     if !answering && !thinking {
                         thinking = true;
@@ -3158,9 +3167,9 @@ impl Agent {
 
     /// Parse the envelope, asking the model to reshape it only when it will not parse.
     ///
-    /// The phase is announced from here rather than before the call: said unconditionally,
-    /// it appeared on every step of every turn, and a screen that says "repairing" when
-    /// nothing is wrong teaches its reader to ignore it.
+    /// The phase is announced from here rather than before the call: said unconditionally, it
+    /// appeared on every step of every turn, and a screen that says "repairing" when nothing is
+    /// wrong teaches its reader to ignore it.
     async fn parse_with_repair(
         &mut self,
         raw: &str,
@@ -3204,15 +3213,15 @@ impl Agent {
             );
             let prompt = repair::repair_prompt(&last_err.to_string(), &current);
             let repair_req = TurnRequest {
-                // A malformed reply has to be reshaped, not thought about, so this is the
-                // one call in the loop whose model can be the smallest one available.
+                // A malformed reply has to be reshaped, not thought about, so this is the one call
+                // in the loop whose model can be the smallest one available.
                 model: self.model_for(crate::agent::roles::Role::Repair),
                 messages: vec![
                     Message::system("You are a strict JSON formatter. Output a single JSON object only — no prose, no fences."),
                     Message::user(prompt),
                 ],
-                // The repair round-trip asks for one thing: valid JSON. Offering tools
-                // here would invite the model to do something else instead.
+                // The repair round-trip asks for one thing: valid JSON.
+                // Offering tools here would invite the model to do something else instead.
                 tools: None,
                 grammar: self.backend.capabilities().grammar.then(|| schema.clone()),
                 max_tokens: 4096,
@@ -3231,8 +3240,8 @@ impl Agent {
     }
 
     async fn dispatch_tool(&self, id: &str, name: &str, mut args: Value) -> ToolOutput {
-        // The call's own context: what it prints carries the id of its step and fills a
-        // tail of its own, and it can be stopped alone, the turn going on without it.
+        // The call's own context: what it prints carries the id of its step and fills a tail of its
+        // own, and it can be stopped alone, the turn going on without it.
         let ctx = crate::tools::registry::ToolCtx {
             call: Some(id.to_string()),
             cancel: self.ctx.cancel.child_token(),
@@ -3241,18 +3250,18 @@ impl Agent {
         };
         let Some(tool) = self.registry.get(name) else {
             tracing::warn!(tool = name, "model called a tool that does not exist");
-            // Named rather than merely refused. A model that invents `list_files` means
-            // `list_dir`, and a refusal that says only that the name is wrong costs a step
-            // to guess again, often to the next invented name.
+            // Named rather than merely refused.
+            // A model that invents `list_files` means `list_dir`, and a refusal that says only that
+            // the name is wrong costs a step to guess again, often to the next invented name.
             return ToolOutput::err(match nearest_tool(&self.registry, name) {
                 Some(near) => format!("no tool called '{name}'; did you mean '{near}'?"),
                 None => format!("no tool called '{name}'"),
             });
         };
-        // Refused here rather than at the approval prompt: planning is a question about
-        // what would happen, and answering it must not depend on somebody declining
-        // 15 times. The refusal names the mode so the model plans instead of
-        // retrying, and reads as this agent's rule rather than as the user saying no.
+        // Refused here rather than at the approval prompt: planning is a question about what would
+        // happen, and answering it must not depend on somebody declining 15 times.
+        // The refusal names the mode so the model plans instead of retrying, and reads as this
+        // agent's rule rather than as the user saying no.
         if self.cfg.mode == Mode::Plan && tool.mutates() {
             tracing::info!(tool = name, "refused while planning");
             return ToolOutput::err(format!(
@@ -3260,8 +3269,8 @@ impl Agent {
                  Say what you would do with it as a step of the plan."
             ));
         }
-        // Around a call that changes something, and around the reads a hook names: a hook
-        // on every read would run on the searches an agent does by the 12.
+        // Around a call that changes something, and around the reads a hook names: a hook on every
+        // read would run on the searches an agent does by the 12.
         use crate::agent::hooks::{run_all, said, Event};
         let target = Some((name, tool.mutates()));
         let before = run_all(
@@ -3294,9 +3303,10 @@ impl Agent {
         if ctx.cancel.is_cancelled() && !self.ctx.cancel.is_cancelled() {
             return ToolOutput::err("the person stopped this call before it finished");
         }
-        // What the compiler already knows about the file that was just written, handed
-        // back in the same result. Without it the model learns of its own syntax error on
-        // the next turn, if it thinks to ask, and usually it does not.
+        // What the compiler already knows about the file that was just written, handed back in the
+        // same result.
+        // Without it the model learns of its own syntax error on the next turn, if it thinks to
+        // ask, and usually it does not.
         let out = match self.verify_written(name, &out).await {
             Some(verdict) => {
                 use crate::lsp::check::Verdict;
@@ -3316,8 +3326,8 @@ impl Agent {
             }
             None => out,
         };
-        // What the hooks say is handed over whether they succeeded or not: a formatter
-        // that rewrote the file has something the model needs to know.
+        // What the hooks say is handed over whether they succeeded or not: a formatter that rewrote
+        // the file has something the model needs to know.
         let after = run_all(
             &self.cfg.hooks.post_tool,
             Event::PostTool,
@@ -3354,12 +3364,11 @@ impl Agent {
 mod tests {
     /// A guess must not be able to put a question to the person.
     ///
-    /// The point of guessing which read is coming next is that being wrong costs nothing.
-    /// A tool that asks for approval breaks that: it takes attention for a read nobody
-    /// asked for, and the guess is abandoned the instant the real answer arrives - so the
-    /// question is left on screen for something that will never happen, and the turn
-    /// carries on around it. Seen with a guessed web fetch, which is read-only and so
-    /// passes the mutation test, and still asks before it reaches the network.
+    /// A tool that asks for approval takes attention for a read nobody asked for.
+    /// The guess is abandoned the instant the real answer arrives, which leaves the question on
+    /// screen.
+    /// A guessed web fetch is read-only, so it passes the mutation test, and still asks before it
+    /// reaches the network.
     #[tokio::test]
     async fn a_guess_cannot_ask_for_an_approval() {
         use crate::sandbox::approval::{ApprovalRequest, ApprovalScope};
@@ -3381,8 +3390,8 @@ mod tests {
         );
     }
 
-    /// Reading the prompt is work, not silence: a window asked for precisely so that a
-    /// large prompt can be sent is unusable if the client gives up while it is read.
+    /// Reading the prompt is work, not silence: a window asked for precisely so that a large prompt
+    /// can be sent is unusable if the client gives up while it is read.
     #[test]
     fn a_long_prompt_is_waited_for_longer_than_a_stall() {
         // A short prompt is judged by the gap rule, as it always was.
@@ -3453,8 +3462,8 @@ mod tests {
 
     /// A backend that answers a queue of canned responses, and remembers what it was sent.
     ///
-    /// Enough of a server to drive the loop through a real request, a real stream and a
-    /// real second step - which is where the protocols actually differ.
+    /// Enough of a server to drive the loop through a real request, a real stream and a real second
+    /// step.
     struct FakeBackend {
         url: String,
         seen: StdArc<Mutex<Vec<serde_json::Value>>>,
@@ -3473,7 +3482,8 @@ mod tests {
             while let Ok((mut sock, _)) = listener.accept().await {
                 let mut buf = Vec::new();
                 let mut chunk = [0u8; 4096];
-                // Read until the body has arrived; the request declares its length.
+                // Read until the body has arrived.
+                // The request declares its length.
                 while let Ok(n) = sock.read(&mut chunk).await {
                     if n == 0 {
                         break;
@@ -3498,8 +3508,8 @@ mod tests {
                         break;
                     }
                 }
-                // The model list is asked once per model and is not part of a script: it
-                // states no window, and the queue is kept for the turns.
+                // The model list is asked once per model and is not part of a script: it states no
+                // window, and the queue is kept for the turns.
                 let response = if buf.starts_with(b"GET /v1/models") {
                     let body = r#"{"object":"list","data":[]}"#;
                     format!(
@@ -3649,10 +3659,10 @@ mod tests {
             .unwrap()
     }
 
-    /// A file named in the question arrives with it, so the model does not spend a round
-    /// trip fetching what the person had already decided was relevant.
-    /// A call stopped from the screen ends alone: it says the person stopped it, and the
-    /// turn it belongs to is not abandoned.
+    /// A file named in the question arrives with it, so the model does not spend a round trip
+    /// fetching what the person had already decided was relevant.
+    /// A call stopped from the screen ends alone: it says the person stopped it, and the turn it
+    /// belongs to is not abandoned.
     #[tokio::test]
     async fn a_call_stops_alone() {
         struct Waits;
@@ -3737,9 +3747,10 @@ mod tests {
         );
     }
 
-    /// Planning is long and ends in acting, so the model acting will use is asked for
-    /// while the plan is being written. The request goes out and the turn does not wait
-    /// on it: warming that delayed anything would cost more than the load it hides.
+    /// Planning is long and ends in acting, so the model acting will use is asked for while the
+    /// plan is being written.
+    /// The request goes out and the turn does not wait on it: warming that delayed anything would
+    /// cost more than the load it hides.
     #[tokio::test]
     async fn planning_asks_for_the_model_acting_will_use() {
         let h = Harness::new(Answer::Yes);
@@ -3754,8 +3765,8 @@ mod tests {
 
         let said = agent.set_mode(Mode::Plan);
         assert!(said.starts_with("planning"), "{said}");
-        // The warming request is its own task; it has arrived by the time the fake
-        // backend has seen a second request.
+        // The warming request is its own task.
+        // It has arrived by the time the fake backend has seen a second request.
         for _ in 0..40 {
             if backend
                 .seen
@@ -3771,8 +3782,8 @@ mod tests {
         panic!("nothing was asked of the model acting would use");
     }
 
-    /// A delegated question runs in a session of its own and brings back only what it
-    /// said: the caller's window holds the answer, not the search that found it.
+    /// A delegated question runs in a session of its own and brings back only what it said: the
+    /// caller's window holds the answer, not the search that found it.
     #[tokio::test]
     async fn a_delegated_question_returns_its_answer_and_not_its_search() {
         let h = Harness::new(Answer::Yes);
@@ -3896,8 +3907,8 @@ mod tests {
         );
     }
 
-    /// An agent named with a tool that writes writes, under the caller's approvals, and
-    /// writes nothing while the caller plans.
+    /// An agent named with a tool that writes writes, under the caller's approvals, and writes
+    /// nothing while the caller plans.
     #[tokio::test]
     async fn an_agent_with_a_writing_tool_writes_unless_the_caller_plans() {
         for planning in [false, true] {
@@ -3961,8 +3972,8 @@ mod tests {
         }
     }
 
-    /// An agent that names another backend runs there, and the session's backend is
-    /// asked nothing on its behalf.
+    /// An agent that names another backend runs there, and the session's backend is asked nothing
+    /// on its behalf.
     #[tokio::test]
     async fn an_agent_runs_on_the_backend_it_names() {
         let h = Harness::new(Answer::Yes);
@@ -4035,8 +4046,8 @@ mod tests {
         assert_eq!(result.content, "from elsewhere");
     }
 
-    /// A line that opens on an agent's name is for that agent, unless a file of the
-    /// project has the name.
+    /// A line that opens on an agent's name is for that agent, unless a file of the project has the
+    /// name.
     #[tokio::test]
     async fn a_line_opening_on_an_agent_is_for_it() {
         let h = Harness::new(Answer::Yes);
@@ -4054,8 +4065,9 @@ mod tests {
         assert_eq!(agent.agent_named("@explore where is main"), None);
     }
 
-    /// A plan approved ends planning: the steps become the task list and the turn goes on
-    /// to change things. A plan refused leaves the session planning.
+    /// A plan approved ends planning: the steps become the task list and the turn goes on to change
+    /// things.
+    /// A plan refused leaves the session planning.
     #[tokio::test]
     async fn an_approved_plan_is_acted_on_and_a_refused_one_is_not() {
         for approve in [true, false] {
@@ -4092,8 +4104,8 @@ mod tests {
         }
     }
 
-    /// A turn-end hook that blocks hands its reason to the model, and the turn goes on
-    /// until the hook lets it end.
+    /// A turn-end hook that blocks hands its reason to the model, and the turn goes on until the
+    /// hook lets it end.
     #[tokio::test]
     async fn a_turn_end_hook_keeps_the_turn_going_once() {
         let h = Harness::new(Answer::Yes);
@@ -4131,9 +4143,9 @@ mod tests {
             .any(|m| m.content.contains("the tests fail")));
     }
 
-    /// An agent sent to work in the background lets the turn go on at once, and its
-    /// answer is handed to the session when it comes. One that may change things is not
-    /// sent.
+    /// An agent sent to work in the background lets the turn go on at once, and its answer is
+    /// handed to the session when it comes.
+    /// One that may change things is not sent.
     #[tokio::test]
     async fn an_agent_in_the_background_answers_later() {
         let h = Harness::new(Answer::Yes);
@@ -4202,8 +4214,8 @@ mod tests {
         assert!(later.contains("main is in src/main.rs"), "{later}");
     }
 
-    /// With a depth of two, an agent that names delegate hands work on to another, and
-    /// the answer comes back up through it.
+    /// With a depth of two, an agent that names delegate hands work on to another, and the answer
+    /// comes back up through it.
     #[tokio::test]
     async fn an_agent_hands_work_on_within_the_depth() {
         let h = Harness::new(Answer::Yes);
@@ -4278,8 +4290,8 @@ mod tests {
         assert_eq!(result.content, "the lead says deep down");
     }
 
-    /// A delegated session that runs out of steps says so, rather than handing back what
-    /// it was about to do as its answer.
+    /// A delegated session that runs out of steps says so, rather than handing back what it was
+    /// about to do as its answer.
     #[tokio::test]
     async fn a_delegated_session_out_of_steps_says_it_did_not_finish() {
         let h = Harness::new(Answer::Yes);
@@ -4327,8 +4339,9 @@ mod tests {
         assert!(!names_word("the xread_file helper", "read_file"));
     }
 
-    /// The same read twice in one run is one read. The model gets 2 answers, because
-    /// 2 calls need 2 results, and the machine does the work once.
+    /// The same read twice in one run is one read.
+    /// The model gets 2 answers, because 2 calls need 2 results, and the machine does the work
+    /// once.
     #[tokio::test]
     async fn the_same_read_twice_in_one_run_is_read_once() {
         let h = Harness::new(Answer::Yes);
@@ -4403,9 +4416,9 @@ mod tests {
         assert!(!last.content.contains("you already ran this"), "{last:?}");
     }
 
-    /// A model that corrupts its own arguments alternates between calls that work and
-    /// calls that cannot, so it never gets nowhere 3 steps running. What it never
-    /// does is change anything.
+    /// A model that corrupts its own arguments alternates between calls that work and calls that
+    /// cannot, so it never gets nowhere 3 steps running.
+    /// What it never does is change anything.
     #[tokio::test]
     async fn a_turn_that_keeps_failing_and_changes_nothing_is_given_back() {
         let h = Harness::new(Answer::Yes);
@@ -4444,8 +4457,8 @@ mod tests {
         ));
     }
 
-    /// An invented tool name is a paraphrase of a real one, and a refusal that says only
-    /// that the name is wrong costs a step to guess again, usually to another invention.
+    /// An invented tool name is a paraphrase of a real one, and a refusal that says only that the
+    /// name is wrong costs a step to guess again, usually to another invention.
     #[test]
     fn an_invented_tool_name_is_answered_with_the_real_one() {
         let mut reg = Registry::new();
@@ -4462,8 +4475,9 @@ mod tests {
         assert_eq!(nearest_tool(&reg, "zzz").as_deref(), None);
     }
 
-    /// A change is read by a second model before it is written. The value is in the
-    /// disagreement, so the objection stops the write and reaches the one who proposed it.
+    /// A change is read by a second model before it is written.
+    /// The value is in the disagreement, so the objection stops the write and reaches the one who
+    /// proposed it.
     #[tokio::test]
     async fn a_second_reading_stops_a_change_it_objects_to() {
         let h = Harness::new(Answer::Yes);
@@ -4531,8 +4545,9 @@ mod tests {
         assert_eq!(h.read("a.txt"), "two");
     }
 
-    /// A project fails the same way twice. The complaint is held until a change makes it
-    /// go away, and the next time it appears it arrives with what worked.
+    /// A project fails the same way twice.
+    /// The complaint is held until a change makes it go away, and the next time it appears it
+    /// arrives with what worked.
     #[tokio::test]
     async fn a_complaint_comes_back_with_what_fixed_it() {
         let h = Harness::new(Answer::Yes);
@@ -4561,9 +4576,8 @@ mod tests {
         assert!(agent.explain_choice().contains("edited src/a.rs"));
     }
 
-    /// The card answering the turn is busy and the rest of the machine is not. A small
-    /// model guesses the read that is coming and it is made while the answer is still
-    /// being written, so the step that asks for it is answered without a round trip.
+    /// A small model guesses the read that is coming and it is made while the answer is still being
+    /// written, so the step that asks for it is answered without a round trip.
     #[tokio::test]
     async fn a_guessed_read_is_ready_before_it_is_asked_for() {
         let h = Harness::new(Answer::Yes);
@@ -4586,8 +4600,8 @@ mod tests {
         assert!(key.contains("a.txt"), "{key}");
     }
 
-    /// A guess that would change something is dropped rather than run: being wrong has to
-    /// stay free.
+    /// A guess that would change something is dropped rather than run: being wrong has to stay
+    /// free.
     #[tokio::test]
     async fn a_guess_that_would_write_is_not_made() {
         let h = Harness::new(Answer::Yes);
@@ -4624,8 +4638,9 @@ mod tests {
         assert!(handle.await.unwrap().is_none());
     }
 
-    /// A model handed what it was about to ask for is not repeating itself, and being
-    /// told that it is would be a lie about its own turn. The second ask is a repeat.
+    /// A model handed what it was about to ask for is not repeating itself, and being told that it
+    /// is would be a lie about its own turn.
+    /// The second ask is a repeat.
     #[tokio::test]
     async fn an_answer_that_came_from_a_guess_is_served_plainly() {
         let h = Harness::new(Answer::Yes);
@@ -4678,9 +4693,8 @@ mod tests {
         );
     }
 
-    /// A server that does more than text lists what it does, and none of it can answer a
-    /// question. Offering it to somebody choosing a model is offering a choice that
-    /// cannot work.
+    /// A server that does more than text lists what it does, and none of it can answer a question.
+    /// Offering it to somebody choosing a model is offering a choice that cannot work.
     #[test]
     fn the_catalogue_offers_only_what_can_answer() {
         for name in [
@@ -4699,9 +4713,7 @@ mod tests {
         }
     }
 
-    /// The loop used to end a turn the moment the model stopped calling tools, which took
-    /// its word for it that the question had been engaged with. A question about the code,
-    /// answered from memory, went out as an answer and nothing noticed.
+    /// A question about the code, answered from memory, is sent back to be answered from the code.
     #[tokio::test]
     async fn a_question_about_the_code_answered_blind_is_sent_back() {
         let h = Harness::new(Answer::Yes);
@@ -4743,8 +4755,9 @@ mod tests {
         assert_eq!(last, Some("it has one function, strength"));
     }
 
-    /// Only where the person said the project. A question about Rust is answered from what
-    /// the model knows, and sending it to read the tree would be beside the point.
+    /// Only where the person said the project.
+    /// A question about Rust is answered from what the model knows, and sending it to read the tree
+    /// would be beside the point.
     #[test]
     fn a_question_that_is_not_about_here_is_left_alone() {
         assert!(asks_about_the_project(
@@ -4757,8 +4770,9 @@ mod tests {
         assert!(!asks_about_the_project("write me a haiku"));
     }
 
-    /// A model asking the same question every step learns nothing each time. The memo
-    /// saves the work; only stopping saves the round trip.
+    /// A model asking the same question every step learns nothing each time.
+    /// The memo saves the work.
+    /// Only stopping saves the round trip.
     #[tokio::test]
     async fn a_turn_that_only_repeats_itself_is_given_back() {
         let h = Harness::new(Answer::Yes);
@@ -4788,8 +4802,8 @@ mod tests {
         );
     }
 
-    /// A model repeating a broken idea costs a full context read per step. 3 steps
-    /// where nothing worked is enough to hand the turn back.
+    /// A model repeating a broken idea costs a full context read per step. 3 steps where nothing
+    /// worked is enough to hand the turn back.
     #[tokio::test]
     async fn a_turn_where_nothing_works_is_given_back() {
         let h = Harness::new(Answer::Yes);
@@ -4815,9 +4829,10 @@ mod tests {
         );
     }
 
-    /// A backend that takes the tool definitions and drops them fails nothing: the model
-    /// writes the call it wanted to make into its answer. The session notices and asks
-    /// again under the protocol that needs no cooperation from the server.
+    /// A backend that takes the tool definitions and drops them fails nothing: the model writes the
+    /// call it wanted to make into its answer.
+    /// The session notices and asks again under the protocol that needs no cooperation from the
+    /// server.
     #[tokio::test]
     async fn a_backend_that_ignores_the_tools_is_noticed_and_worked_around() {
         let h = Harness::new(Answer::Yes);
@@ -4858,8 +4873,9 @@ mod tests {
         assert_eq!(agent.cfg.protocol, ToolProtocol::Envelope);
     }
 
-    /// A sub-session says as much as any other session, and a long answer says more than
-    /// the events channel holds. Its caller has to read while it runs.
+    /// A sub-session says as much as any other session, and a long answer says more than the events
+    /// channel holds.
+    /// Its caller has to read while it runs.
     #[tokio::test]
     async fn a_long_delegated_answer_still_comes_back() {
         let h = Harness::new(Answer::Yes);
@@ -4904,8 +4920,8 @@ mod tests {
         assert!(result.content.contains("word199"), "{}", result.content);
     }
 
-    /// A pre-tool hook that refuses stops the call, and what it printed is what the model
-    /// is told: guidance an agent cannot skip, which is the only kind that holds.
+    /// A pre-tool hook that refuses stops the call, and what it printed is what the model is told:
+    /// guidance an agent cannot skip, which is the only kind that holds.
     #[tokio::test]
     async fn a_refusing_hook_stops_the_tool_and_is_handed_to_the_model() {
         let h = Harness::new(Answer::Yes);
@@ -4945,8 +4961,8 @@ mod tests {
         assert_eq!(h.read("a.txt"), "one");
     }
 
-    /// A hook at the end of a turn is for the person: it says what it did, and it runs
-    /// even for a turn that was abandoned, because that turn can have changed files.
+    /// A hook at the end of a turn is for the person: it says what it did, and it runs even for a
+    /// turn that was abandoned, because that turn can have changed files.
     #[tokio::test]
     async fn the_turn_end_hook_reports_to_the_user() {
         let h = Harness::new(Answer::Yes);
@@ -4971,9 +4987,9 @@ mod tests {
         );
     }
 
-    /// While planning, a tool that would change something is refused before it runs, and
-    /// the refusal says why so the model writes a plan instead of calling again. A tool
-    /// that only reads still runs: a plan nobody could research would be worth nothing.
+    /// While planning, a tool that would change something is refused before it runs, and the
+    /// refusal says why so the model writes a plan instead of calling again.
+    /// A tool that only reads still runs: a plan nobody could research would be worth nothing.
     #[tokio::test]
     async fn planning_refuses_what_would_change_something_and_still_reads() {
         let h = Harness::new(Answer::Yes);
@@ -5024,8 +5040,8 @@ mod tests {
             .contains("You are PLANNING"));
     }
 
-    /// A switch takes the window the configuration gives that model, and a name the
-    /// backend does not serve is refused rather than carried into every later request.
+    /// A switch takes the window the configuration gives that model, and a name the backend does
+    /// not serve is refused rather than carried into every later request.
     #[tokio::test]
     async fn switching_model_takes_its_window_and_refuses_an_unserved_name() {
         let h = Harness::new(Answer::Yes);
@@ -5040,8 +5056,8 @@ mod tests {
         );
         let before = agent.session.budget_chars();
 
-        // The fake backend answers nothing on /v1/models, so a name is taken on trust:
-        // a backend that cannot list is not a backend that cannot serve.
+        // The fake backend answers nothing on /v1/models, so a name is taken on trust: a backend
+        // that cannot list is not a backend that cannot serve.
         let said = agent.switch_model(Some("big".into())).await;
         assert!(said.contains("now on big"), "{said}");
         assert_eq!(agent.cfg.model, "big");
@@ -5056,9 +5072,9 @@ mod tests {
         assert!(said.contains("already on big"), "{said}");
     }
 
-    /// A line typed while the turn is running reaches the model on the next step, and
-    /// says so. Without this the only interventions are abandoning the turn or waiting
-    /// for it to end, which is restarting rather than steering.
+    /// A line typed while the turn is running reaches the model on the next step, and says so.
+    /// Without this the only interventions are abandoning the turn or waiting for it to end, which
+    /// is restarting rather than steering.
     #[tokio::test]
     async fn a_line_typed_during_a_turn_joins_the_next_step() {
         let h = Harness::new(Answer::Yes);
@@ -5077,8 +5093,8 @@ mod tests {
 
         let reg = crate::boot::build_registry(h.root.clone()).0;
         let (mut agent, steer) = agent_steerable(&h, &backend, ToolProtocol::Native, reg);
-        // Queued before the turn is driven: the drain is at the step boundary, so it is
-        // read on the step it precedes rather than after the turn.
+        // Queued before the turn is driven: the drain is at the step boundary, so it is read on the
+        // step it precedes rather than after the turn.
         steer
             .send("only the .txt files, please".into())
             .await
@@ -5103,8 +5119,8 @@ mod tests {
         );
     }
 
-    /// The native path end to end: a streamed call is reassembled, dispatched, and
-    /// answered against the id the server issued.
+    /// The native path end to end: a streamed call is reassembled, dispatched, and answered against
+    /// the id the server issued.
     #[tokio::test]
     async fn a_native_call_is_run_and_answered_against_its_own_id() {
         let h = Harness::new(Answer::Yes);
@@ -5136,8 +5152,8 @@ mod tests {
             "the tool did not actually run: {events:?}"
         );
 
-        // The assistant turn carries the call, and the result answers that id - the thing
-        // a strict server checks and the old code could never satisfy.
+        // The assistant turn carries the call.
+        // The result answers that id.
         let assistant = agent
             .session
             .history
@@ -5157,8 +5173,8 @@ mod tests {
         assert_eq!(answer.tool_call_id.as_deref(), Some("call_abc"));
     }
 
-    /// The tools have to actually reach the server, or the model is being asked to call
-    /// things it has not been told about.
+    /// The tools have to actually reach the server, or the model is being asked to call things it
+    /// has not been told about.
     #[tokio::test]
     async fn the_native_request_carries_the_tools() {
         let h = Harness::new(Answer::Yes);
@@ -5207,8 +5223,8 @@ mod tests {
             "the turn did not complete after falling back: {events:?}"
         );
 
-        // The preamble has to change with the protocol, or the model is reading the
-        // contract for the other one.
+        // The preamble has to change with the protocol, or the model is reading the contract for
+        // the other one.
         assert!(
             agent.session.history[0].content.contains("assistant_text"),
             "the system message still describes the native protocol"
@@ -5251,8 +5267,8 @@ mod tests {
         assert_eq!(shape(&grouped), vec![vec!["read_file", "grep", "list_dir"]]);
     }
 
-    /// A write is a boundary on both sides: what it changes is what the next read would
-    /// see, and the checkpoint after it has to describe that call alone.
+    /// A write is a boundary on both sides: what it changes is what the next read would see, and
+    /// the checkpoint after it has to describe that call alone.
     #[test]
     fn a_write_stands_alone_between_the_reads_around_it() {
         let reg = registry_of_all_tools();
@@ -5290,8 +5306,8 @@ mod tests {
         );
     }
 
-    /// A tool that does not exist is answered with a refusal, and grouping it would only
-    /// obscure which call was refused.
+    /// A tool that does not exist is answered with a refusal, and grouping it would only obscure
+    /// which call was refused.
     #[test]
     fn an_unknown_tool_stands_alone() {
         let reg = registry_of_all_tools();
@@ -5305,8 +5321,9 @@ mod tests {
         );
     }
 
-    /// Reads that run together still answer in the order they were asked, whatever order
-    /// they finish in - a result is matched to its call by position and by id.
+    /// Reads that run together still answer in the order they were asked, whatever order they
+    /// finish in.
+    /// A result is matched to its call by position and by id.
     #[tokio::test]
     async fn parallel_reads_answer_in_the_order_they_were_asked() {
         let h = Harness::new(Answer::Yes);
@@ -5404,8 +5421,8 @@ mod tests {
         (agent, rx)
     }
 
-    /// The whole point: the model is raised because a compiler said the change was wrong,
-    /// not because anything guessed that the task looked hard.
+    /// The whole point: the model is raised because a compiler said the change was wrong, not
+    /// because anything guessed that the task looked hard.
     #[tokio::test]
     async fn a_failed_check_raises_the_model_and_two_clean_steps_lower_it() {
         let (mut agent, _rx) = agent_at("small").await;
@@ -5418,8 +5435,8 @@ mod tests {
         assert_eq!(agent.cfg.model, "big");
         assert_eq!(agent.escalated_from.as_deref(), Some("small"));
 
-        // One clean step is not enough: the next thing it writes may be the rest of the
-        // same mistake.
+        // One clean step is not enough: the next thing it writes may be the rest of the same
+        // mistake.
         agent.reconsider_model(&step(Some(true)), &tx).await;
         assert_eq!(agent.cfg.model, "big");
         agent.reconsider_model(&step(Some(true)), &tx).await;
@@ -5427,8 +5444,9 @@ mod tests {
         assert!(agent.escalated_from.is_none());
     }
 
-    /// A mode that borrows a model gives it back. Without this a session that planned
-    /// once would finish the day on the planning model, which is the expensive one.
+    /// A mode that borrows a model gives it back.
+    /// Without this a session that planned once would finish the day on the planning model, which
+    /// is the expensive one.
     #[tokio::test]
     async fn leaving_planning_gives_back_the_model_it_borrowed() {
         let h = Harness::new(Answer::Yes);
@@ -5443,8 +5461,8 @@ mod tests {
         assert_eq!(agent.cfg.model, "working");
     }
 
-    /// What the project taught is applied once, at the start of a turn, so a session does
-    /// not pay again for the bad step the last one already paid for.
+    /// What the project taught is applied once, at the start of a turn, so a session does not pay
+    /// again for the bad step the last one already paid for.
     #[tokio::test]
     async fn a_turn_starts_raised_when_the_cheap_model_keeps_failing_here() {
         let h = Harness::new(Answer::Yes);
@@ -5473,8 +5491,9 @@ mod tests {
         assert_eq!(agent.escalated_from.as_deref(), Some("small"));
     }
 
-    /// One rung. A second failure while already raised does not look for a third model,
-    /// because nothing here knows whether a third would help.
+    /// One rung.
+    /// A second failure while already raised does not look for a third model, because nothing here
+    /// knows whether a third would help.
     #[tokio::test]
     async fn a_second_failure_does_not_raise_again() {
         let (mut agent, _rx) = agent_at("small").await;
@@ -5495,8 +5514,8 @@ mod tests {
         assert_eq!(agent.cfg.model, "small");
     }
 
-    /// A step that changed nothing says nothing about the model, so it neither raises nor
-    /// counts towards coming back down.
+    /// A step that changed nothing says nothing about the model, so it neither raises nor counts
+    /// towards coming back down.
     #[tokio::test]
     async fn a_step_that_wrote_nothing_moves_nothing() {
         let (mut agent, _rx) = agent_at("small").await;
@@ -5521,8 +5540,8 @@ mod spend_tests {
         );
     }
 
-    /// The rate is the answer's tokens over the time spent waiting for the model, not
-    /// over the whole turn: time in a tool is not the model being slow.
+    /// The rate is the answer's tokens over the time spent waiting for the model, not over the
+    /// whole turn: time in a tool is not the model being slow.
     #[test]
     fn the_rate_is_measured_against_the_time_in_the_model() {
         let s = Spend {

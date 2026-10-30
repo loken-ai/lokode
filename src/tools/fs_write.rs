@@ -60,9 +60,9 @@ impl Tool for WriteFile {
             Ok(b) => b.unwrap_or_default(),
             Err(e) => return Ok(ToolOutput::err(e)),
         };
-        // A whole-file write replaces what the model believes the file says. If someone
-        // has changed it since the model read it, that belief is stale and the write
-        // throws their work away without either of them seeing it happen.
+        // A whole-file write replaces what the model believes the file says.
+        // If someone has changed the file since the model read it, that belief is stale.
+        // The write would throw their work away without either of them seeing it happen.
         if ctx.changed_since_seen(&target, before.as_bytes()) {
             return Ok(ToolOutput::err(format!(
                 "{} changed on disk since you read it; read it again before writing it",
@@ -115,7 +115,8 @@ pub struct EditFile;
 #[derive(Deserialize)]
 struct EditFileArgs {
     path: PathBuf,
-    /// Existing substring to replace. Must occur exactly once.
+    /// Existing substring to replace.
+    /// Must occur exactly once.
     old_string: String,
     /// Replacement.
     new_string: String,
@@ -214,8 +215,8 @@ struct EditLinesArgs {
 
 #[derive(Deserialize)]
 struct OneEdit {
-    /// Existing substring to replace. Must occur exactly once in the file as it stands
-    /// when this edit's turn comes.
+    /// Existing substring to replace.
+    /// Must occur exactly once in the file as it stands when this edit's turn comes.
     old_string: String,
     new_string: String,
 }
@@ -258,9 +259,9 @@ impl Tool for EditLines {
 
     /// All of them or none of them.
     ///
-    /// Applied to the text in memory first, so an edit that cannot be placed leaves the
-    /// file as it was rather than half-changed. Each is checked against the text as the
-    /// earlier ones left it, which is what the model means when it writes them in order.
+    /// Applied to the text in memory first, so an edit that cannot be placed leaves the file
+    /// as it was.
+    /// Each is checked against the text as the earlier ones left it.
     async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
         let a: EditLinesArgs = serde_json::from_value(args)?;
         if a.edits.is_empty() {
@@ -335,7 +336,8 @@ pub struct ApplyPatch;
 
 #[derive(Deserialize)]
 struct ApplyPatchArgs {
-    /// Unified diff. File paths in the diff are interpreted relative to the project root.
+    /// Unified diff.
+    /// File paths in the diff are interpreted relative to the project root.
     unified_diff: String,
 }
 
@@ -370,10 +372,9 @@ impl Tool for ApplyPatch {
             return Ok(ToolOutput::err("empty patch"));
         }
 
-        // Everything is resolved and applied in memory before anything is asked or
-        // written. Resolving afterwards, as this did, meant the user approved a diff
-        // whose paths had not been checked yet, and rejections were folded into the
-        // summary - so what was agreed to and what happened could differ.
+        // Everything is resolved and applied in memory before anything is asked or written.
+        // The user approves a diff whose paths are already checked.
+        // Rejections are not folded into the summary, so what was agreed to is what happened.
         let mut staged: Vec<Staged> = Vec::with_capacity(patches.len());
         for patch in &patches {
             let rel = patch
@@ -437,9 +438,8 @@ impl Tool for ApplyPatch {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        // A patch is one change to a project, not a sequence of unrelated ones. Stopping
-        // half way through used to leave the earlier files modified and report it in a
-        // line of prose, which is a tree in a state nobody asked for.
+        // A patch is one change to a project, not a sequence of unrelated ones.
+        // A failure part way through restores the earlier files.
         let mut committed: Vec<&Staged> = Vec::with_capacity(staged.len());
         for s in &staged {
             if let Err(e) = ctx.write_text(&s.target, &s.after).await {
@@ -451,8 +451,8 @@ impl Tool for ApplyPatch {
             }
             committed.push(s);
         }
-        // Once the whole patch is on disk: a run that rolled back left the files as they
-        // were, and what was seen of them is still what is there.
+        // Recorded once the whole patch is on disk.
+        // A run that rolled back left the files as they were.
         for s in &committed {
             ctx.note_content(&s.target, s.after.as_bytes());
         }
@@ -477,9 +477,9 @@ struct Staged {
 
 /// Put back what was already written when a later file could not be.
 ///
-/// Reported rather than returned: the write that failed is the error the caller cares
-/// about, and whether the undo itself succeeded is something the user has to be told
-/// either way.
+/// The outcome is reported, not returned.
+/// The caller cares about the error of the write that failed.
+/// The user is told whether the undo itself succeeded.
 async fn roll_back(committed: &[&Staged]) -> String {
     let mut failures = Vec::new();
     for s in committed {
@@ -524,11 +524,10 @@ fn common_ancestor(paths: &[&std::path::Path]) -> PathBuf {
 
 /// Replace a file's contents without ever leaving it partly written.
 ///
-/// A plain write truncates and then fills, so anything that interrupts it - a crash, a
-/// full disk, the user quitting - leaves a file that is neither the old version nor the
-/// new one. Writing beside the target and renaming over it means a reader sees one or the
-/// other. The temporary lives in the same directory so the rename stays on one
-/// filesystem, where it is atomic.
+/// The contents are written beside the target, then renamed over it.
+/// A reader sees the old version or the new one, never a mix.
+/// The temporary lives in the same directory, so the rename stays on one filesystem.
+/// That keeps the rename atomic.
 pub(crate) async fn write_atomic(target: &std::path::Path, contents: &str) -> Result<()> {
     let parent = target
         .parent()
@@ -539,8 +538,9 @@ pub(crate) async fn write_atomic(target: &std::path::Path, contents: &str) -> Re
     let write = async {
         let mut f = tokio::fs::File::create(&tmp).await?;
         f.write_all(contents.as_bytes()).await?;
-        // Durable before the rename publishes it, or a crash can leave the name pointing
-        // at a file whose contents never reached the disk.
+        // Durable before the rename publishes it.
+        // Otherwise a crash can leave the name pointing at a file whose contents never reached
+        // the disk.
         f.sync_all().await?;
         Ok::<_, std::io::Error>(())
     }
@@ -561,9 +561,9 @@ pub(crate) async fn write_atomic(target: &std::path::Path, contents: &str) -> Re
 
 /// What a whole-file write is about to take out, when it takes out more than it puts in.
 ///
-/// A write that replaces a file is the one change that can quietly lose work: the model
-/// reproduces what it remembers of the file and drops the rest. The line counts are in
-/// the diff already, but the diff is long and the summary is what is read.
+/// A write that replaces a file is the one change that can quietly lose work.
+/// The model reproduces what it remembers of the file and drops the rest.
+/// The line counts are in the diff, but the summary is what is read.
 fn losses(diff: &str) -> String {
     let removed = diff
         .lines()
@@ -598,7 +598,9 @@ fn preview(s: &str) -> String {
 }
 
 /// Split a concatenated unified diff into per-file patches using `--- ` boundaries
-/// (with a `+++` companion). diffy expects one patch per parse call.
+/// (with a `+++` companion).
+///
+/// `diffy` expects one patch per parse call.
 fn parse_multifile_patch(src: &str) -> Result<Vec<diffy::Patch<'_, str>>, diffy::ParsePatchError> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
@@ -645,8 +647,8 @@ mod tests {
         assert_eq!(losses(&grown), "");
     }
 
-    /// A project reached through a symbolic link is still the project, and its files are
-    /// still named by what comes after the root.
+    /// A project reached through a symbolic link is still the project.
+    /// Its files are still named by what comes after the root.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_path_under_a_linked_root_is_still_shown_short() {
@@ -669,8 +671,8 @@ mod tests {
         assert!(out.content.starts_with("wrote a.txt "), "{}", out.content);
     }
 
-    /// A file somebody changed while the model was thinking is not the file the model
-    /// read. Overwriting it whole would throw their work away with nothing to show it.
+    /// A file somebody changed while the model was thinking is not the file the model read.
+    /// Overwriting it whole would throw their work away with nothing to show it.
     #[tokio::test]
     async fn a_write_over_a_file_that_moved_is_refused() {
         let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
@@ -699,8 +701,8 @@ mod tests {
         );
     }
 
-    /// Reading it again is what makes the write allowed: the model is now writing over
-    /// what is actually there.
+    /// Reading it again is what makes the write allowed.
+    /// The model is then writing over what is actually there.
     #[tokio::test]
     async fn reading_it_again_lets_the_write_through() {
         let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
@@ -776,8 +778,8 @@ mod tests {
         assert_eq!(tokio::fs::read_to_string(&f).await.unwrap(), "hello");
     }
 
-    /// A patch is one change to a project. If a later file cannot be written, the earlier
-    /// ones must not be left changed - that is a tree in a state nobody asked for.
+    /// A patch is one change to a project.
+    /// If a later file cannot be written, the earlier ones are not left changed.
     #[tokio::test]
     async fn rolling_back_restores_modified_files_and_removes_created_ones() {
         let dir = tempdir().unwrap();
@@ -847,8 +849,8 @@ mod tests {
         assert_eq!(common_ancestor(&one), Path::new("/p/src"));
     }
 
-    /// The scope an `Always` on a multi-file patch grants must cover every file it was
-    /// shown, and nothing above them.
+    /// The scope an `Always` on a multi-file patch grants covers every file it was shown.
+    /// It covers nothing above them.
     #[test]
     fn a_patch_scope_covers_exactly_what_was_shown() {
         use crate::sandbox::approval::write_scope;
@@ -913,8 +915,8 @@ mod tests {
         );
     }
 
-    /// The scope shown to the user is the one that gets recorded, and it is the directory
-    /// the file lives in - not the tool.
+    /// The scope shown to the user is the one that gets recorded.
+    /// It is the directory the file lives in, not the tool.
     #[tokio::test]
     async fn agreeing_always_covers_the_directory_and_stops_there() {
         let h = Harness::new(Answer::Always);
@@ -1034,8 +1036,7 @@ mod tests {
         assert_eq!(h.read("b.txt"), "TWO\n");
     }
 
-    /// The whole point of staging: if any file in the patch cannot be applied, none of
-    /// them are written.
+    /// If any file in the patch cannot be applied, none of them are written.
     #[tokio::test]
     async fn a_patch_that_cannot_apply_wholly_changes_nothing() {
         let h = Harness::new(Answer::Yes);
@@ -1056,8 +1057,8 @@ mod tests {
         );
     }
 
-    /// Paths are resolved before the question is put, so what the user approves is what
-    /// happens.
+    /// Paths are resolved before the question is put.
+    /// What the user approves is what happens.
     #[tokio::test]
     async fn a_patch_reaching_outside_the_root_is_refused_before_asking() {
         let h = Harness::new(Answer::Yes);
@@ -1089,7 +1090,7 @@ mod tests {
 
     // ------------------------------------------------------- parse_multifile_patch --
 
-    /// Hand-rolled splitting on `--- ` boundaries, and until now untested.
+    /// Splitting on `--- ` boundaries.
     #[test]
     fn a_diff_splits_into_one_patch_per_file() {
         let diff = format!(
@@ -1156,8 +1157,8 @@ mod edit_lines_tests {
         assert_eq!(h.read("a.rs"), "let a = 10;\nlet b = 20;\n");
     }
 
-    /// All or none: an edit that cannot be placed leaves the file as it was, so the model
-    /// is never left reasoning about a file that is half of two versions.
+    /// All or none: an edit that cannot be placed leaves the file as it was.
+    /// The model is never left reasoning about a file that is half of two versions.
     #[tokio::test]
     async fn one_edit_that_cannot_be_placed_leaves_the_file_alone() {
         let h = Harness::new(Answer::Yes);
@@ -1172,8 +1173,8 @@ mod edit_lines_tests {
         assert_eq!(h.read("a.rs"), "let a = 1;\nlet b = 2;\n");
     }
 
-    /// An ambiguous edit is refused for the same reason the single-edit tool refuses one:
-    /// the model meant one place and the tool cannot know which.
+    /// An ambiguous edit is refused, as the single-edit tool refuses one.
+    /// The model meant one place and the tool cannot know which.
     #[tokio::test]
     async fn an_ambiguous_edit_is_refused() {
         let h = Harness::new(Answer::Yes);

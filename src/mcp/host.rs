@@ -1,13 +1,17 @@
 //! What a server may ask of the session: a word from the model, or values from the person.
 //!
-//! A server asks the model through `sampling/createMessage`. The person is asked first, as
-//! for a tool call, and the session's own model answers, never one the server names. A
-//! server asks the person through `elicitation/create`, with a message and a flat form of
-//! named fields. The interface asks each field in turn, and a session with nobody to ask
-//! declines.
+//! A server asks the model through `sampling/createMessage`.
+//! The person is asked first, as for a tool call.
+//! The session's own model answers, never one the server names.
 //!
-//! The servers start before the backend is known, so what answers them is set once the
-//! session is assembled. A request before that is refused.
+//! A server asks the person through `elicitation/create`, with a message and a flat form of
+//! named fields.
+//! The interface asks each field in turn.
+//! A session with nobody to ask declines.
+//!
+//! The servers start before the backend is known.
+//! What answers them is set once the session is assembled.
+//! A request before that is refused.
 
 use std::sync::{Arc, OnceLock};
 
@@ -94,8 +98,8 @@ impl Field {
         out
     }
 
-    /// The value `typed` gives this field: `None` for nothing typed in a field that may be
-    /// left empty, or why it does not fit.
+    /// The value `typed` gives this field.
+    /// `None` for nothing typed in a field that may be left empty, or why it does not fit.
     pub fn read(&self, typed: &str) -> Result<Option<Value>, String> {
         let typed = typed.trim();
         if typed.is_empty() {
@@ -145,8 +149,9 @@ pub struct Question {
     pub reply: oneshot::Sender<Answer>,
 }
 
-/// The fields of a requested schema: an object whose properties are each a string, a
-/// number, an integer, a boolean or a list of choices.
+/// The fields of a requested schema.
+/// It is an object whose properties are each a string, a number, an integer, a boolean or
+/// a list of choices.
 pub fn fields(schema: &Value) -> Result<Vec<Field>, String> {
     let required: Vec<&str> = schema
         .get("required")
@@ -183,7 +188,7 @@ pub fn fields(schema: &Value) -> Result<Vec<Field>, String> {
             kind,
         });
     }
-    // The map does not keep the server's order: what must be given is asked first.
+    // The map does not keep the server's order, so the required fields are asked first.
     out.sort_by_key(|f| !f.required);
     Ok(out)
 }

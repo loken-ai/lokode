@@ -1,9 +1,11 @@
-//! The providers lokode knows by name: where each is, what it speaks and where its key is
-//! usually kept.
+//! The providers lokode knows by name.
 //!
-//! Named with `provider = "openrouter"` in `[backend]` or in a `[backends]` entry, or with
-//! `--provider`. A `url`, a `kind` or an `api-key-env` written beside it wins over the
-//! preset's. Any other OpenAI-compatible server is reached by its `url` alone.
+//! Each preset holds where the provider is, what it speaks and where its key is usually kept.
+//!
+//! A provider is named with `provider = "openrouter"` in `[backend]` or in a `[backends]` entry.
+//! It can also be named with `--provider`.
+//! A `url`, a `kind` or an `api-key-env` written beside it wins over the preset's.
+//! Any other OpenAI-compatible server is reached by its `url` alone.
 
 use crate::config::BackendKind;
 
@@ -13,7 +15,8 @@ pub struct Preset {
     pub name: &'static str,
     pub url: &'static str,
     pub kind: BackendKind,
-    /// The variable its key is usually kept in. `None` for a server on this machine.
+    /// The variable its key is usually kept in.
+    /// `None` for a server on this machine.
     pub key_env: Option<&'static str>,
 }
 
@@ -103,9 +106,9 @@ pub fn named(name: &str) -> Result<&'static Preset, String> {
     })
 }
 
-/// The address of `path` on an OpenAI-compatible server at `base`. A base that already
-/// ends on its API's root, `/v1` or `/openai`, takes the path as it is; a bare host takes
-/// it under `/v1`.
+/// The address of `path` on an OpenAI-compatible server at `base`.
+/// A base that already ends on its API's root, `/v1` or `/openai`, takes the path as it is.
+/// A bare host takes it under `/v1`.
 pub fn endpoint(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
     let rooted = base.ends_with("/v1") || base.ends_with("/openai");

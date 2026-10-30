@@ -1,9 +1,9 @@
 //! Assembling an agent from settings.
 //!
-//! The same work whether an interface or a script is going to drive it: build the registry,
-//! resolve which session this is, decide how tools will be asked for, and wire the pieces
-//! together. Written once here because the alternative - each entry point building its own -
-//! is how the tool list came to be declared in 2 places and drift.
+//! The same work whether an interface or a script is going to drive it.
+//! It builds the registry, resolves which session this is, decides how tools will be asked for,
+//! and wires the pieces together.
+//! Each entry point calls it, so the tool list is declared in 1 place.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,12 +27,14 @@ use crate::tools::registry::{Registry, ToolCtx};
 pub struct Booted {
     pub agent: Agent,
     pub lsp: Arc<LspPool>,
-    /// Approval prompts the tools raise. Somebody has to answer these or the agent waits.
+    /// Approval prompts the tools raise.
+    /// Somebody has to answer these or the agent waits.
     pub approval_rx: ApprovalReceiver,
-    /// Cancelled to bring everything down. Each turn's token is a child of it.
+    /// Cancelled to bring everything down.
+    /// Each turn's token is a child of it.
     pub shutdown: CancellationToken,
-    /// The transcript writer, to be awaited before the process exits or the last records
-    /// never reach the disk.
+    /// The transcript writer, to be awaited before the process exits.
+    /// Otherwise the last records never reach the disk.
     pub recorder: Option<JoinHandle<()>>,
     pub session_id: String,
     pub model: String,
@@ -43,12 +45,12 @@ pub struct Booted {
     pub protocol_cell: crate::agent::protocol::SharedProtocol,
     /// What came back from a resumed session, for putting it on screen.
     pub restored: Vec<crate::backend::wire::Message>,
-    /// Whether the window the backend serves is still to be found out, which is done
-    /// once there is a screen to say it on.
+    /// Whether the window the backend serves is still to be found out.
+    /// That happens once there is a screen to say it on.
     pub find_window: bool,
     /// The change history, if one could be opened.
-    /// What has been agreed to for this session, so the interface can set a standing
-    /// decision as well as the prompt.
+    /// What has been agreed to for this session.
+    /// The interface can set a standing decision as well as the prompt.
     pub session_approvals: Arc<SessionApprovals>,
     pub checkpoints: Option<Arc<Checkpoints>>,
     /// Why there is no history, when there is not one.
@@ -63,16 +65,16 @@ pub struct Booted {
     pub tools: Vec<String>,
     /// The task list the model keeps, for the interface to draw.
     pub tasks: Arc<crate::tools::plan::TaskList>,
-    /// What is known about this project and what is still to be looked into, shared with
-    /// the background worker so a session sees what it learns.
+    /// What is known about this project and what is still to be looked into.
+    /// Shared with the background worker, so a session sees what it learns.
     pub digest: Arc<tokio::sync::Mutex<crate::agent::digest::Digest>>,
-    /// Answers one question about the project while nobody is waiting. `None` when the
-    /// configuration turned it off.
+    /// Answers one question about the project while nobody is waiting.
+    /// `None` when the configuration turned it off.
     pub discovery: Option<Arc<crate::agent::background::Discovery>>,
     /// Lines the tools are printing as they print them.
     pub live: tokio::sync::mpsc::Receiver<crate::tools::registry::LiveOutput>,
-    /// The forms the tool servers put to the person. Nothing is sent on it in a run driven
-    /// by a script, where the servers are declined.
+    /// The forms the tool servers put to the person.
+    /// Nothing is sent on it in a run driven by a script, where the servers are declined.
     pub questions: tokio::sync::mpsc::Receiver<crate::mcp::host::Question>,
 }
 
@@ -82,9 +84,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         build_registry_with(cfg.root.clone(), tasks.clone(), cfg.lsp.clone());
     // The project's servers start reading it now, while the session opens.
     lsp.warm();
-    // Third-party tools go in after the built-ins, so a server cannot take a name the agent
-    // already relies on.
-    // What answers the servers' questions, set once the backend is known below.
+    // Third-party tools go in after the built-ins.
+    // A server cannot take a name the agent already relies on.
+    // What answers the servers' questions is set once the backend is known below.
     let mcp_host: crate::mcp::host::SharedHost = Default::default();
     let mcp = crate::mcp::load(&cfg.mcp_servers, &mut registry, &cfg.root, &mcp_host).await;
     let mcp_clients = crate::mcp::Servers::new(mcp.clients.clone(), mcp_host.clone());
@@ -93,18 +95,18 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     if let Some(tool) = crate::tools::skill::LoadSkill::new(skills) {
         registry.register(tool);
     }
-    // What the agents a turn hands work to choose their tools from. The delegation itself
-    // is registered later, so it is not among them and an agent cannot delegate again.
+    // What the agents a turn hands work to choose their tools from.
+    // The delegation itself is registered later, so an agent cannot delegate again.
     let registry_for_delegation = Arc::new(registry.clone());
     let registry = Arc::new(registry);
-    // Registered last, because it hands work to a session built like this one. The
-    // delegation is added to the shared registry below, once the backend is known.
+    // Registered last, because it hands work to a session built like this one.
+    // The delegation is added to the shared registry below, once the backend is known.
     let (approval_tx, approval_rx) = approval::channel();
     let shutdown = CancellationToken::new();
 
     let auto_used = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    // Small on purpose: what a screen cannot keep up with is dropped rather than queued,
-    // because a line that arrives late is worth less than the build finishing on time.
+    // Small on purpose.
+    // What a screen cannot keep up with is dropped instead of queued.
     let (live_tx, live_rx) = tokio::sync::mpsc::channel(64);
     // A script decides by its policy alone, so agreements kept from a person's sessions
     // are not its to use.
@@ -123,8 +125,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         policy: Arc::new(cfg.policy.clone()),
         auto_used: auto_used.clone(),
         honour_allow: !cfg.headless,
-        // A script reads the result; a person watches the build. Only the second wants
-        // it a line at a time.
+        // A script reads the result, and a person watches the build.
+        // Only the second wants it a line at a time.
         live: (!cfg.headless).then(|| live_tx.clone()),
         call: None,
         root: cfg.root.clone(),
@@ -134,8 +136,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             cfg.context_tokens,
             cfg.max_answer_tokens,
         ),
-        // Replaced with the turn's own token at the start of each turn; this stands in
-        // for the window before the first one arrives.
+        // Replaced with the turn's own token at the start of each turn.
+        // This stands in for the window before the first one arrives.
         cancel: shutdown.child_token(),
         http: crate::tools::registry::tool_http_client()?,
         allow_hosts: Arc::new(cfg.allow_hosts.clone()),
@@ -147,9 +149,11 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
 
     let earlier = open_session(cfg)?;
     let backend = provider_for(cfg)?;
-    // Nothing has to name a model. What was asked for wins, then what the session was
-    // last using, then what the configuration remembers; failing all that the backend is
-    // asked, and a backend that serves exactly one leaves nothing to choose.
+    // Nothing has to name a model.
+    // The order is: what was asked for, what the session was last using, what the
+    // configuration remembers.
+    // Failing all that, the backend is asked.
+    // A backend that serves exactly one leaves nothing to choose.
     let mut model_notes = Vec::new();
     let model = match cfg.model.clone().or_else(|| {
         earlier
@@ -166,8 +170,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
                 ));
                 only
             }
-            // An interface can ask; a script cannot, which is why the headless path
-            // refuses an unset model rather than guessing at one of several.
+            // An interface can ask, and a script cannot.
+            // The headless path refuses an unset model instead of guessing at one of several.
             Ok(models) if !models.is_empty() => {
                 model_notes.push(format!(
                     "no model is set: /model to choose one of {}",
@@ -191,34 +195,34 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         },
     };
 
-    // `auto` starts native and drops to the envelope the first time a backend refuses it,
-    // which is a decision the agent makes once and then keeps.
+    // `auto` starts native and drops to the envelope the first time a backend refuses it.
+    // The agent makes that decision once and keeps it.
     let protocol = match cfg.tool_protocol {
         ProtocolChoice::Envelope => ToolProtocol::Envelope,
         ProtocolChoice::Auto | ProtocolChoice::Native => ToolProtocol::Native,
     };
     let protocol_cell = crate::agent::protocol::SharedProtocol::new(protocol);
-    // A window belongs to a model: the one named for this session takes what the
-    // configuration says it needs, and the default only when it says nothing.
+    // A window belongs to a model.
+    // The one named for this session takes what the configuration says it needs.
+    // The default applies only when the configuration says nothing.
     let per_model = cfg.models.get(&model);
     let context_tokens = per_model
         .and_then(|m| m.context_tokens)
         .unwrap_or(cfg.context_tokens);
-    // What the backend actually offers, when nobody has said. A guess is wrong in both
-    // directions: too small wastes the window that is there, and too large sends prompts
-    // the server cuts, which produces an answer that is fluent and wrong about what it
-    // was asked.
-    // Found out after the interface is on screen, not before it. Asking a cold server
-    // what window it serves means holding the model ready first, which is the whole load
-    // of it - a minute of a blank terminal, with nothing anywhere saying why, because
-    // none of this runs until there is a screen to say it on.
+    // What the backend actually offers, when nobody has said.
+    // A window guessed too small wastes the window that is there.
+    // A window guessed too large sends prompts the server cuts.
+    //
+    // Found out after the interface is on screen.
+    // Asking a cold server what window it serves means holding the model ready first.
+    // None of this runs until there is a screen to say it on.
     let find_window = !cfg.context_was_set && per_model.and_then(|m| m.context_tokens).is_none();
     let asked_answer_tokens = per_model
         .and_then(|m| m.max_answer_tokens)
         .unwrap_or(cfg.max_answer_tokens);
-    // The reserve comes out of the window before anything else is budgeted, so a window
-    // that cannot afford the configured answer gets a shorter one rather than a client
-    // with nothing left to read with.
+    // The reserve comes out of the window before anything else is budgeted.
+    // A window that cannot afford the configured answer gets a shorter one.
+    // The client is left with something to read with.
     let max_answer_tokens =
         crate::agent::session::answer_reserve(context_tokens, asked_answer_tokens);
     if max_answer_tokens != asked_answer_tokens {
@@ -228,14 +232,14 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         ));
     }
 
-    // A tool result is only ever large relative to the window it lands in, so the
-    // ceiling follows the model's window rather than the default.
+    // A tool result is only large relative to the window it lands in.
+    // The ceiling follows the model's window, not the default.
     ctx.max_output_chars =
         crate::agent::session::tool_output_chars(context_tokens, max_answer_tokens);
 
-    // What earlier sessions worked out about this project, and the questions they did
-    // not get to. Both outlive the process, which is the whole point: the finding out is
-    // done once and used every time.
+    // What earlier sessions worked out about this project, and the questions they did not
+    // get to.
+    // Both outlive the process.
     let mut digest = crate::agent::digest::Digest::open(crate::paths::state_dir(), &cfg.root);
     if digest.is_empty() && digest.questions.is_empty() {
         for question in crate::agent::background::opening_questions() {
@@ -244,8 +248,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         digest.save();
     }
 
-    // Bounded against this window, and what could not be sent is said rather than
-    // silently dropped.
+    // Bounded against this window.
+    // What could not be sent is said, not silently dropped.
     let (instructions, notes) = crate::config::load_instructions(
         &cfg.root,
         crate::agent::session::instruction_chars(context_tokens, max_answer_tokens),
@@ -260,9 +264,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         tasks.set(e.tasks.clone()).await;
     }
     ctx.planning = mode == crate::agent::agent_loop::Mode::Plan;
-    // The standing instructions a person wrote, then what the background work has found
-    // out: the cheaper half of what a session used to spend its first minutes
-    // rediscovering, in a paragraph rather than in 12 searches.
+    // The standing instructions a person wrote, then what the background work has found out.
+    // The findings come in a paragraph.
     let learned = digest.preamble(crate::agent::digest::MAX_PREAMBLE_CHARS);
     let instructions = match (instructions, learned) {
         (Some(i), Some(l)) => Some(format!("{i}\n\nWhat earlier sessions found out here:\n{l}")),
@@ -270,8 +273,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         (None, Some(l)) => Some(format!("What earlier sessions found out here:\n{l}")),
         (None, None) => None,
     };
-    // And the shape of the tree. A model that has been told nothing about the project asks
-    // for a file to be pasted in, because asking is cheaper than guessing a path.
+    // And the shape of the tree.
+    // A model told nothing about the project asks for a file to be pasted in.
     let instructions = match crate::agent::layout::preamble(&cfg.root) {
         Some(map) => Some(match instructions {
             Some(i) => format!("{i}\n\n{map}"),
@@ -289,8 +292,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let mut recorder = None;
     let session_id = match earlier {
         Some(e) => {
-            // Appending to the file it came from, rather than starting a new one: a
-            // session that is resumed 3 times should be one story, not 4.
+            // Appends to the file it came from instead of starting a new one.
+            // A resumed session stays one story.
             let (transcript, writer) = Transcript::create(session_path(&e.id)?)?;
             recorder = Some(writer);
             session = session.with_transcript(transcript, e.id.clone());
@@ -325,9 +328,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         "session ready"
     );
 
-    // A history of what the agent changes, so a turn can be shown or taken back. Not fatal
-    // if it cannot be opened - git may be missing, or the root may be somewhere unusual -
-    // but the user is told, because finding out later means finding out when it was needed.
+    // A history of what the agent changes, so a turn can be shown or taken back.
+    // Not fatal if it cannot be opened, for instance when git is missing.
+    // The user is told when it cannot be opened.
     let (checkpoints, checkpoint_error) = match Checkpoints::open(&session_id, &cfg.root).await {
         Ok(cp) => (Some(Arc::new(cp)), None),
         Err(e) => {
@@ -341,8 +344,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         let mut rows: Vec<String> = registry
             .iter()
             .map(|(name, tool)| {
-                // A tool from a server carries its server in its name, which is the only
-                // place the difference is recorded.
+                // A tool from a server carries its server in its name.
+                // That is the only place the difference is recorded.
                 let from = match name.split_once("__") {
                     Some((server, _)) => format!(" (from {server})"),
                     None => String::new(),
@@ -353,8 +356,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         rows.sort();
         rows
     };
-    // A turn of its own, with its own window, for work whose search would otherwise fill
-    // this one.
+    // A turn of its own, with its own window.
+    // It serves work whose search would otherwise fill this one.
     let mut registry = Arc::try_unwrap(registry).unwrap_or_else(|shared| (*shared).clone());
     let role_or_session = |role| {
         cfg.roles
@@ -363,7 +366,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             .unwrap_or_else(|| model.clone())
     };
     // What the person types while a turn runs, and what agents working in the background
-    // answer: both reach the session at its next step.
+    // answer.
+    // Both reach the session at its next step.
     let (steer_tx, steer_rx) = tokio::sync::mpsc::channel::<String>(8);
     let mut backends = std::collections::HashMap::new();
     for (name, b) in &cfg.backends {
@@ -424,9 +428,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let registry = Arc::new(registry);
 
     let digest = Arc::new(tokio::sync::Mutex::new(digest));
-    // Its own client, whose requests say they should yield, and the tools that read: a
-    // background turn that could not read the project could not find anything out about
-    // it. None of them changes anything or asks the user anything.
+    // Its own client, whose requests say they should yield, and the tools that read.
+    // A background turn that cannot read the project cannot find anything out about it.
+    // None of the tools changes anything or asks the user anything.
     let discovery = cfg
         .discover
         .then(|| -> Result<Arc<crate::agent::background::Discovery>> {
@@ -463,7 +467,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         repeats: Default::default(),
         before_plan: None,
         // What this project has taught about each model, from the writes that did and did
-        // not check out. Kept on this machine, beside the state, never in the repository.
+        // not check out.
+        // Kept beside the state, never in the repository.
         history: crate::agent::history::ModelHistory::open(crate::paths::state_dir(), &cfg.root),
         escalated_from: None,
         clean_steps: 0,
@@ -478,8 +483,8 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         cfg: AgentConfig {
             model: model.clone(),
             mode,
-            // Only worth doing, and only harmless, against a server whose weights are
-            // near: a hosted endpoint has nothing to warm and would bill the attempt.
+            // Only worth doing against a server whose weights are near.
+            // A hosted endpoint has nothing to warm and would bill the attempt.
             preload: cfg.preload && crate::config::backend_is_nearby(&cfg.backend_url),
             guess_with: guess_model(cfg, &model),
             roles: cfg.roles.clone(),
@@ -533,18 +538,18 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
 
 /// A second client whose requests say they should yield to the user's.
 ///
-/// The background work shares a machine with the turn a person is waiting on, so it asks
-/// to be scheduled behind it. A server that does not schedule by priority ignores an
-/// unknown header, which is the right outcome: the work still happens, just without the
-/// courtesy. Only the OpenAI-compatible client carries it, because that is the one whose
-/// server is on this machine.
+/// The background work shares a machine with the turn a person is waiting on.
+/// It asks to be scheduled behind it.
+/// A server that does not schedule by priority ignores an unknown header.
+/// The work still happens, without the courtesy.
+/// Only the OpenAI-compatible client carries the header.
+///
 /// Which model guesses the next read, or `None` for a session that does not guess.
 ///
-/// Only against a backend on this machine or this network: a hosted endpoint bills for a
-/// guess the same as for an answer. Which model is the project's business - what it names
-/// for searching, or the one already answering - and where that model runs is the
-/// server's: the request goes out at a priority that yields, so a cluster is free to put
-/// it on another node and a single machine is free to make it wait.
+/// Only against a backend on this machine or this network.
+/// A hosted endpoint bills for a guess the same as for an answer.
+/// The model is the one the project names for searching, or the one already answering.
+/// The request goes out at a priority that yields.
 fn guess_model(cfg: &AppConfig, answering: &str) -> Option<String> {
     if !cfg.speculate || !crate::config::backend_is_nearby(&cfg.backend_url) {
         return None;
@@ -569,10 +574,11 @@ fn background_provider(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provid
 
 /// Build the client for whichever API the backend speaks.
 ///
-/// The credential is resolved the same way for both - environment, then a named variable,
-/// then a private file - and only where it is put on the wire differs: `Authorization:
-/// Bearer` for the OpenAI-compatible family, `x-api-key` for Anthropic. Converting a
-/// working configuration between them is a header change, not a value change.
+/// The credential is resolved the same way for both: environment, then a named variable,
+/// then a private file.
+/// Only where it is put on the wire differs.
+/// The OpenAI-compatible family sends `Authorization: Bearer`.
+/// Anthropic sends `x-api-key`.
 fn provider_for(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Provider>> {
     provider(cfg.backend_kind, &cfg.backend_url, &cfg.headers)
 }
@@ -652,8 +658,8 @@ pub fn build_registry_with(
     reg.register(Bash);
     reg.register(RunTests);
     reg.register(WebFetch);
-    // The language-server tools only where a server can answer for the project: offered
-    // otherwise, they cost the model a tool list and calls that fail.
+    // The language-server tools are registered only where a server can answer for the project.
+    // Otherwise they cost the model a tool list and calls that fail.
     let pool = LspPool::with(root, languages);
     if !pool.available().is_empty() {
         reg.register(LspDiagnostics { pool: pool.clone() });

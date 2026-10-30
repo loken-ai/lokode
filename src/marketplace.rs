@@ -1,7 +1,7 @@
 //! Plugin marketplaces: git repositories that list plugins to install by name.
 //!
-//! A marketplace is cloned into `~/.config/lokode/marketplaces/<name>` and holds a
-//! `marketplace.toml`:
+//! A marketplace is cloned into `~/.config/lokode/marketplaces/<name>`.
+//! It holds a `marketplace.toml`:
 //!
 //! ```toml
 //! description = "the team's plugins"
@@ -16,8 +16,8 @@
 //! source = "plugins/fmt"
 //! ```
 //!
-//! A source is a git url, or a directory of the marketplace itself. A plugin is then
-//! installed as `release@team`, or as `release` when one marketplace alone lists it.
+//! A source is a git url, or a directory of the marketplace itself.
+//! A plugin is installed as `release@team`, or as `release` when one marketplace alone lists it.
 
 use std::path::{Path, PathBuf};
 
@@ -168,7 +168,7 @@ fn read_json(dir: &Path, name: &str) -> Result<Market> {
                 Source::Dir(at)
             }
             Ok(other) => other,
-            // Listed by a kind of source lokode does not read: left out of what can be installed.
+            // A kind of source lokode does not read is left out of what can be installed.
             Err(_) => continue,
         };
         listings.push(Listing {
@@ -251,19 +251,22 @@ pub fn update(home: &Path, name: &str) -> Result<Market> {
     read(&dir, name)
 }
 
-/// Take the marketplace `name` out. The plugins installed from it stay.
+/// Take the marketplace `name` out.
+///
+/// The plugins installed from it stay.
 pub fn remove(home: &Path, name: &str) -> Result<()> {
     if !crate::frontmatter::is_name(name) {
         bail!("no marketplace is called {name}");
     }
     let dir = home.join(name);
-    // Only a marketplace: a directory there without its file is not ours to delete.
+    // Only a marketplace is deleted.
+    // A directory there without its file is left alone.
     read(&dir, name)?;
     std::fs::remove_dir_all(&dir).with_context(|| dir.display().to_string())
 }
 
-/// The listing `spec` names: `plugin@market`, or `plugin` when one marketplace alone
-/// lists it.
+/// The listing `spec` names: `plugin@market`.
+/// `plugin` alone names it when one marketplace alone lists it.
 pub fn find(markets: &[Market], spec: &str) -> Result<Listing> {
     let (plugin, market) = match spec.split_once('@') {
         Some((p, m)) => (p, Some(m)),
@@ -299,8 +302,9 @@ mod tests {
         std::fs::write(dir.join(FILE), toml).unwrap();
     }
 
-    /// Sources are told apart, a directory leaving the marketplace is refused, and a
-    /// plugin is found by name or by name and marketplace.
+    /// Sources are told apart.
+    /// A directory leaving the marketplace is refused.
+    /// A plugin is found by name or by name and marketplace.
     #[test]
     fn a_marketplace_lists_its_plugins() {
         let home = tempfile::tempdir().unwrap();

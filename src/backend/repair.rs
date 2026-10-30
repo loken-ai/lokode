@@ -1,19 +1,20 @@
 //! 3-layer auto-repair for tool-call JSON.
 //!
-//!  Layer 1 — Grammar (server-enforced via response_format=json_schema).
-//!            Lives in `backend::client`; this module is the
-//!            client-side safety net.
-//!  Layer 2 — Tolerant parse: serde_json, then json5, plus a small
-//!            recovery pass (strip code fences, normalise Python bools).
-//!  Layer 3 — Repair round-trip: ask the model to fix its own output,
-//!            capped at 2 attempts per turn.
+//! Layer 1 is the grammar, enforced by the server through `response_format=json_schema`.
+//! It lives in `backend::client`, and this module is the client-side safety net.
+//!
+//! Layer 2 is the tolerant parse: `serde_json`, then `json5`.
+//! A small recovery pass strips code fences and normalises Python bools.
+//!
+//! Layer 3 is the repair round-trip, which asks the model to fix its own output.
+//! It is capped at `MAX_REPAIR_ATTEMPTS` attempts per turn.
 
 use anyhow::{bail, Result};
 use serde_json::Value;
 
 pub const MAX_REPAIR_ATTEMPTS: usize = 2;
 
-/// Strip a single ```json …``` / ``` …``` fenced block if present, return inner.
+/// Strip a single fenced block (json or plain) if present, and return the inner text.
 pub fn strip_code_fence(s: &str) -> &str {
     let t = s.trim();
     if let Some(rest) = t.strip_prefix("```json") {
@@ -25,9 +26,10 @@ pub fn strip_code_fence(s: &str) -> &str {
     t
 }
 
-/// Find the substring between the first '{' and the matching final '}'
-/// (balanced, ignoring braces inside strings). Returns None if no balanced
-/// pair found — caller falls back to raw input.
+/// Find the substring between the first '{' and the matching final '}'.
+/// The braces are balanced, ignoring braces inside strings.
+/// Returns None if no balanced pair is found.
+/// The caller falls back to raw input.
 fn extract_balanced_object(s: &str) -> Option<&str> {
     let bytes = s.as_bytes();
     let start = s.find('{')?;

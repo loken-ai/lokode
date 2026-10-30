@@ -1,18 +1,22 @@
 //! Separating a model's scratchpad from its answer.
 //!
-//! A reasoning model produces 2 kinds of text and the same semantic thing arrives 4
-//! ways: inline `<think>…</think>` in the content (loken, and any server that does not
-//! split), a `reasoning` field beside it (ollama, OpenRouter), a `reasoning_content` field
-//! (DeepSeek), or its own block type (Anthropic). None of those is in the OpenAI
-//! specification, which is why every vendor chose differently.
+//! A reasoning model produces 2 kinds of text.
+//! The same semantic thing arrives 4 ways:
+//! - inline `<think>` and `</think>` tags in the content (loken, and any server that does not
+//!   split)
+//! - a `reasoning` field beside the content (ollama, OpenRouter)
+//! - a `reasoning_content` field (DeepSeek)
+//! - its own block type (Anthropic)
 //!
-//! A generic client absorbs that here, once, so the rest of the agent sees one event and
-//! the difference never reaches the loop, the transcript or the screen.
+//! None of those is in the OpenAI specification.
 //!
-//! Reasoning is shown and then dropped. It is never fed back to the model, because it is
-//! not what the model said - it is what the model was working through on the way to saying
-//! it, and replaying it as though it were the answer would teach the next turn that the
-//! scratchpad is part of the conversation.
+//! A generic client absorbs the difference here, once.
+//! The rest of the agent sees one event.
+//! The difference never reaches the loop, the transcript or the screen.
+//!
+//! Reasoning is shown and then dropped.
+//! It is never fed back to the model.
+//! It is what the model worked through on the way to its answer, not the answer.
 
 /// The tags a ChatML reasoning family opens and closes its scratchpad with.
 const OPEN: &str = "<think>";
@@ -20,9 +24,9 @@ const CLOSE: &str = "</think>";
 
 /// Splits inline `<think>` blocks out of a stream of content fragments.
 ///
-/// Written as a state machine over fragments rather than over a whole string, because the
-/// tags arrive a few characters at a time and can be split across chunks - `<thi` at the
-/// end of one and `nk>` at the start of the next is ordinary.
+/// It is a state machine over fragments, not over a whole string.
+/// The tags arrive a few characters at a time and can be split across chunks.
+/// `<thi` at the end of one chunk and `nk>` at the start of the next is ordinary.
 #[derive(Debug, Default)]
 pub struct ThinkSplitter {
     /// Text seen but not yet classifiable, because it might be the start of a tag.
@@ -81,9 +85,8 @@ impl ThinkSplitter {
 
     /// Nothing more is coming: release whatever is still held.
     ///
-    /// An unclosed `<think>` means the model was cut off mid-thought, and what it was
-    /// thinking is reasoning rather than answer - showing it as the answer would present a
-    /// scratchpad as a conclusion.
+    /// An unclosed `<think>` means the model was cut off mid-thought.
+    /// What it was thinking is reasoning, not answer.
     pub fn finish(&mut self) -> Split {
         let rest = std::mem::take(&mut self.held);
         if self.inside {
@@ -116,7 +119,7 @@ fn partial_tag_len(s: &str, tag: &str) -> usize {
 mod tests {
     use super::*;
 
-    /// Feed a whole string one character at a time - the worst case a stream can produce.
+    /// Feed a whole string one character at a time, the worst case a stream can produce.
     fn char_by_char(s: &str) -> Split {
         let mut sp = ThinkSplitter::default();
         let mut out = Split::default();
@@ -183,7 +186,8 @@ mod tests {
 
     #[test]
     fn a_close_tag_with_no_open_is_left_alone() {
-        // Nothing opened, so there is nothing to close - the text is the answer.
+        // Nothing opened, so there is nothing to close.
+        // The text is the answer.
         let out = char_by_char("plain </think> text");
         assert_eq!(out.reasoning, "");
         assert!(out.answer.contains("plain"), "{}", out.answer);

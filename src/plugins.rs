@@ -14,12 +14,12 @@
 //! command = "tracker-mcp"
 //! ```
 //!
-//! A plugin is installed with `lokode plugin install <git url>`, or by putting its
-//! directory there, and turned off by naming it in `[plugins] disabled`. Plugins live in
-//! the user's configuration only: a project cannot bring one.
+//! A plugin is installed with `lokode plugin install <git url>`, or by putting its directory there.
+//! It is turned off by naming it in `[plugins] disabled`.
+//! Plugins live in the user's configuration only: a project cannot bring one.
 //!
-//! What a plugin runs is shown before it is installed, and again when an update changes
-//! it, since its hooks and its servers run with the user's rights.
+//! What a plugin runs is shown before it is installed, and again when an update changes it.
+//! Its hooks and its servers run with the user's rights.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -121,8 +121,8 @@ pub fn home() -> Option<PathBuf> {
     crate::config::user_config_path().and_then(|p| p.parent().map(|d| d.join("plugins")))
 }
 
-/// The plugins installed under `home`, `disabled` naming those turned off. Says what it
-/// could not read.
+/// The plugins installed under `home`, `disabled` naming those turned off.
+/// Says what it could not read.
 pub fn load_from(home: &Path, disabled: &[String]) -> (Vec<Plugin>, Vec<String>) {
     let mut out = Vec::new();
     let mut warnings = Vec::new();
@@ -163,8 +163,7 @@ pub fn load_from(home: &Path, disabled: &[String]) -> (Vec<Plugin>, Vec<String>)
     (out, warnings)
 }
 
-/// The plugins installed for this user, with those the user's configuration turns off
-/// marked so.
+/// The plugins installed for this user, with those the user's configuration turns off marked so.
 pub fn load() -> (Vec<Plugin>, Vec<String>) {
     let disabled = crate::config::user_config_path()
         .and_then(|p| crate::config::read(&p).ok().flatten())
@@ -194,8 +193,8 @@ pub struct Sections {
     pub lsp: BTreeMap<String, crate::config::LspServer>,
 }
 
-/// The hooks, the tool servers and the language servers of the plugins turned on. A server
-/// keeps the name its plugin gave it, and the first plugin to use a name keeps it.
+/// The hooks, the tool servers and the language servers of the plugins turned on.
+/// A server keeps the name its plugin gave it, and the first plugin to use a name keeps it.
 pub fn sections(plugins: &[Plugin]) -> Sections {
     let mut out = Sections::default();
     for p in plugins.iter().filter(|p| !p.disabled) {
@@ -214,12 +213,13 @@ pub fn sections(plugins: &[Plugin]) -> Sections {
     out
 }
 
-/// Where a plugin is fetched before it is installed: inside the plugins' directory, so it
-/// is moved into place without a copy, and one level down, so it is never loaded.
+/// Where a plugin is fetched before it is installed.
+/// It is inside the plugins' directory, so it is moved into place without a copy.
+/// It is one level down, so it is never loaded.
 const FETCHING: &str = ".fetching";
 
-/// The name a plugin from `source` is installed under, when none is given: the last part
-/// of the source, without `.git`.
+/// The name a plugin from `source` is installed under, when none is given.
+/// It is the last part of the source, without `.git`.
 pub fn name_for(source: &str) -> Option<String> {
     let last = source
         .trim_end_matches('/')
@@ -247,8 +247,9 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// What the plugin in `dir` brings, from its `plugin.toml` or, when it has none, from the
-/// layout Claude Code's plugins have. Says what it leaves out of the second.
+/// What the plugin in `dir` brings, from its `plugin.toml` or, when it has none, from the layout
+/// Claude Code's plugins have.
+/// Says what it leaves out of the second.
 fn file_of(dir: &Path) -> std::result::Result<(PluginFile, Vec<String>), String> {
     if dir.join("plugin.toml").is_file() {
         let text = std::fs::read_to_string(dir.join("plugin.toml")).map_err(|e| e.to_string())?;
@@ -295,8 +296,8 @@ fn read_plugin(dir: &Path, name: &str) -> Result<Plugin> {
     })
 }
 
-/// Install the plugin at the git `source` under `home`, named `name`. `agree` is shown the
-/// plugin before it goes in place, and says whether it does.
+/// Install the plugin at the git `source` under `home`, named `name`.
+/// `agree` is shown the plugin before it goes in place, and says whether it does.
 pub fn install(
     home: &Path,
     source: &str,
@@ -315,8 +316,9 @@ pub fn install(
 /// The file a plugin copied from a marketplace keeps its marketplace in.
 pub const FROM_MARKET: &str = ".marketplace";
 
-/// Install the plugin in the marketplace directory `dir` under `home`, named `name`, as
-/// `install` does from git. It keeps the name of `market`, to be updated from it.
+/// Install the plugin in the marketplace directory `dir` under `home`, named `name`, as `install`
+/// does from git.
+/// It keeps the name of `market`, to be updated from it.
 pub fn install_dir(
     home: &Path,
     dir: &Path,
@@ -332,8 +334,8 @@ pub fn install_dir(
     })
 }
 
-/// Fetch a plugin into the fetching directory with `fetch`, show it to `agree`, and put it
-/// in place under `home` as `name` when agreed to.
+/// Fetch a plugin into the fetching directory with `fetch`, show it to `agree`, and put it in place
+/// under `home` as `name` when agreed to.
 fn land(
     home: &Path,
     name: &str,
@@ -490,7 +492,7 @@ pub fn fetch_into(source: &crate::marketplace::Source, landing: &Path) -> Result
 
 /// The bytes at `url`, over HTTPS.
 fn download(url: &str) -> Result<Vec<u8>> {
-    // Over https, or over http to this machine, which nobody can listen in on.
+    // Over https, or over http to this machine.
     let local = url::Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(|h| h == "localhost" || h == "127.0.0.1"))
@@ -517,8 +519,8 @@ fn unpack(bytes: &[u8], to: &Path) -> Result<()> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
     for at in 0..archive.len() {
         let mut entry = archive.by_index(at)?;
-        // Ordinary files and directories only, named inside `to`: a link or a name that
-        // leaves it is not a part of a plugin.
+        // Ordinary files and directories only, named inside `to`.
+        // A link or a name that leaves it is not a part of a plugin.
         let Some(name) = entry.enclosed_name() else {
             continue;
         };
@@ -536,7 +538,8 @@ fn unpack(bytes: &[u8], to: &Path) -> Result<()> {
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
         std::fs::write(&target, bytes)?;
-        // Readable, and runnable when the archive says so: never the special bits it may carry.
+        // Readable, and runnable when the archive says so.
+        // The special bits the archive may carry are never kept.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -550,8 +553,9 @@ fn unpack(bytes: &[u8], to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The directory a tree is really kept in: the one entry beneath `dir` when that is all
-/// there is, as in an archive of a repository, and `dir` itself otherwise.
+/// The directory a tree is really kept in.
+/// It is the one entry beneath `dir` when that is all there is, as in an archive of a repository.
+/// Otherwise it is `dir` itself.
 fn single_root(dir: &Path) -> PathBuf {
     let entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .into_iter()
@@ -565,8 +569,8 @@ fn single_root(dir: &Path) -> PathBuf {
     }
 }
 
-/// Install the plugin `source` names under `home`, named `name`. It keeps the name of
-/// `market`, to be updated from it.
+/// Install the plugin `source` names under `home`, named `name`.
+/// It keeps the name of `market`, to be updated from it.
 pub fn install_source(
     home: &Path,
     source: &crate::marketplace::Source,
@@ -582,8 +586,9 @@ pub fn install_source(
     })
 }
 
-/// Bring the plugin `name` under `home` to what `source` holds now, asking `agree` as
-/// `update` does. Says what changed.
+/// Bring the plugin `name` under `home` to what `source` holds now, asking `agree` as `update`
+/// does.
+/// Says what changed.
 pub fn update_source(
     home: &Path,
     source: &crate::marketplace::Source,
@@ -593,8 +598,9 @@ pub fn update_source(
     update_with(home, name, |landing| fetch_into(source, landing), agree)
 }
 
-/// Bring the plugin `name` under `home` to what the marketplace directory `dir` holds now,
-/// asking `agree` as `update` does. Says what changed.
+/// Bring the plugin `name` under `home` to what the marketplace directory `dir` holds now, asking
+/// `agree` as `update` does.
+/// Says what changed.
 pub fn update_from_dir(
     home: &Path,
     dir: &Path,
@@ -665,9 +671,10 @@ fn same_tree(a: &Path, b: &Path) -> bool {
     files(a) == files(b)
 }
 
-/// Bring the installed plugin `name` under `home` up to its source. `agree` is shown the
-/// plugin as it would be when it runs something new, and says whether to take it. Says
-/// what changed.
+/// Bring the installed plugin `name` under `home` up to its source.
+/// `agree` is shown the plugin as it would be when it runs something new, and says whether to take
+/// it.
+/// Says what changed.
 pub fn update(home: &Path, name: &str, agree: impl FnOnce(&Plugin) -> bool) -> Result<String> {
     let dir = home.join(name);
     let before = read_plugin(&dir, name)?;
@@ -736,8 +743,9 @@ mod tests {
         dir
     }
 
-    /// A plugin is read with what it brings, one turned off is marked, and one that cannot
-    /// be read is said.
+    /// A plugin is read with what it brings.
+    /// One turned off is marked.
+    /// One that cannot be read is said.
     #[test]
     fn plugins_are_read_and_turned_off_by_name() {
         let home = tempfile::tempdir().unwrap();
@@ -774,8 +782,9 @@ mod tests {
         assert_eq!(name_for("https://example.com/a b"), None);
     }
 
-    /// An archive is unpacked as ordinary files: a link and a name that leaves the directory
-    /// are left out, and the special permission bits are not kept.
+    /// An archive is unpacked as ordinary files.
+    /// A link and a name that leaves the directory are left out.
+    /// The special permission bits are not kept.
     #[test]
     fn an_archive_is_unpacked_safely() {
         use std::io::Write;
@@ -811,8 +820,10 @@ mod tests {
         assert_eq!(single_root(&to), to.join("plug"));
     }
 
-    /// A plugin is installed from git when agreed to, not otherwise, updated when its
-    /// source moves, asked about again when what it runs changes, and removed.
+    /// A plugin is installed from git when agreed to, not otherwise.
+    /// It is updated when its source moves.
+    /// It is asked about again when what it runs changes.
+    /// It can be removed.
     #[test]
     fn a_plugin_is_installed_updated_and_removed() {
         let dir = tempfile::tempdir().unwrap();
@@ -883,8 +894,8 @@ mod tests {
         assert!(remove(&home, "fmt").is_err());
     }
 
-    /// A plugin copied from a marketplace remembers it, and an update copies it again,
-    /// asking when what it runs changes.
+    /// A plugin copied from a marketplace remembers it.
+    /// An update copies it again, asking when what it runs changes.
     #[test]
     fn a_plugin_is_copied_from_a_marketplace() {
         let dir = tempfile::tempdir().unwrap();

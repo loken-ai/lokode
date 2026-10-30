@@ -1,10 +1,11 @@
 //! Making the root a boundary for the commands the agent runs.
 //!
-//! The path sandbox governs the tools that take paths. A shell takes a string, and an
-//! approved command runs with the user's privileges. A confined command and everything it
-//! starts may write only beneath the directories its [`Sandbox`] names, and to the devices
-//! under `/dev`. It may read everything but what the sandbox hides, and open TCP
-//! connections only when the sandbox lets it.
+//! The path sandbox governs the tools that take paths.
+//! A shell takes a string, and an approved command runs with the user's privileges.
+//! A confined command and everything it starts may write only beneath the directories its
+//! [`Sandbox`] names, and to the devices under `/dev`.
+//! It may read everything but what the sandbox hides.
+//! It may open TCP connections only when the sandbox lets it.
 //!
 //! | System | Mechanism |
 //! |---|---|
@@ -39,9 +40,10 @@ pub fn cuts_network() -> bool {
     }
 }
 
-/// A command that runs `program` with `args`, in `sandbox` when there is one, and what
-/// must be kept until it has been spawned. A sandbox that cannot be applied is an error,
-/// never a command left unconfined.
+/// A command that runs `program` with `args`, in `sandbox` when there is one.
+///
+/// It also returns what must be kept until it has been spawned.
+/// A sandbox that cannot be applied is an error, never a command left unconfined.
 pub fn command(
     sandbox: Option<&Sandbox>,
     program: &str,
@@ -114,9 +116,11 @@ impl Sandbox {
         Ok((cmd, Some(fd)))
     }
 
-    /// Confine `cmd` with Landlock: take out the variables it must not see, and have it
-    /// give up what the sandbox does not allow before it runs. The descriptor returned
-    /// must outlive the spawn.
+    /// Confine `cmd` with Landlock.
+    ///
+    /// It takes out the variables the command must not see.
+    /// It has the command give up what the sandbox does not allow before it runs.
+    /// The descriptor returned must outlive the spawn.
     fn confine(&self, cmd: &mut tokio::process::Command) -> std::io::Result<std::os::fd::OwnedFd> {
         for var in &self.unset {
             cmd.env_remove(var);
@@ -124,9 +128,9 @@ impl Sandbox {
         let fd = ruleset(&self.writable, &self.hidden, self.network)?;
         use std::os::fd::AsRawFd;
         let raw = fd.as_raw_fd();
-        // SAFETY: `restrict_after_fork` makes 2 syscalls and nothing else, no allocation
-        // and no locks, which is what a post-fork hook may do. `raw` stays open because
-        // the caller keeps `fd` until the spawn is over.
+        // SAFETY: `restrict_after_fork` makes 2 syscalls and nothing else.
+        // It does no allocation and takes no locks, which is what a post-fork hook may do.
+        // `raw` stays open because the caller keeps `fd` until the spawn is over.
         unsafe {
             cmd.pre_exec(move || restrict_after_fork(raw));
         }
@@ -152,16 +156,17 @@ impl Sandbox {
 
 /// The macOS sandbox: a profile in Seatbelt's language, and the command that runs under it.
 ///
-/// Built on every system, so what it writes is tested wherever the tests run. The profile
-/// allows everything the Linux sandbox does not govern, then takes away what it does: writes
-/// outside the writable paths and the devices, reads of what is hidden, and TCP.
+/// Built on every system, so what it writes is tested wherever the tests run.
+/// The profile allows everything the Linux sandbox does not govern, then takes away what it
+/// does.
+/// That is writes outside the writable paths and the devices, reads of what is hidden, and TCP.
 mod seatbelt {
     use std::path::{Path, PathBuf};
 
     pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
-    /// The path as the system names it: `/tmp` is `/private/tmp` there, and a profile
-    /// matches the real path.
+    /// The path as the system names it.
+    /// `/tmp` is `/private/tmp` there, and a profile matches the real path.
     fn real(path: &Path) -> PathBuf {
         path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
     }
@@ -181,7 +186,8 @@ mod seatbelt {
         }
     }
 
-    /// The profile for `sandbox`. The last rule that matches decides.
+    /// The profile for `sandbox`.
+    /// The last rule that matches decides.
     pub fn profile(sandbox: &super::Sandbox) -> String {
         let mut out = vec![
             "(version 1)".to_string(),
@@ -261,7 +267,7 @@ mod linux {
 
     /// The kernel's Landlock ABI, or `None` where there is no Landlock.
     pub fn abi() -> Option<u32> {
-        // SAFETY: the documented way to ask - a null attribute with the version flag.
+        // SAFETY: the documented way to ask: a null attribute with the version flag.
         let v = unsafe {
             libc::syscall(
                 SYS_CREATE_RULESET,
@@ -296,10 +302,10 @@ mod linux {
 
     /// Build the ruleset in the parent.
     ///
-    /// Deliberately all of it: creating the ruleset and adding a rule per allowed directory
-    /// both allocate and open files, and doing that between `fork` and `exec` in a process
-    /// with other threads can deadlock in the allocator. What is left for the child is 2
-    /// bare syscalls.
+    /// Creating the ruleset and adding a rule per allowed directory both allocate and open files.
+    /// Doing that between `fork` and `exec` in a process with other threads can deadlock in the
+    /// allocator.
+    /// What is left for the child is 2 bare syscalls.
     pub fn ruleset(writable: &[PathBuf], hidden: &[PathBuf], network: bool) -> io::Result<OwnedFd> {
         let Some(abi) = abi() else {
             return Err(io::Error::other("this kernel has no Landlock"));
@@ -341,8 +347,8 @@ mod linux {
             };
             allow_beneath(&ruleset, path, access)?;
         }
-        // Writing to a device is how a command discards output or talks to a terminal, and
-        // a device cannot be made or removed under this rule.
+        // Writing to a device is how a command discards output or talks to a terminal.
+        // A device cannot be made or removed under this rule.
         let devices = match abi {
             1 | 2 => WRITE_FILE,
             _ => WRITE_FILE | TRUNCATE,
@@ -365,10 +371,10 @@ mod linux {
         Ok(ruleset)
     }
 
-    /// What may be read beneath `dir` with `hidden` kept out: each path, and whether all
-    /// of it may be read or only the names in it. A directory with something hidden below
-    /// it has its names readable and is walked into. Names stay readable all the way down,
-    /// contents of hidden paths do not.
+    /// What may be read beneath `dir` with `hidden` kept out.
+    /// Each path comes with whether all of it may be read or only the names in it.
+    /// A directory with something hidden below it has its names readable and is walked into.
+    /// Names stay readable all the way down, contents of hidden paths do not.
     pub(super) fn readable(dir: &Path, hidden: &[PathBuf]) -> Vec<(PathBuf, bool)> {
         let mut out = Vec::new();
         walk(dir, hidden, &mut out);
@@ -406,11 +412,11 @@ mod linux {
     fn allow_beneath(ruleset: &OwnedFd, dir: &Path, access: u64) -> io::Result<()> {
         let c_path = std::ffi::CString::new(dir.as_os_str().as_bytes())
             .map_err(|_| io::Error::other("path contains a null byte"))?;
-        // SAFETY: a valid C string; O_PATH opens the directory as a reference only.
+        // SAFETY: a valid C string, and O_PATH opens the directory as a reference only.
         let parent = unsafe { libc::open(c_path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
         if parent < 0 {
-            // A path that does not open cannot be reached through this rule either, so
-            // this is not fatal: the point is what the command may reach.
+            // A path that does not open cannot be reached through this rule either.
+            // This is not fatal: the point is what the command may reach.
             tracing::debug!(path = %dir.display(), "not adding a landlock rule for a path that does not open");
             return Ok(());
         }
@@ -445,8 +451,8 @@ mod linux {
     /// # Safety
     /// `fd` must be an open Landlock ruleset descriptor.
     pub unsafe fn restrict_after_fork(fd: RawFd) -> io::Result<()> {
-        // Landlock refuses to apply without this, which is what stops a confined command
-        // from regaining privileges through a setuid binary.
+        // Landlock refuses to apply without this.
+        // It stops a confined command from regaining privileges through a setuid binary.
         if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -548,8 +554,8 @@ mod tests {
         assert_eq!(args, ["-p", profile.as_str(), "--", "/bin/sh", "-lc", "ls"]);
     }
 
-    /// Whether it is available is a fact about the machine, and the answer has to be a fact
-    /// rather than a guess - the shell is confined or it is not.
+    /// Whether it is available is a fact about the machine.
+    /// The answer is a fact, not a guess: the shell is confined or it is not.
     #[test]
     fn availability_is_reported_honestly() {
         match abi() {
@@ -586,8 +592,9 @@ mod tests {
         .is_ok());
     }
 
-    /// A hidden path is left out, the directories above it keep their names readable,
-    /// and everything beside them is readable whole.
+    /// A hidden path is left out.
+    /// The directories above it keep their names readable.
+    /// Everything beside them is readable whole.
     #[cfg(target_os = "linux")]
     #[test]
     fn what_is_hidden_is_left_out_of_what_is_read() {

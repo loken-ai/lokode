@@ -1,14 +1,17 @@
 //! Signing in to a tool server over HTTP, the way the protocol's authorization says.
 //!
-//! A server that wants a signed-in user answers 401 and names the document that says
-//! which authorization server it trusts. That server's own document gives the addresses to
-//! sign in at and to get a token from. A client unknown to it registers itself when it
-//! offers registration, or uses the `client-id` the configuration gives.
+//! A server that wants a signed-in user answers 401.
+//! The answer names the document that says which authorization server it trusts.
+//! That server's own document gives the addresses to sign in at and to get a token from.
+//! A client unknown to it registers itself when it offers registration.
+//! Otherwise the client uses the `client-id` the configuration gives.
 //!
-//! The person signs in in their browser. The browser comes back to a port this process
-//! listens on, on the loopback address only, with a code bound to a secret that never left
-//! the process. The code is traded for a token, which is kept in the data directory,
-//! readable by the user alone, and renewed when it runs out.
+//! The person signs in in their browser.
+//! The browser comes back to a port this process listens on, on the loopback address only.
+//! It brings a code bound to a secret that never left the process.
+//! The code is traded for a token.
+//! The token is kept in the data directory, readable by the user alone.
+//! It is renewed when it runs out.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -109,7 +112,9 @@ pub fn keep(url: &str, tokens: Tokens) -> Result<()> {
     write_store(&store)
 }
 
-/// Forget what is kept for the server at `url`. Says whether there was anything.
+/// Forget what is kept for the server at `url`.
+///
+/// Says whether there was anything.
 pub fn forget(url: &str) -> Result<bool> {
     let mut store = read_store();
     let had = store.remove(url).is_some();
@@ -119,8 +124,10 @@ pub fn forget(url: &str) -> Result<bool> {
     Ok(had)
 }
 
-/// A token for the server at `url` that works now: the one kept, renewed first when it
-/// has run out. `None` when nothing is kept.
+/// A token for the server at `url` that works now.
+///
+/// It is the one kept, renewed first when it has run out.
+/// `None` when nothing is kept.
 pub async fn bearer(http: &reqwest::Client, url: &str) -> Result<Option<String>> {
     let Some(tokens) = stored(url) else {
         return Ok(None);
@@ -188,8 +195,9 @@ pub struct Pending {
     http: reqwest::Client,
 }
 
-/// Find out where to sign in to the server at `server_url`, and get ready for the browser
-/// to come back.
+/// Find out where to sign in to the server at `server_url`.
+///
+/// Gets ready for the browser to come back.
 pub async fn begin(server_url: &str, settings: &Settings) -> Result<Pending> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -358,8 +366,8 @@ fn origin(url: &url::Url) -> String {
     url.origin().ascii_serialization()
 }
 
-/// `{origin}/.well-known/{name}{path}`, the way a document about a url with a path is
-/// placed, then without the path.
+/// `{origin}/.well-known/{name}{path}`, the way a document about a url with a path is placed.
+/// Then the same without the path.
 fn well_known(url: &url::Url, name: &str) -> Vec<String> {
     let base = origin(url);
     let path = url.path().trim_end_matches('/');
@@ -371,9 +379,10 @@ fn well_known(url: &url::Url, name: &str) -> Vec<String> {
     out
 }
 
-/// The authorization server the server at `server` trusts, and the scopes it names, from
-/// its protected resource document. Found through the 401 it answers, or where such a
-/// document is placed.
+/// The authorization server the server at `server` trusts, and the scopes it names.
+///
+/// Both come from its protected resource document.
+/// The document is found through the 401 it answers, or where such a document is placed.
 async fn protected_resource(
     http: &reqwest::Client,
     server: &url::Url,
@@ -429,8 +438,9 @@ fn resource_metadata(header: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-/// The addresses of the authorization server `issuer`, from its document, or the ones an
-/// earlier revision of the protocol placed under it when it has none.
+/// The addresses of the authorization server `issuer`, from its document.
+///
+/// When it has none, they are the ones an earlier revision of the protocol placed under it.
 async fn authorization_server(http: &reqwest::Client, issuer: &str) -> Result<Endpoints> {
     let url = url::Url::parse(issuer).context("the authorization server's url")?;
     let places = well_known(&url, "oauth-authorization-server")
@@ -467,8 +477,9 @@ async fn authorization_server(http: &reqwest::Client, issuer: &str) -> Result<En
     })
 }
 
-/// Register lokode with the authorization server, for the browser to come back to
-/// `redirect`. Gives the client id, and its secret when the server issues one.
+/// Register lokode with the authorization server, for the browser to come back to `redirect`.
+///
+/// Gives the client id, and its secret when the server issues one.
 async fn register(
     http: &reqwest::Client,
     endpoint: &str,
@@ -624,8 +635,9 @@ mod tests {
         );
     }
 
-    /// A token answer fills the token, keeps a refresh token it does not replace, and
-    /// dates the end.
+    /// A token answer fills the token.
+    /// It keeps a refresh token it does not replace.
+    /// It dates the end.
     #[test]
     fn a_token_answer_is_read() {
         let blank = Tokens {

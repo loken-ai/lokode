@@ -30,12 +30,13 @@ use crate::ui::term;
 
 /// How long to let the agent finish what it is doing after being asked to stop.
 ///
-/// It is asked, not killed: aborting the task can drop it inside a filesystem write and
-/// leave a file half-written. The grace period bounds how long a wedged tool can delay
-/// the exit before the process leaves anyway.
+/// The agent is asked to stop, not killed.
+/// Aborting the task can drop it inside a filesystem write and leave a file half-written.
+/// The grace period bounds how long a wedged tool can delay the exit.
+/// The process leaves anyway when it ends.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
-/// How far a page key moves in a list, which is what a page of it is.
+/// How far a page key moves in a list.
 const ROWS_AT_A_TIME: usize = 12;
 
 /// Move the highlight in the list now open, if one is.
@@ -47,8 +48,7 @@ fn chosen_move(state: &mut UiState, by: isize) {
 
 /// One user turn handed to the agent, with the handle that abandons it.
 ///
-/// The token is minted by the UI rather than the agent, because the side that has to
-/// react to `Esc` is the side that must already be holding it.
+/// The UI mints the token, because the side that reacts to `Esc` must already hold it.
 pub(crate) struct TurnRequest {
     pub(crate) text: String,
     pub(crate) cancel: CancellationToken,
@@ -85,17 +85,18 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
     cfg.mode = agent.cfg.mode;
 
     // Channels:
-    //   input_tx → agent task ── pushes "user said X"
-    //   agent_evt_tx → UI     ── streaming text + tool events
+    // `input_tx`: UI to agent task, carries what the user said.
+    // `agent_evt_tx`: agent to UI, carries streaming text and tool events.
     let (input_tx, mut input_rx) = mpsc::channel::<TurnRequest>(4);
-    // Asked of the agent between turns, because it owns the session and the interface
-    // cannot read it from here.
+    // Asked of the agent between turns.
+    // The agent owns the session and the interface cannot read it from here.
     let (control_tx, mut control_rx) = mpsc::channel::<crate::agent::agent_loop::Control>(4);
     let (agent_evt_tx, mut agent_evt_rx) = mpsc::channel::<AgentEvent>(128);
     let agent_evt_tx_for_loop = agent_evt_tx.clone();
-    // Asked once, while the user is still reading the first screen: does this backend
-    // actually do native tool calls? A backend that takes the definitions and drops them
-    // fails nothing, so nothing else would ever find out.
+    // Asked once, while the user is still reading the first screen.
+    // It checks whether this backend does native tool calls.
+    // A backend that takes the definitions and drops them fails nothing, so nothing else would
+    // find out.
     if cfg.tool_protocol == crate::app::ProtocolChoice::Auto {
         let backend = agent.backend.clone();
         let model_probed = agent.cfg.model.clone();
@@ -120,17 +121,16 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         });
     }
 
-    // What window the backend serves, found out with the screen already up. Asking a
-    // server that holds no model means holding one ready first, which is the whole load
-    // of it: a minute of blank terminal before anything was drawn, because none of this
-    // used to run until it was finished.
+    // What window the backend serves, found out with the screen already up.
+    // Asking a server that holds no model means holding one ready first, which is the whole load
+    // of it.
     {
         let backend = agent.backend.clone();
         let model_asked = agent.cfg.model.clone();
         let url = cfg.backend_url.clone();
         let nearby = crate::config::backend_is_nearby(&cfg.backend_url);
-        // What this session asked for, so what comes back is only remarked on when it
-        // differs.
+        // What this session asked for.
+        // What comes back is remarked on only when it differs.
         let asked = cfg
             .models
             .get(&agent.cfg.model)
@@ -142,12 +142,12 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         tokio::spawn(async move {
             if let (true, Ok(http)) = (find_window, crate::tools::registry::tool_http_client()) {
                 let mut said = crate::backend::window::of(&http, &url, &model_asked).await;
-                // A server describes the models it holds, and a cold one holds none. What
-                // the next request needs anyway is the model held ready, so it is asked
-                // for - and said, because it is the slowest thing a session ever waits on.
+                // A server describes the models it holds, and a cold one holds none.
+                // The next request needs the model held ready, so it is asked for.
+                // It is said, because it is the slowest thing a session waits on.
                 //
-                // Only where the weights are near: a hosted endpoint has nothing to hold
-                // ready and would bill the attempt.
+                // Only where the weights are near.
+                // A hosted endpoint has nothing to hold ready and would bill the attempt.
                 if said.is_none() && nearby && !token.is_cancelled() {
                     // Its own stop, so stopping it leaves the rest of this to finish.
                     let warm = token.child_token();
@@ -162,10 +162,10 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
                         done = backend.warm(&model_asked) => Some(done),
                     };
                     let _ = events.send(AgentEvent::Background(None)).await;
-                    // Asked again only if it was held: a backend that could not hold the
-                    // model has nothing new to say about the window. The catalogue below
-                    // is still worth having - it is what finishes a name being typed, and
-                    // skipping it left completion silently empty.
+                    // Asked again only if it was held.
+                    // A backend that could not hold the model has nothing new to say about the
+                    // window.
+                    // The catalogue below is always read, since it finishes a name being typed.
                     if matches!(warmed, Some(Ok(()))) {
                         said = crate::backend::window::of(&http, &url, &model_asked).await;
                     }
@@ -175,9 +175,9 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
                         let _ = control
                             .send(crate::agent::agent_loop::Control::SeeWindow(served))
                             .await;
-                        // Said when it is not what was asked for, which is the case worth
-                        // knowing: the history is about to be sized to somebody else's
-                        // number rather than the one in the configuration.
+                        // Said when it is not what was asked for.
+                        // The history is about to be sized to another number than the one in the
+                        // configuration.
                         if served != asked {
                             let _ = events
                                 .send(AgentEvent::Notice(format!(
@@ -187,9 +187,9 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
                                 .await;
                         }
                     }
-                    // Nothing said, so nothing is known: the window the session was
-                    // configured with stands, and a prompt cut to fit a smaller one is
-                    // caught from what comes back.
+                    // Nothing said, so nothing is known.
+                    // The window the session was configured with stands.
+                    // A prompt cut to fit a smaller one is caught from what comes back.
                     None => {
                         let _ = events
                             .send(AgentEvent::Notice(
@@ -211,8 +211,9 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
     let stop_all = shutdown.clone();
     let agent_task = tokio::spawn(async move {
         loop {
-            // A control request is answered between turns: the turn channel is read
-            // first, so nothing can slip a change under a request being built.
+            // A control request is answered between turns.
+            // The turn channel is read first, so nothing can slip a change under a request being
+            // built.
             tokio::select! {
                 biased;
                 turn = input_rx.recv() => {
@@ -231,8 +232,8 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
                     let Some(request) = request else { break };
                     agent.control(request, &agent_evt_tx_for_loop).await;
                 }
-                // What an agent working in the background answered while no turn ran:
-                // the session takes it up, as the answer was meant for it.
+                // What an agent working in the background answered while no turn ran.
+                // The session takes it up, as the answer was meant for it.
                 said = agent.steer.recv() => {
                     let Some(said) = said else { continue };
                     let cancel = stop_all.child_token();
@@ -254,14 +255,14 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
 
     let startup_notices = [instruction_notes, mcp.notices.clone()].concat();
 
-    // The hook goes in before the terminal is taken, so the window in which a panic could
-    // escape uncovered never opens.
+    // The hook goes in before the terminal is taken.
+    // A panic therefore never escapes uncovered.
     term::install_panic_hook();
-    // Asked before the screen is taken: the answer arrives on the input the event loop
-    // reads from then on.
+    // Asked before the screen is taken.
+    // The answer arrives on the input the event loop reads from then on.
     crate::ui::theme::set(crate::ui::theme::Theme::detect());
-    // The grammars are read off the screen's thread, so the first code block does not
-    // wait for them.
+    // The grammars are read off the screen's thread.
+    // The first code block does not wait for them.
     tokio::task::spawn_blocking(crate::ui::highlight::warm);
     let guard = term::TerminalGuard::new()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
@@ -297,13 +298,13 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
     // Hand the screen back before anything else can print to it.
     drop(guard);
 
-    // Ask the agent to stop rather than aborting it: the task could be inside a
-    // filesystem write, and dropping it there leaves a truncated file behind. Dropping
-    // `input_tx` above closed the channel, so the agent's own loop ends once the turn in
-    // flight notices the cancellation.
+    // Ask the agent to stop rather than aborting it.
+    // The task could be inside a filesystem write, and dropping it there leaves a truncated file.
+    // Dropping `input_tx` above closed the channel.
+    // The agent's own loop ends once the turn in flight notices the cancellation.
     shutdown.cancel();
-    // Language servers are killed on drop either way; this gives them the chance to put
-    // their own caches down cleanly first.
+    // Language servers are killed on drop either way.
+    // This gives them the chance to put their own caches down cleanly first.
     let _ = tokio::time::timeout(SHUTDOWN_GRACE, lsp.shutdown()).await;
     for client in crate::mcp::snapshot(&mcp_clients) {
         client.shutdown().await;
@@ -312,9 +313,9 @@ pub async fn run(mut cfg: AppConfig) -> Result<()> {
         .await
         .is_ok();
 
-    // The agent owned the session, so its ending closed the transcript. Waiting for the
-    // writer here is what gets the last few records onto disk: without it the process
-    // exits first and a session loses precisely the part someone wanted to read.
+    // The agent owned the session, so its ending closed the transcript.
+    // Waiting for the writer here gets the last records onto disk.
+    // Without it the process exits first and the session loses its last part.
     if let Some(recorder) = recorder {
         if agent_stopped {
             let _ = tokio::time::timeout(SHUTDOWN_GRACE, recorder).await;
@@ -340,7 +341,8 @@ pub async fn run_remote(mut cfg: AppConfig, url: String, session: Option<String>
     let hello = remote::hello(&server).await?;
     cfg.root = hello.root.clone();
     cfg.remote = true;
-    // The backend is the server's to know: what this screen talks to is the server.
+    // The backend is the server's to know.
+    // This screen talks to the server.
     cfg.backend_url = url.split('?').next().unwrap_or_default().to_string();
     let shutdown = CancellationToken::new();
 
@@ -476,20 +478,20 @@ async fn run_ui(
     lsp: Arc<crate::lsp::LspPool>,
     // Lines the tools are printing as they print them.
     live: &mut mpsc::Receiver<crate::tools::registry::LiveOutput>,
-    // The servers, for the prompts /mcp can take. Cloned handles: the process still owns
-    // them and still shuts them down.
+    // The servers, for the prompts /mcp can take.
+    // Cloned handles: the process still owns them and still shuts them down.
     mcp: crate::mcp::Clients,
-    // What has been agreed to for this session, so a standing decision can be taken from
-    // the keyboard as well as at the prompt.
+    // What has been agreed to for this session.
+    // A standing decision can be taken from the keyboard as well as at the prompt.
     session_approvals: std::sync::Arc<crate::sandbox::approval::SessionApprovals>,
     agent_evt_rx: &mut mpsc::Receiver<AgentEvent>,
     approval_rx: &mut mpsc::Receiver<ApprovalPrompt>,
     // The forms the tool servers put to the person.
     questions: &mut mpsc::Receiver<crate::mcp::host::Question>,
 ) -> Result<()> {
-    // What the background worker has to say, and the handle that stops it. It runs only
-    // while nothing else does, so the token is fired the moment a turn starts: the user's
-    // work must never wait behind work nobody asked for.
+    // What the background worker has to say, and the handle that stops it.
+    // It runs only while nothing else does.
+    // The token is fired the moment a turn starts, so the user's work never waits behind it.
     let (learn_tx, mut learn_rx) = mpsc::channel::<Option<String>>(4);
     // What a command said once its work in the background was over.
     let (later_tx, mut later_rx) = mpsc::channel::<String>(4);
@@ -508,17 +510,16 @@ async fn run_ui(
     };
     session_approvals.accept_writes(cfg.accept_writes);
     state.tasks = tasks.get().await;
-    // The protocol is not stated here: it is settled by asking the backend, which has not
-    // answered yet, and the status line carries whatever it turns out to be.
-    // The keys live on their own line under the input, where they are always in view, so
-    // the welcome says the one thing that line cannot: what this session is talking to.
+    // The protocol is not stated here.
+    // It is settled by asking the backend, and the status line carries the result.
+    // The keys live on their own line under the input, where they are always in view.
+    // The welcome says what that line cannot: what this session is talking to.
     state
         .entries
         .push(Entry::Notice(format!("backend {}", cfg.backend_url)));
     if !restored.is_empty() {
-        // In view, which used to be said of messages that were nowhere on screen: the
-        // model could see a conversation the person could not, and the first question of
-        // the new turn read as the first question of the session.
+        // The restored messages are put in view.
+        // The model sees the conversation, so the person sees it too.
         let said = restored.len();
         state.entries.extend(what_was_said(&restored));
         state.entries.push(Entry::Notice(format!(
@@ -533,7 +534,7 @@ async fn run_ui(
     for notice in &startup_notices {
         state.entries.push(Entry::Notice(notice.clone()));
     }
-    // Raised while resolving settings, before there was a screen to say them on.
+    // Raised while resolving settings, before a screen exists to say them on.
     for warning in &cfg.warnings {
         state
             .entries
@@ -542,8 +543,9 @@ async fn run_ui(
 
     let mut input = fresh_input("");
 
-    // The power the backend's machine draws, read while a turn runs against a backend on
-    // this machine or network. A hosted one has no such listing to read.
+    // The power the backend's machine draws.
+    // It is read while a turn runs against a backend on this machine or network.
+    // A hosted one has no such listing to read.
     let (busy_tx, busy_rx) = tokio::sync::watch::channel(false);
     let (power_tx, mut power_rx) = mpsc::channel::<crate::backend::devices::Power>(4);
     if crate::config::backend_is_nearby(&cfg.backend_url) {
@@ -577,8 +579,8 @@ async fn run_ui(
             *was = state.busy;
             changed
         });
-        // The window's title and the tab's progress say what the session is doing, and are
-        // written only when that changes.
+        // The window's title and the tab's progress say what the session is doing.
+        // They are written only when that changes.
         let project = cfg
             .root
             .file_name()
@@ -605,9 +607,9 @@ async fn run_ui(
         term::end_frame();
         drawn?;
 
-        // Nothing is happening, there is something to find out, and nobody is waiting:
-        // the 3 conditions together are what makes this free. One question at a time,
-        // so the machine is never given more than it was idle for.
+        // Nothing is happening, there is something to find out, and nobody is waiting.
+        // These 3 conditions together make this free.
+        // One question at a time, so the machine is never given more than it was idle for.
         if !state.busy && discovering.is_none() && !state.discovery_stopped {
             if let Some(worker) = &discovery {
                 let next = digest.lock().await.questions.first().cloned();
@@ -630,10 +632,10 @@ async fn run_ui(
             }
         }
 
-        // The only timer, armed only while time passing is itself a change to draw. At
-        // idle every reason to redraw arrives as an event - a keystroke, a resize, a piece
-        // of the answer, an approval - and this arm never completes, so nothing wakes the
-        // loop.
+        // The only timer, armed only while time passing is itself a change to draw.
+        // At idle every reason to redraw arrives as an event: a keystroke, a resize, a piece of
+        // the answer, an approval.
+        // This arm never completes at idle, so nothing wakes the loop.
         let wake = state.next_wake();
         let timer = async {
             match wake {
@@ -649,8 +651,9 @@ async fn run_ui(
                 state.follow_the_drag();
             }
 
-            // One question at a time: another waits in the channel until this one is
-            // answered, so no answer is lost to a question drawn over it.
+            // One question at a time.
+            // Another waits in the channel until this one is answered.
+            // No answer is lost to a question drawn over it.
             Some(prompt) = approval_rx.recv(),
                 if state.pending_approval.is_none()
                     && state.refusing.is_none()
@@ -661,21 +664,20 @@ async fn run_ui(
                 if !state.focused {
                     term::notify("lokode", &format!("waiting for you: {}", prompt.req.summary));
                 }
-                // In the thread, where the conversation the change has to be judged
-                // against is still visible, and where it scrolls with everything else.
+                // In the thread, where the conversation the change is judged against is still
+                // visible.
+                // It scrolls with everything else.
                 state.entries.push(Entry::Approval {
                     tool: prompt.req.tool.clone(),
                     summary: prompt.req.summary.clone(),
                     diff: prompt.req.diff_preview.clone(),
                     scope: prompt.req.scope.describe_under(&cfg.root),
                 });
-                // Pointing at it, so space opens the rest of the diff without anyone
-                // having to go looking for it.
+                // Pointing at it, so space opens the rest of the diff.
                 state.at_entry = Some(state.entries.len() - 1);
                 state.pending_approval = Some(prompt);
-                // The turn is not running anything: it is waiting on the person. Saying
-                // "running write_file" for the minutes a prompt sits there is the one
-                // thing the status line must never do.
+                // The turn is not running anything: it is waiting on the person.
+                // The status line must not say "running write_file" while a prompt sits there.
                 state.waiting_since = Some(Instant::now());
             }
 
@@ -706,9 +708,9 @@ async fn run_ui(
                 Hand::Printed(id, tail) => state.show_tail(Some(&id), "$", tail.read()),
                 Hand::Done { id, command, is_error, body, took } => {
                     state.hand.retain(|(running, _)| *running != id);
-                    // Handed to the conversation as well: running a test and then asking
-                    // about the failure only works if the failure is something the model
-                    // has seen.
+                    // Handed to the conversation as well.
+                    // Asking about a failure after running a test requires the model to have seen
+                    // the failure.
                     let _ = control_tx
                         .send(crate::agent::agent_loop::Control::Note(format!(
                             "I ran `{command}` myself. It said:\n{body}"
@@ -728,9 +730,9 @@ async fn run_ui(
             },
 
             Some(printed) = live.recv() => {
-                // Kept as one entry that grows rather than a line each: a build's output
-                // is one thing happening, and 100 entries would push the answer it
-                // belongs to off the screen.
+                // Kept as one entry that grows, not a line each.
+                // A build's output is one thing happening.
+                // One entry per line would push the answer it belongs to off the screen.
                 match printed.what {
                     crate::tools::registry::Live::Printed(tail) => {
                         state.show_tail(printed.call.as_deref(), &printed.tool, tail.read())
@@ -761,8 +763,8 @@ async fn run_ui(
             Some(learned) = learn_rx.recv() => {
                 discovering = None;
                 state.aside.retain(|a| a.kind != crate::ui::state::AsideKind::Discover);
-                // Said once, in a line: what was found is worth knowing, and a paragraph
-                // about it in the middle of somebody's work is not.
+                // Said once, in a line.
+                // A paragraph about what was found would interrupt the work.
                 if let Some(text) = learned {
                     state.entries.push(Entry::Notice(format!("looked into the project: {text}")));
                 }
@@ -790,8 +792,9 @@ async fn run_ui(
                             .push(Entry::Step(Step::called(id, name, &args_pretty)));
                     }
                     AgentEvent::ToolResult { id, name, output, took, origin } => {
-                        // The list is the model's, so it is read back after the call that
-                        // may have changed it rather than kept in step by hand.
+                        // The list is the model's.
+                        // It is read back after the call that may have changed it, not kept in
+                        // step by hand.
                         if name == "update_plan" || name == "submit_plan" {
                             state.tasks = tasks.get().await;
                         }
@@ -855,20 +858,20 @@ async fn run_ui(
                         state.entries.push(Entry::Receipt(r));
                     }
                     AgentEvent::TurnDone => {
-                        // Asked once a turn is over, which is when the conversation has
-                        // changed and the agent is free to answer.
+                        // Asked once a turn is over.
+                        // The conversation has changed and the agent is free to answer.
                         refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                         state.busy = false;
-                        // The turn's calls are over, the ones made inside a delegated
-                        // session too.
+                        // The turn's calls are over, including the ones made inside a delegated
+                        // session.
                         state.stops.clear();
                         state.step = 0;
                         state.phase = None;
                         state.prefill = None;
                         state.turn_cancel = None;
-                        // A question whose asker gave up waiting goes with the turn: it
-                        // asks about something that will not happen either way. One an
-                        // agent working in the background still waits on stays up.
+                        // A question whose asker gave up waiting goes with the turn.
+                        // It asks about something that will not happen either way.
+                        // One an agent working in the background still waits on stays up.
                         if state
                             .pending_approval
                             .as_ref()
@@ -879,8 +882,9 @@ async fn run_ui(
                         if state.pending_approval.is_none() {
                             state.waiting_since = None;
                         }
-                        // What was typed while it ran and held back for now. One at a
-                        // time: each is a turn, and the ones after it wait as they were.
+                        // What was typed while the turn ran and held back is sent now.
+                        // One at a time.
+                        // Each is a turn, and the ones after it wait as they were.
                         if !state.queued.is_empty() {
                             let text = state.queued.remove(0);
                             state.entries.push(Entry::User(text.clone()));
@@ -896,8 +900,8 @@ async fn run_ui(
                 }
             }
 
-            // A key the interface plays itself, as a click on a list does, is taken before
-            // the terminal's next event.
+            // A key the interface plays itself, as a click on a list does.
+            // It is taken before the terminal's next event.
             maybe_evt = async {
                 match injected.pop_front() {
                     Some(evt) => Some(Ok(evt)),
@@ -905,12 +909,10 @@ async fn run_ui(
                 }
             } => {
                 let Some(Ok(evt)) = maybe_evt else { continue };
-                // Mouse capture was turned on from the beginning and nothing ever read an
-                // event, so the wheel did nothing in a pane whose purpose is scrolling.
-                // Pasted text arrives whole, so the newlines in it are newlines. Handed
-                // over a keystroke at a time - which is what a terminal does when nobody
-                // has asked otherwise - every one of them was the send key, and pasting
-                // 10 lines asked 10 questions made of fragments.
+                // Mouse events are read, so the wheel scrolls the pane.
+                //
+                // Pasted text arrives whole, so the newlines in it are newlines.
+                // They are not a stream of send keys.
                 match evt {
                     Event::FocusGained => {
                         state.focused = true;
@@ -935,8 +937,8 @@ async fn run_ui(
                     continue;
                 }
                 if let Event::Mouse(mouse) = evt {
-                    // A page or a list open over the rest takes the wheel, and a click on a
-                    // list takes what it lands on, as enter would.
+                    // A page or a list open over the rest takes the wheel.
+                    // A click on a list takes what it lands on, as enter would.
                     if let Some(sheet) = state.sheet.as_mut() {
                         let height = state.view_height.saturating_sub(2);
                         match mouse.kind {
@@ -986,11 +988,12 @@ async fn run_ui(
                     match mouse.kind {
                         MouseEventKind::ScrollUp => state.scroll_back(3),
                         MouseEventKind::ScrollDown => state.scroll_forward(3),
-                        // Taking the mouse is what buys the wheel, and it is also what
-                        // takes the terminal's own drag-to-select away. So the pane does
-                        // the selecting itself: pressing starts one, moving extends it,
-                        // and letting go puts it on the clipboard. Both are had at once
-                        // rather than one being traded for the other.
+                        // Taking the mouse buys the wheel and takes away the terminal's own
+                        // drag-to-select.
+                        // So the pane does the selecting itself.
+                        // Pressing starts a selection.
+                        // Moving extends it.
+                        // Letting go ends it.
                         MouseEventKind::Down(MouseButton::Left)
                             if state.rail_hit.as_ref().is_some_and(|(area, _)| {
                                 area.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
@@ -1018,8 +1021,8 @@ async fn run_ui(
                                 Some(spot) => {
                                     state.selecting = Some((spot, spot));
                                     state.dragging = true;
-                                    // Once a session, where it is about to matter: what
-                                    // is being selected here is this program's, and the
+                                    // Said once a session, where it is about to matter.
+                                    // What is selected here belongs to this program, and the
                                     // terminal's copy key cannot see it.
                                     if !state.said_how_to_copy {
                                         state.said_how_to_copy = true;
@@ -1032,8 +1035,8 @@ async fn run_ui(
                                         ));
                                     }
                                 }
-                                // Pressed outside the conversation: the previous selection
-                                // is let go, which is how a selection is dismissed.
+                                // Pressed outside the conversation.
+                                // The previous selection is let go, which dismisses it.
                                 None => state.selecting = None,
                             }
                         }
@@ -1042,12 +1045,12 @@ async fn run_ui(
                                 let to = state.spot_at_clamped(mouse.column, mouse.row);
                                 state.selecting = Some((from, to));
                             }
-                            // Dragged to an edge, the pane follows. Without it a
-                            // selection could never be longer than the window it is made
-                            // in, which is exactly when taking a copy is worth the
-                            // trouble. The edge row itself counts, not only what is past
-                            // it: a pane that starts at the top of the terminal has no
-                            // row above it for a pointer to be reported on.
+                            // Dragged to an edge, the pane follows.
+                            // Otherwise a selection could not be longer than the window it is made
+                            // in.
+                            // The edge row itself counts, not only what is past it.
+                            // A pane that starts at the top of the terminal has no row above it
+                            // for a pointer to be reported on.
                             state.drag_edge = if mouse.row <= state.pane.y {
                                 Some(-1)
                             } else if mouse.row + 1 >= state.pane.y + state.pane.height {
@@ -1056,16 +1059,16 @@ async fn run_ui(
                                 None
                             };
                         }
-                        // Letting go ends the drag and leaves the selection where it
-                        // is. Taking it is a separate act: copying the moment a button
-                        // comes up replaces whatever was on the clipboard before, which
-                        // nobody asked for and which is noticed only once something
-                        // wanted is gone.
+                        // Letting go ends the drag and leaves the selection where it is.
+                        // Taking it is a separate act.
+                        // Copying when a button comes up would replace what was on the clipboard
+                        // before.
                         MouseEventKind::Up(MouseButton::Left) if state.dragging => {
                             state.dragging = false;
                             state.drag_edge = None;
-                            // A click that did not move acts on what it lands on: a badge
-                            // of the question waiting answers it, and a step unfolds.
+                            // A click that did not move acts on what it lands on.
+                            // A badge of the waiting question answers it.
+                            // A step unfolds.
                             if let Some((from, to)) = state.selecting {
                                 if from == to {
                                     state.selecting = None;
@@ -1087,19 +1090,15 @@ async fn run_ui(
                     continue;
                 }
                 if let Event::Key(key) = evt {
-                    // Leaving is tested before anything else can swallow the key. It used
-                    // to sit after the approval branch, which returned early - so the one
-                    // screen the user most wants to escape from was the one screen where
-                    // Ctrl-C did nothing.
+                    // Leaving is tested before anything else can swallow the key.
                     //
-                    // What Ctrl-C means depends on what is in front of it, which is what
-                    // everyone who has used a terminal expects: stop what is running,
-                    // then clear what is typed, and only on an empty line does it offer to
-                    // leave - and then only when asked twice. It used to end the session
-                    // outright, in the middle of a turn, with a change history nobody had
-                    // looked at yet.
-                    // The step pointed at, running, is what ctrl-c stops first, alone, the
-                    // turn going on without it.
+                    // What Ctrl-C means depends on what is in front of it.
+                    // It stops what is running.
+                    // Then it clears what is typed.
+                    // Only on an empty line does it offer to leave, and only when asked twice.
+                    //
+                    // The step pointed at, running, is what ctrl-c stops first, alone.
+                    // The turn goes on without it.
                     if matches!(quit_intent(&key), Some(crate::ui::input::Quit::Ask)) {
                         if let Some(stop) = state.pointed_stop() {
                             stop.cancel();
@@ -1114,8 +1113,8 @@ async fn run_ui(
                             && state.picker.is_none()
                             && state.choosing.is_none()
                             && state.sheet.is_none());
-                    // The one pointed at, or else the latest, and only on an empty line:
-                    // a typed line is cleared first.
+                    // The one pointed at, or else the latest, and only on an empty line.
+                    // A typed line is cleared first.
                     if stops && !state.busy && input.is_empty() {
                         let pointed = state.at_entry.and_then(|i| match state.entries.get(i) {
                             Some(Entry::Step(step)) => Some(step.id.clone()),
@@ -1166,15 +1165,15 @@ async fn run_ui(
                             continue;
                         }
                         None => {
-                            // Any other key withdraws the offer: a person who carried on
-                            // working did not mean to leave.
+                            // Any other key withdraws the offer.
+                            // A person who carried on working did not mean to leave.
                             state.quit_asked = None;
                         }
                     }
 
-                    // A search owns the keyboard while it is open: enter walks the
-                    // matches, which is what enter means in every search, and the send
-                    // key had it first.
+                    // A search owns the keyboard while it is open.
+                    // Enter walks the matches.
+                    // It is taken before the send key.
                     if let Some((needle, nth)) = state.finding.clone() {
                         match key.code {
                             KeyCode::Esc => {
@@ -1186,8 +1185,7 @@ async fn run_ui(
                                 state.point_at_match();
                                 continue;
                             }
-                            // Backwards, which every search has and this one did not: a
-                            // word gone past could only be reached by going round.
+                            // Backwards, so a word gone past can be reached without going round.
                             KeyCode::Up => {
                                 let back = match (nth, state.found) {
                                     (0, 0) => 0,
@@ -1215,8 +1213,9 @@ async fn run_ui(
                     }
 
                     if state.pending_approval.is_some() {
-                        // Space still opens the rest of the diff: the question is in the
-                        // thread now, and what is under it is what it is about.
+                        // Space still opens the rest of the diff.
+                        // The question is in the thread now, and what is under it is what it is
+                        // about.
                         if key.code == KeyCode::Char(' ') {
                             if let Some(i) = state.at_entry {
                                 if !state.unfolded.remove(&i) {
@@ -1225,14 +1224,15 @@ async fn run_ui(
                             }
                             continue;
                         }
-                        // Refused, with something to go on. A bare refusal tells a model
-                        // that the call failed rather than that it was the wrong call, so
-                        // the next step is usually the same call again and the person
-                        // refuses it twice.
-                        // Almost right, which is the common case for a shell command: a
-                        // path wrong, a flag missing. Refusing it and retyping the whole
-                        // line from what is on screen is the work the prompt was meant to
-                        // save. This hands the line over to be corrected and run.
+                        // Refused, with something to go on.
+                        // A bare refusal tells a model the call failed rather than that it was the
+                        // wrong call.
+                        //
+                        // Almost right, which is the common case for a shell command.
+                        // A path is wrong or a flag missing.
+                        // This hands the line over to be corrected and run.
+                        // Refusing it and retyping the whole line is the work the prompt is meant
+                        // to save.
                         if matches!(key.code, KeyCode::Char('x') | KeyCode::Char('X')) {
                             if let Some(command) =
                                 state.pending_approval.as_ref().and_then(|p| {
@@ -1257,11 +1257,10 @@ async fn run_ui(
                         if matches!(key.code, KeyCode::Char('e') | KeyCode::Char('E')) {
                             state.refusing = state.pending_approval.take();
                             state.waiting_since = None;
-                            // The pointer goes with the question. It was left on the
-                            // approval, where space unfolds what is being pointed at -
-                            // so every space in the reason being typed unfolded the diff
-                            // instead of reaching the line, and the model was told
-                            // "neverdeleteanything".
+                            // The pointer goes with the question.
+                            // Space unfolds what is being pointed at.
+                            // A pointer left on the approval would unfold the diff instead of
+                            // reaching the typed reason.
                             state.at_entry = None;
                             state.entries.push(Entry::Notice(
                                 "not doing that - say what to do instead; enter sends it, \
@@ -1276,7 +1275,8 @@ async fn run_ui(
                             }
                             state.waiting_since = None;
                             state.at_entry = None;
-                            // The question is answered; what is left is what was done.
+                            // The question is answered.
+                            // What is left is what was done.
                             if let Some(i) = state
                                 .entries
                                 .iter()
@@ -1289,11 +1289,12 @@ async fn run_ui(
                         continue;
                     }
 
-                    // A page over the conversation takes the keys until it is closed: it
-                    // is the only thing on screen and anything else would act on what it
-                    // is covering.
-                    // A list a command opened owns the keyboard. It is a question being
-                    // asked of the person, and any key let through would answer a
+                    // A page over the conversation takes the keys until it is closed.
+                    // It is the only thing on screen, and anything else would act on what it
+                    // covers.
+                    //
+                    // A list a command opened owns the keyboard.
+                    // It is a question asked of the person, and any key let through would answer a
                     // different one.
                     if key.kind == KeyEventKind::Press && state.choosing.is_some() {
                         let step = ROWS_AT_A_TIME as isize;
@@ -1379,8 +1380,8 @@ async fn run_ui(
                                                 let _ = later.send(then.await).await;
                                             });
                                         }
-                                        // One list may lead to another: choosing a server
-                                        // is not yet choosing what to ask it.
+                                        // One list may lead to another.
+                                        // Choosing a server is not yet choosing what to ask it.
                                         Ran::Choose(chooser) => state.choosing = Some(*chooser),
                                         Ran::Cleared(said) => {
                                             state.start_again();
@@ -1390,9 +1391,9 @@ async fn run_ui(
                                             state.show_resumed(*resumed);
                                             state.tasks = tasks.get().await;
                                         }
-                                        // Something to ask the model. Put on the line
-                                        // rather than sent, so the person sees what they
-                                        // are about to ask before it goes.
+                                        // Something to ask the model.
+                                        // It is put on the line, not sent, so the person sees what
+                                        // they are about to ask.
                                         Ran::Prompt(prompt) => input = fresh_input(&prompt),
                                     }
                                     refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
@@ -1444,9 +1445,9 @@ async fn run_ui(
                         continue;
                     }
 
-                    // The list over the input takes the keys that move and choose, and
-                    // nothing else: everything typed still reaches the input, which is
-                    // what narrows the list.
+                    // The list over the input takes the keys that move and choose, and nothing
+                    // else.
+                    // Everything typed still reaches the input, which narrows the list.
                     if key.kind == KeyEventKind::Press && state.picker.is_some() {
                         let done = match key.code {
                             KeyCode::Esc => {
@@ -1465,10 +1466,10 @@ async fn run_ui(
                                 }
                                 true
                             }
-                            // Tab always completes. Enter completes only while there is
-                            // something left to complete: a command typed in full and
-                            // matched exactly is finished, and a key that refuses to send
-                            // it is a key that has to be pressed twice for no reason.
+                            // Tab always completes.
+                            // Enter completes only while there is something left to complete.
+                            // A command typed in full and matched exactly is finished, so enter
+                            // sends it.
                             KeyCode::Tab => {
                                 if let Some(text) = accept_choice(&input, state.picker.as_ref()) {
                                     input = fresh_input(&text);
@@ -1476,9 +1477,9 @@ async fn run_ui(
                                 state.picker = None;
                                 true
                             }
-                            // A command or a command's argument is the whole line, so taking
-                            // it with enter also sends it: one key, not 2. A file is a word
-                            // in a sentence, and the sentence carries on after it.
+                            // A command or a command's argument is the whole line, so taking it
+                            // with enter also sends it.
+                            // A file is a word in a sentence, and the sentence carries on after it.
                             KeyCode::Enter if !nothing_left_to_complete(&input, &state.picker) => {
                                 let sends = !matches!(
                                     state.picker.as_ref().map(|p| p.kind()),
@@ -1503,15 +1504,13 @@ async fn run_ui(
 
                     if key.kind == KeyEventKind::Press {
                         match key.code {
-                            // The one setting a person changes several times an hour, on
-                            // the key every agent puts it on. A command for it exists and
-                            // nobody finds a command they have to read about first.
+                            // A setting changed often, on the key every agent puts it on.
+                            // A command for it exists as well.
                             //
-                            // 3 settings rather than 2: reading without changing
-                            // anything, changing with every change shown first, and a
-                            // stretch of editing where the changes go through. The third
-                            // was only reachable by writing a file or by answering the
-                            // prompt over and over, which is the thing it exists to stop.
+                            // 3 settings:
+                            // Reading without changing anything.
+                            // Changing with every change shown first.
+                            // A stretch of editing where the changes go through.
                             KeyCode::BackTab | KeyCode::Tab
                                 if key.modifiers.contains(KeyModifiers::SHIFT)
                                     && !state.busy
@@ -1562,9 +1561,8 @@ async fn run_ui(
                                     state.planning = !state.planning;
                                     state.entries.push(Entry::Notice(text));
                                 }
-                                // Leaving the stretch of editing, whichever way the toggle
-                                // went: a standing decision that outlived the work it was
-                                // taken for is a decision nobody remembers taking.
+                                // Leaving the stretch of editing, whichever way the toggle went.
+                                // A standing decision does not outlive the work it was taken for.
                                 state.accepting_writes = false;
                                 session_approvals.accept_writes(false);
                                 continue;
@@ -1581,13 +1579,12 @@ async fn run_ui(
                                 input = fresh_input("");
                                 continue;
                             }
-                            // Nothing to interrupt, nothing open, not pointing: the one
-                            // thing left for Esc to mean is the line being typed. It did
-                            // nothing at all there, which is a key that works everywhere
-                            // except where it was pressed.
-                            // A refusal being explained, which is a question still on the
-                            // table: escaping it refuses without saying anything rather
-                            // than leaving the turn waiting on an answer nobody is giving.
+                            // Nothing to interrupt, nothing open, not pointing.
+                            // The one thing left for Esc to mean is the line being typed.
+                            //
+                            // A refusal being explained, which is a question still on the table.
+                            // Escaping it refuses without saying anything.
+                            // The turn does not wait on an answer nobody is giving.
                             KeyCode::Esc if state.refusing.is_some() => {
                                 if let Some(prompt) = state.refusing.take() {
                                     let _ = prompt
@@ -1617,25 +1614,25 @@ async fn run_ui(
                                 input = fresh_input("");
                                 continue;
                             }
-                            // A selection let go of, which is the first thing Esc should
-                            // reach while one is on screen.
+                            // A selection let go of: the first thing Esc reaches while one is on
+                            // screen.
                             KeyCode::Esc if state.selecting.is_some() => {
                                 state.selecting = None;
                                 continue;
                             }
                             KeyCode::Esc if !state.busy && !input.is_empty() => {
-                                // Kept, because clearing a line is not always meant to
-                                // destroy it: the up arrow offers it back before the
-                                // things that were actually sent.
+                                // Kept, because clearing a line is not always meant to destroy it.
+                                // The up arrow offers it back before the things that were actually
+                                // sent.
                                 state.draft = Some(input.lines().join("\n"));
                                 input = fresh_input("");
                                 state.esc_at = None;
                                 continue;
                             }
-                            // Twice over, on a line with nothing on it: the last question
-                            // comes back to be asked differently. Pointing at it and
-                            // pressing enter does the same thing to any question; this is
-                            // the one everybody wants, on the key the habit is already on.
+                            // Twice over, on a line with nothing on it.
+                            // The last question comes back to be asked differently.
+                            // Pointing at a question and pressing enter does the same to any
+                            // question.
                             KeyCode::Esc if !state.busy => {
                                 if state
                                     .esc_at
@@ -1675,8 +1672,8 @@ async fn run_ui(
                                 }
                                 continue;
                             }
-                            // Between the entries rather than between the lines: what a
-                            // person is looking for is a step, not a row.
+                            // Between the entries, not between the lines.
+                            // What a person looks for is a step, not a row.
                             KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
                                 state.point_back();
                                 continue;
@@ -1685,13 +1682,10 @@ async fn run_ui(
                                 state.point_forward();
                                 continue;
                             }
-                            // A question taken back to be asked differently. Getting a
-                            // word wrong is the commonest way a turn goes astray, and the
-                            // only answer to it was to ask again from scratch and leave
-                            // the failed attempt in the window for the model to read.
+                            // A question taken back to be asked differently.
                             //
-                            // What follows it leaves the conversation, so the next attempt
-                            // starts where the first one did rather than after it.
+                            // What follows it leaves the conversation.
+                            // The next attempt starts where the first one did.
                             KeyCode::Enter
                                 if !state.busy
                                     && state
@@ -1726,8 +1720,9 @@ async fn run_ui(
                                 }
                                 continue;
                             }
-                            // A step pointed at opens on a page of its own: everything it
-                            // printed, and every step of a session it ran.
+                            // A step pointed at opens on a page of its own.
+                            // The page shows everything it printed, and every step of a session it
+                            // ran.
                             KeyCode::Enter
                                 if state
                                     .at_entry
@@ -1794,9 +1789,7 @@ async fn run_ui(
                                 state.at_entry = None;
                                 continue;
                             }
-                            // The 2 ends of the conversation, which had no key at all:
-                            // getting back to where a long session started meant holding
-                            // page-up, and getting back to now meant holding page-down.
+                            // The 2 ends of the conversation: its start and now.
                             KeyCode::Home => {
                                 state.scroll_back(state.content_lines);
                                 continue;
@@ -1814,8 +1807,8 @@ async fn run_ui(
                                 state.scroll_forward(state.view_height.max(1));
                                 continue;
                             }
-                            // What was just cleared, before what was sent: it is the more
-                            // recent of the 2 and the one a person is reaching for.
+                            // What was just cleared comes before what was sent.
+                            // It is the more recent of the 2 and the one a person is reaching for.
                             KeyCode::Up if at_start(&input) && input.is_empty() && state.draft.is_some() => {
                                 if let Some(draft) = state.draft.take() {
                                     input = fresh_input(&draft);
@@ -1839,8 +1832,8 @@ async fn run_ui(
                                 }
                                 continue;
                             }
-                            // Answered here rather than in the command table: it is the
-                            // one command whose subject is the pane itself.
+                            // Answered here, not in the command table.
+                            // It is the one command whose subject is the pane itself.
                             KeyCode::Enter
                                 if !key.modifiers.contains(KeyModifiers::SHIFT)
                                     && input.lines().join("\n").trim().starts_with("/copy") =>
@@ -1857,24 +1850,21 @@ async fn run_ui(
                                 if text.trim().is_empty() { continue; }
                                 state.entries.push(Entry::User(text.clone()));
                                 input = fresh_input("");
-                                                            // A line beginning with `/` is for lokode, not the model.
-                                // Handled before the turn is started so that `/undo` works
-                                // when the thing you want undone is what the model just did.
+                                                            // A line beginning with `/` is for
+                                                            // lokode, not the model.
+                                // Handled before the turn is started.
+                                // `/undo` then works on what the model just did.
                                 state.remember(&text);
-                                // A line beginning with a hash is a rule for this
-                                // project, written down where the next session will read
-                                // it. Deciding it in conversation and having to open an
-                                // editor to keep it is how a convention stays in one
-                                // person's head.
+                                // A line beginning with a hash is a rule for this project.
+                                // It is written down where the next session will read it.
                                 if let Some(rule) = text.strip_prefix('#') {
                                     let rule = rule.trim().to_string();
                                     if rule.is_empty() {
                                         continue;
                                     }
                                     let said = remember_rule(&rule, &cfg.root);
-                                    // Told to the model now as well: a rule that only
-                                    // applies from the next session is a rule that does
-                                    // not apply to the work it was written during.
+                                    // Told to the model now as well, so the rule applies to the
+                                    // current session.
                                     let _ = control_tx
                                         .send(crate::agent::agent_loop::Control::Note(format!(
                                             "A standing rule for this project, from now on: \
@@ -1885,19 +1875,18 @@ async fn run_ui(
                                     continue;
                                 }
                                 // A line beginning with an exclamation is the person's own
-                                // command, run here and now. Asking the model to run it
-                                // costs a round trip, a share of the window and an
-                                // approval, for a decision that was already taken by
-                                // typing it. Its output joins the conversation, so the
-                                // model sees what you saw on the next question.
+                                // command, run here and now.
+                                // Its output joins the conversation, so the model sees on the next
+                                // question what you saw.
                                 if let Some(command) = text.strip_prefix('!') {
                                     let command = command.trim().to_string();
                                     if command.is_empty() {
                                         continue;
                                     }
-                                    // Run beside the interface, under a step of its own that
-                                    // shows what it prints, so a long build neither freezes the
-                                    // screen nor can only be waited out.
+                                    // Run beside the interface, under a step of its own that shows
+                                    // what it prints.
+                                    // A long build neither freezes the screen nor can only be
+                                    // waited out.
                                     hand_runs += 1;
                                     let id = format!("hand-{hand_runs}");
                                     state.entries.push(Entry::Step(Step {
@@ -1943,8 +1932,9 @@ async fn run_ui(
                                     continue;
                                 }
                                 let mut text = text;
-                                // Attached to a server, a command runs where the session lives:
-                                // the line goes there as it is. What runs here stays here.
+                                // Attached to a server, a command runs where the session lives.
+                                // The line goes there as it is.
+                                // What runs here stays here.
                                 if let Some(command) = text
                                     .clone()
                                     .strip_prefix('/')
@@ -1981,8 +1971,9 @@ async fn run_ui(
                                     .await;
                                     match ran {
                                         Ran::Said(reply) => {
-                                            // The mode lives with the agent; the interface
-                                            // knows it changed because it was accepted.
+                                            // The mode lives with the agent.
+                                            // The interface knows it changed because it was
+                                            // accepted.
                                             if verb.starts_with("plan")
                                                 && reply.starts_with("planning")
                                             {
@@ -1993,20 +1984,22 @@ async fn run_ui(
                                             {
                                                 state.planning = false;
                                             }
-                                            // A sentence belongs in the thread, where it
-                                            // reads as what just happened. A page of it
-                                            // does not: it is read once, it is not part of
-                                            // the conversation, and left there it sits
-                                            // between 2 questions for the rest of the
-                                            // session.
-                                            // Refreshed first, so a page drawn from the
-                                            // state shows the state as it is now.
+                                            // A sentence belongs in the thread, where it reads as
+                                            // what just happened.
+                                            // A page of it does not.
+                                            // A page is read once and is not part of the
+                                            // conversation.
+                                            // Left in the thread, it would sit between 2 questions
+                                            // for the rest of the session.
+                                            //
+                                            // Refreshed first, so a page drawn from the state
+                                            // shows the state as it is now.
                                             refresh_status(&control_tx, checkpoints.as_deref(), &mut state).await;
                                             show(&mut state, verb, reply);
                                             continue;
                                         }
-                                        // A command the project defines is a way of
-                                        // asking, so it becomes this turn's prompt.
+                                        // A command the project defines is a way of asking.
+                                        // It becomes this turn's prompt.
                                         Ran::Prompt(prompt) => text = prompt,
                                         Ran::Later { said, then } => {
                                             state.entries.push(Entry::Notice(said));
@@ -2022,10 +2015,9 @@ async fn run_ui(
                                             input = fresh_input("");
                                             continue;
                                         }
-                                        // The screen is the conversation, so it goes with
-                                        // it: a cleared session under a full screen of
-                                        // what it no longer holds is a lie about what the
-                                        // model can see.
+                                        // The screen is the conversation, so it goes with it.
+                                        // A cleared session under a screen of what it no longer
+                                        // holds would misstate what the model can see.
                                         Ran::Cleared(said) => {
                                             state.start_again();
                                             state.entries.push(Entry::Notice(said));
@@ -2042,11 +2034,10 @@ async fn run_ui(
                                         }
                                     }
                                 }
-                                // Typed while a turn runs and sent with the modifier: it
-                                // waits for the turn to end rather than joining it. What a
-                                // person types mid-turn is as often the next thing to do
-                                // as a correction to this one, and steering the model with
-                                // the next thing sends it off before it has finished.
+                                // Typed while a turn runs and sent with the modifier.
+                                // It waits for the turn to end rather than joining it.
+                                // Steering the model with the next thing to do would send it off
+                                // before it has finished.
                                 if state.busy && key.modifiers.contains(KeyModifiers::ALT) {
                                     state.entries.push(Entry::Notice(format!(
                                         "queued for when this turn is over: {}",
@@ -2055,9 +2046,10 @@ async fn run_ui(
                                     state.queued.push(text);
                                     continue;
                                 }
-                                // Typed while a turn runs, this steers it rather than
-                                // starting another: it joins the conversation at the next
-                                // step boundary, which is where the history can take it.
+                                // Typed while a turn runs, this steers it rather than starting
+                                // another.
+                                // It joins the conversation at the next step boundary.
+                                // That is where the history can take it.
                                 if state.busy {
                                     if steer.send(text).await.is_err() {
                                         state.entries.push(Entry::Notice(
@@ -2067,8 +2059,8 @@ async fn run_ui(
                                     }
                                     continue;
                                 }
-                                // Whatever was being looked into goes: the user is
-                                // waiting now, and the question will still be there.
+                                // Whatever was being looked into goes.
+                                // The user is waiting now, and the question will still be there.
                                 if let Some(token) = discovering.take() {
                                     token.cancel();
                                 }
@@ -2078,8 +2070,8 @@ async fn run_ui(
                                 state.rate = None;
                                 state.phase = Some(crate::agent::agent_loop::Phase::Preparing);
                                 state.phase_since = Some(Instant::now());
-                                // A child of the shutdown token, so quitting cancels the
-                                // turn in flight as well as this one's own Esc.
+                                // A child of the shutdown token.
+                                // Quitting cancels the turn in flight, as this turn's own Esc does.
                                 let cancel = shutdown.child_token();
                                 state.turn_cancel = Some(cancel.clone());
                                 let _ = input_tx.send(TurnRequest { text, cancel }).await;
@@ -2088,10 +2080,11 @@ async fn run_ui(
                             _ => {}
                         }
                     }
-                    // Handing the mouse to the terminal, and taking it back. A terminal
-                    // whose own selection is turned off has nothing for its own copy key
-                    // to copy, and that key - ctrl-shift-c on most - never reaches a
-                    // program to be reassigned. So the mouse is lent back on request.
+                    // Handing the mouse to the terminal, and taking it back.
+                    // A terminal whose own selection is turned off has nothing for its own copy
+                    // key to copy.
+                    // That key never reaches a program to be reassigned.
+                    // So the mouse is lent back on request.
                     if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         state.mouse_ours = !state.mouse_ours;
@@ -2112,14 +2105,14 @@ async fn run_ui(
                         }));
                         continue;
                     }
-                    // Taking what is selected, when the person says so. The terminal's
-                    // own copy key never reaches a program, so a pane that does its own
-                    // selecting has to offer its own way to take it.
+                    // Taking what is selected, when the person says so.
+                    // The terminal's own copy key never reaches a program.
+                    // A pane that does its own selecting offers its own way to take it.
                     if key.code == KeyCode::Char('y') && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
-                        // What is selected, or else what is being pointed at: taking one
-                        // answer out of a conversation is the common case, and dragging
-                        // over exactly its lines to do it is work the keyboard can save.
+                        // What is selected, or else what is being pointed at.
+                        // Taking one answer out of a conversation is the common case.
+                        // The keyboard saves dragging over exactly its lines.
                         let taking = state.selection_text().or_else(|| {
                             state
                                 .at_entry
@@ -2135,23 +2128,23 @@ async fn run_ui(
                             },
                             None => "nothing is selected".to_string(),
                         };
-                        // On the status line rather than at the foot of the conversation:
-                        // a selection long enough to be worth taking was made by
-                        // scrolling, and what is appended down there is not on screen.
+                        // On the status line, not at the foot of the conversation.
+                        // A selection long enough to be worth taking was made by scrolling.
+                        // What is appended at the foot is not on screen.
                         state.said = Some((said, Instant::now()));
                         continue;
                     }
-                    // A long instruction written where writing is comfortable. The line
-                    // grows to a few rows and then scrolls, which is right for a sentence
-                    // and wrong for a specification: the editor a person already knows is
-                    // a better place to write 30 lines than a box 6 rows tall.
+                    // A long instruction written where writing is comfortable.
+                    // The line grows to a few rows and then scrolls.
+                    // That suits a sentence, not a specification.
+                    // The editor a person already knows is a better place for a long text.
                     if key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         let carried = input.lines().join("\n");
                         match write_elsewhere(term, &carried).await {
                             Ok(Some(text)) => input = fresh_input(&text),
-                            // Left empty or unchanged: the editor was opened and thought
-                            // better of, which is not a failure to report.
+                            // Left empty or unchanged: the editor was opened and thought better of.
+                            // That is not a failure to report.
                             Ok(None) => {}
                             Err(e) => state
                                 .entries
@@ -2170,17 +2163,17 @@ async fn run_ui(
                         state.finding = Some((String::new(), 0));
                         continue;
                     }
-                    // Erasing to the start of the line, as it does in every shell. The
-                    // editor underneath binds it to undo, so a habit that clears a line
-                    // put back the word the last one had removed.
+                    // Erasing to the start of the line, as in every shell.
+                    // The editor underneath binds this key to undo, so it is handled here.
                     if key.code == KeyCode::Char('u') && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         input.delete_line_by_head();
                         continue;
                     }
                     input.input(key);
-                    // Opened, narrowed or closed by what is now on the line, rather than
-                    // by the key that was pressed: the 2 cannot disagree that way.
+                    // Opened, narrowed or closed by what is now on the line, not by the key that
+                    // was pressed.
+                    // The 2 cannot disagree that way.
                     state.picker = open_picker(
                         &input,
                         state.picker.take(),
@@ -2196,8 +2189,8 @@ async fn run_ui(
     }
 }
 
-/// How many messages from the person's own commands wait for the screen. A command has
-/// at most one about its tail waiting, so the end of a command always finds room.
+/// How many messages from the person's own commands wait for the screen.
+/// A command has at most one about its tail waiting, so the end of a command always finds room.
 const HAND_NEWS_HELD: usize = 64;
 
 /// What a command of the person's own sends while it runs.
@@ -2216,8 +2209,9 @@ enum Hand {
 
 /// Take the question at entry `at` back, with every turn after it, and give its text back.
 ///
-/// The conversation is rewound once per question from `at` on, so what the agent did after
-/// it leaves with it. The screen loses the same entries.
+/// The conversation is rewound once per question from `at` on.
+/// What the agent did after it leaves with it.
+/// The screen loses the same entries.
 async fn take_back_from(
     state: &mut UiState,
     control: &mpsc::Sender<crate::agent::agent_loop::Control>,
@@ -2245,8 +2239,8 @@ async fn take_back_from(
     taken
 }
 
-/// The command an approval asked about, as a line to correct and run from the project:
-/// with a change of directory first when it was to run elsewhere.
+/// The command an approval asked about, as a line to correct and run from the project.
+/// It starts with a change of directory when it was to run elsewhere.
 fn corrected_command(
     summary: &str,
     scope: &crate::sandbox::approval::ApprovalScope,

@@ -1,17 +1,15 @@
 //! A list you choose from, over the input, filtered by what is being typed.
 //!
-//! 3 things used to need it and none had it: the commands, which had to be known by
-//! heart and typed without a mistake; the models, which arrived as 68 lines
-//! poured into the conversation; and the files, which had to be spelled out in full.
-//!
-//! One list, 3 sources. It opens on what is already typed, narrows at every keystroke,
-//! and closes leaving nothing behind - a chooser is not part of the conversation.
+//! One list serves the commands, the models and the files.
+//! It opens on what is already typed.
+//! It narrows at every keystroke.
+//! It closes leaving nothing behind, since a chooser is not part of the conversation.
 
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
-/// How many rows the list may take. Enough to choose from, short enough to leave the
-/// conversation visible behind it.
+/// How many rows the list may take.
+/// Enough to choose from, short enough to leave the conversation visible behind it.
 const ROWS: usize = 8;
 
 /// One thing that can be chosen.
@@ -66,8 +64,8 @@ impl Picker {
 
     /// What the filter leaves, best first.
     ///
-    /// A value that starts with what was typed comes before one that merely contains it:
-    /// somebody typing `mo` means `model` before `remodel`.
+    /// A value that starts with what was typed comes before one that merely contains it.
+    /// Typing `mo` ranks `model` before `remodel`.
     pub fn shown(&self) -> Vec<&Choice> {
         let mut starts: Vec<&Choice> = Vec::new();
         let mut contains: Vec<&Choice> = Vec::new();
@@ -106,8 +104,8 @@ impl Picker {
         self.shown().get(self.at).map(|c| c.value.clone())
     }
 
-    /// Draw it just above `below`, growing upwards so the input never moves, and say where: the card's area and the first item on
-    /// screen, for the mouse.
+    /// Draw it just above `below`, growing upwards so the input never moves.
+    /// Says where it drew: the card's area and the first item on screen, for the mouse.
     pub fn render(&self, f: &mut Frame, below: Rect) -> Option<(Rect, usize)> {
         let shown = self.shown();
         if shown.is_empty() {
@@ -151,9 +149,7 @@ pub enum Kind {
     Command,
     /// What a command was given, with the command that wants it.
     ///
-    /// An argument is where a name has to be exact and is least likely to be remembered:
-    /// the model to switch to, the server to ask. Left uncompleted, a command that takes
-    /// one can only be used by somebody who already knows what to type.
+    /// An argument is where a name has to be exact and is least likely to be remembered.
     Argument(String),
     /// A path in the project, anywhere in a sentence.
     Path,
@@ -161,14 +157,15 @@ pub enum Kind {
 
 /// The token the cursor is in, and what it is, when it is one this can complete.
 ///
-/// A slash only opens the list at the start of the line: a slash inside a sentence is a
-/// path separator or a date, and a list that opens on those is a list in the way.
+/// A slash only opens the list at the start of the line.
+/// A slash inside a sentence is a path separator or a date.
+/// A list that opens on those would be in the way.
 pub fn token_at(line: &str) -> Option<(Kind, usize, String)> {
     if let Some(rest) = line.strip_prefix('/') {
         return match rest.split_once(char::is_whitespace) {
             None => Some((Kind::Command, 0, rest.to_string())),
-            // One argument, and only while it is the last thing on the line: a command
-            // given 2 of them is being told something this cannot guess at.
+            // One argument, and only while it is the last thing on the line.
+            // A command given 2 of them is being told something this cannot guess at.
             Some((verb, arg)) if !arg.contains(char::is_whitespace) => Some((
                 Kind::Argument(verb.to_string()),
                 line.len() - arg.len(),
@@ -201,8 +198,7 @@ mod tests {
         )
     }
 
-    /// Somebody typing `mo` means `model` before `compact`, even though both contain the
-    /// letters.
+    /// Typing `mo` ranks `model` before `compact`, even though both contain the letters.
     #[test]
     fn what_starts_with_the_filter_comes_first() {
         let mut p = picker();
@@ -230,8 +226,8 @@ mod tests {
         assert_eq!(p.chosen(), None);
     }
 
-    /// A slash inside a sentence is a path separator or a date, and a list that opens on
-    /// those is a list in the way.
+    /// A slash inside a sentence is a path separator or a date.
+    /// A list that opens on those would be in the way.
     #[test]
     fn a_slash_opens_the_list_only_at_the_start() {
         assert_eq!(token_at("/mod").unwrap().0, Kind::Command);
@@ -240,8 +236,7 @@ mod tests {
     }
 
     /// What a command was given is where a name has to be exact and is least likely to be
-    /// remembered. Left uncompleted, a command that takes one can only be used by somebody
-    /// who already knows what to type.
+    /// remembered.
     #[test]
     fn what_a_command_was_given_is_completed_too() {
         let (kind, at, token) = token_at("/model qwen").unwrap();
@@ -260,7 +255,7 @@ mod tests {
         assert_eq!(kind, Kind::Path);
         assert_eq!(at, 9);
         assert_eq!(token, "src/ma");
-        // Part of a longer word - an address, say - is not a file being named.
+        // Part of a longer word such as an address is not a file being named.
         assert!(token_at("write to a@b.com").is_none());
     }
 }

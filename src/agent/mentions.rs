@@ -1,12 +1,7 @@
 //! Files named in a prompt, put in front of the model with it.
 //!
-//! "look at @src/config.rs and tell me why" costs a round trip: the model reads the
-//! sentence, calls a tool, waits, and only then starts. The file was named, it is on this
-//! disk, and the person naming it has already decided it is relevant - so it travels with
-//! the question rather than being fetched after it.
-//!
-//! On a local model each of those round trips is seconds, which is why this is worth more
-//! here than it would be against a hosted one.
+//! A named file travels with the question.
+//! The model does not fetch it with a tool call.
 
 use std::path::Path;
 
@@ -18,10 +13,11 @@ pub struct Expanded {
 }
 
 /// How many files the prompt names with `@`, and how many characters they hold, read
-/// off their sizes rather than their contents. `None` when it names none.
+/// off their sizes rather than their contents.
+/// `None` when it names none.
 ///
-/// Resolved the way [`expand`] resolves them, so what is weighed is what would be sent,
-/// and nothing outside the project counts.
+/// Resolved the way [`expand`] resolves them, so what is weighed is what would be sent.
+/// Nothing outside the project counts.
 pub fn weigh(text: &str, root: &Path) -> Option<(usize, u64)> {
     let mut seen: Vec<std::path::PathBuf> = Vec::new();
     let mut chars = 0u64;
@@ -45,21 +41,18 @@ pub fn weigh(text: &str, root: &Path) -> Option<(usize, u64)> {
 
 /// Attach every file the prompt names with `@`.
 ///
-/// The mention stays where it was written, so the sentence still reads as the person
-/// wrote it, and the contents follow at the end where they do not interrupt it.
+/// The mention stays where it was written.
+/// The contents follow at the end of the prompt.
 pub fn expand(text: &str, root: &Path, max_chars: usize) -> Expanded {
     let mut attached = Vec::new();
     let mut bodies = String::new();
     let mut budget = max_chars;
-    // Resolved paths come back canonical, so the root has to be canonical too or the
-    // prefix does not come off and the whole absolute path is what the user is shown.
-    // A project reached through a symbolic link is the ordinary case for this: every
-    // temporary directory on macOS is one.
+    // Resolved paths come back canonical, so the root has to be canonical too.
+    // Otherwise the prefix does not come off and the whole absolute path is shown.
     let base = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
     for token in mentions(text) {
-        // Through the sandbox, so a mention cannot reach outside the project any more
-        // than a tool call can.
+        // Through the sandbox, so a mention cannot reach outside the project.
         let Ok(path) = crate::sandbox::allowlist::resolve(root, Path::new(&token), true) else {
             continue;
         };
@@ -76,8 +69,7 @@ pub fn expand(text: &str, root: &Path, max_chars: usize) -> Expanded {
         } else {
             match std::fs::read_to_string(&path) {
                 Ok(t) => t,
-                // A file that cannot be read as text is not attached and not complained
-                // about: the agent still has a tool for it.
+                // A file that cannot be read as text is not attached and not reported.
                 Err(_) => continue,
             }
         };
@@ -111,9 +103,9 @@ pub fn expand(text: &str, root: &Path, max_chars: usize) -> Expanded {
 
 /// The paths a prompt mentions.
 ///
-/// A mention is `@` against something that could be a path. Trailing punctuation is left
-/// out, because "@src/main.rs," is a sentence, and an address like a@b is not a mention:
-/// the `@` has to start the word.
+/// A mention is `@` against something that could be a path.
+/// Trailing punctuation is left out.
+/// An address like a@b is not a mention: the `@` has to start the word.
 fn mentions(text: &str) -> Vec<String> {
     text.split_whitespace()
         .filter_map(|word| word.strip_prefix('@'))
@@ -146,8 +138,8 @@ fn list_dir(path: &Path) -> String {
 mod weighing {
     use super::*;
 
-    /// Named files are counted once each by their size, and a name that is not a file
-    /// here counts for nothing.
+    /// Named files are counted once each by their size.
+    /// A name that is not a file counts for nothing.
     #[test]
     fn named_files_are_weighed_by_their_size() {
         let dir = tempfile::tempdir().expect("a directory");
@@ -189,9 +181,8 @@ mod tests {
         assert!(out.text.contains("main.rs"));
     }
 
-    /// A project reached through a symbolic link is still the project. The resolved path
-    /// is canonical, so a root that is not gets the whole absolute path put in front of
-    /// the user instead of the name they typed.
+    /// A project reached through a symbolic link is still the project.
+    /// The resolved path is canonical, so the root is made canonical too.
     #[test]
     #[cfg(unix)]
     fn a_project_behind_a_link_still_names_its_files_plainly() {
@@ -208,8 +199,8 @@ mod tests {
         assert!(out.text.contains("--- src/main.rs ---"), "{}", out.text);
     }
 
-    /// Nothing that is not a path is attached, and nothing outside the project is
-    /// reachable by naming it.
+    /// Nothing that is not a path is attached.
+    /// Nothing outside the project is reachable by naming it.
     #[test]
     fn what_is_not_a_file_here_is_left_alone() {
         let dir = project();
@@ -232,9 +223,8 @@ mod tests {
         assert_eq!(out.attached.len(), 1);
     }
 
-    /// What is attached is bounded like anything else that lands in the window, and the
-    /// cut is said so the model does not read a file that stops mid-line as the whole of
-    /// it.
+    /// What is attached is bounded like anything else that lands in the window.
+    /// The cut is said, so the model does not read a truncated file as the whole of it.
     #[test]
     fn what_does_not_fit_is_cut_and_said() {
         let dir = project();

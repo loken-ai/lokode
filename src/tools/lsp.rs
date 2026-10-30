@@ -1,5 +1,6 @@
-//! The tools that ask a language server: what it reports about a file, and what it says
-//! about the symbol at a position.
+//! The tools that ask a language server.
+//! What it reports about a file.
+//! What it says about the symbol at a position.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -692,10 +693,8 @@ mod tests {
 
     /// A language server that answers the parts of the protocol these 2 tools use.
     ///
-    /// Written out by the test rather than kept as a fixture so it cannot drift from the
-    /// test that runs it. It reports the document version back inside the diagnostic, which
-    /// is what makes it possible to tell whether an edit actually reached the server -
-    /// without that, a stale diagnostic and a fresh one look identical.
+    /// It reports the document version back inside the diagnostic.
+    /// The version tells whether an edit reached the server.
     const STUB: &str = r#"
 import json, sys
 
@@ -756,9 +755,10 @@ while True:
 
     /// Point the Rust language server at the stub.
     ///
-    /// The override is read from the environment when a server is spawned, and the
-    /// environment belongs to the whole process - so these tests are the only ones that
-    /// touch it, and they run one after another inside a single test function.
+    /// The override is read from the environment when a server is spawned.
+    /// The environment belongs to the whole process.
+    /// These tests are the only ones that touch it, and they run one after another inside a
+    /// single test function.
     fn install_stub(h: &Harness) -> bool {
         if std::process::Command::new("python3")
             .arg("--version")
@@ -773,8 +773,8 @@ while True:
         true
     }
 
-    /// A symbol is found as a whole word, on the line given or the nearest one that has
-    /// it, and a column inside a word names that word.
+    /// A symbol is found as a whole word, on the line given or the nearest one that has it.
+    /// A column inside a word names that word.
     #[test]
     fn a_symbol_is_found_by_name_near_its_line() {
         let lines = ["let total = sub_total + 1;", "", "fn total() {}"];
@@ -820,8 +820,8 @@ while True:
             pool: pool.clone(),
             op,
         };
-        // The first answer can come before the project is indexed: asked again until it
-        // names the definition, within the time indexing takes.
+        // The first answer can come before the project is indexed.
+        // It is asked again until it names the definition.
         let mut definition = String::new();
         for _ in 0..30 {
             definition = tool(Op::Definition)
@@ -909,10 +909,8 @@ while True:
         assert!(!out.is_error, "{}", out.content);
         assert!(out.content.contains("stub saw version"), "{}", out.content);
 
-        // The file is edited behind the server's back, exactly as the agent's own write
-        // tools do it. Asking again must describe the new text: the server used to be told
-        // once and never again, so from the first edit every diagnostic described code that
-        // no longer existed.
+        // The file is edited behind the server's back, as the agent's own write tools do it.
+        // Asking again must describe the new text.
         let first = out.content.clone();
         h.write("a.rs", "fn main() { let x = 1; }\n");
         let after = LspDiagnostics { pool: pool.clone() }
@@ -925,8 +923,8 @@ while True:
         );
         assert!(after.content.contains("version 2"), "{}", after.content);
 
-        // Hover reaches the same server, which had its own request answered rather than
-        // taken for an answer. The column is sent in UTF-16 units: the emoji counts 2.
+        // Hover reaches the same server, which had its own request answered.
+        // The column is sent in UTF-16 units: the emoji counts 2.
         h.write("a.rs", "// 🙂 x\n");
         let hover = LspAt {
             pool: pool.clone(),
@@ -944,8 +942,8 @@ while True:
             hover.content
         );
 
-        // A server that stops is started again once, and the second stop leaves it down
-        // with what it said.
+        // A server that stops is started again once.
+        // The second stop leaves it down with what it said.
         h.write("a.rs", "CRASH\n");
         let crashed = LspDiagnostics { pool: pool.clone() }
             .run(&h.ctx, json!({"path": "a.rs"}))

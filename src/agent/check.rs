@@ -1,13 +1,13 @@
 //! The cheapest question a project can be asked about a change that was just written.
 //!
-//! A language server answers it best: it is already running, it knows the file, and it
-//! replies in milliseconds. Not every project has one, and no project has one for every
-//! file it holds, so there is a second answer underneath: the compiler, asked to compile
-//! and nothing else.
+//! A language server answers it first.
+//! It is already running, it knows the file, and it replies fast.
+//! Not every project has one, and none has one for every file it holds.
 //!
-//! Narrow on purpose. The suite is the right thing to run when the work is done; after one
-//! edit it is minutes spent to learn what a type check would have said in seconds, and the
-//! model waits through all of it.
+//! The compiler, asked to compile and nothing else, answers when there is no language server.
+//!
+//! The check is narrow.
+//! The suite runs when the work is done, not after each edit.
 
 use std::path::Path;
 use std::time::Duration;
@@ -16,8 +16,8 @@ use crate::lsp::check::Verdict;
 
 /// How long the narrow check may take before it is abandoned.
 ///
-/// A check that outlasts this is not the narrow one, and the model is better served by
-/// carrying on than by waiting: whatever it would have said, the suite will say later.
+/// A check that outlasts this is not the narrow one.
+/// The suite reports whatever the check would have reported.
 const TIMEOUT: Duration = Duration::from_secs(45);
 
 /// What to run to find out whether the project still builds, and what to call it.
@@ -32,9 +32,8 @@ fn narrowest(root: &Path, paths: &[String]) -> Option<(&'static str, Vec<String>
     if root.join("go.mod").exists() {
         return Some(("go", owned(&["build", "./..."]), "go build"));
     }
-    // Python has no project-wide compile step worth the name, so the question is asked of
-    // the files that changed: a syntax error is what this catches, and that is what an
-    // edit written blind gets wrong.
+    // Python has no project-wide compile step, so the check runs on the files that changed.
+    // It catches syntax errors.
     let py: Vec<String> = paths
         .iter()
         .filter(|p| p.ends_with(".py"))
@@ -50,8 +49,8 @@ fn narrowest(root: &Path, paths: &[String]) -> Option<(&'static str, Vec<String>
 
 /// Ask, and say what came of it.
 ///
-/// `None` when there is no check for this project or it could not be started: a check that
-/// cannot run is not a failure of the change.
+/// `None` when there is no check for this project or it could not be started.
+/// A check that cannot run is not a failure of the change.
 pub async fn run(root: &Path, paths: &[String]) -> Option<Verdict> {
     let (program, args, label) = narrowest(root, paths)?;
     let mut cmd = tokio::process::Command::new(program);
@@ -82,8 +81,8 @@ pub async fn run(root: &Path, paths: &[String]) -> Option<Verdict> {
     let text = text.trim();
     let report = match text.is_empty() {
         true => format!("{label} failed"),
-        // The first lines carry the first error, which is the one to fix. The rest is
-        // usually the same mistake seen from further away.
+        // The first lines carry the first error, which is the one to fix.
+        // The rest is usually the same mistake seen from further away.
         false => format!(
             "{label}:\n{}",
             text.lines().take(24).collect::<Vec<_>>().join("\n")
@@ -110,8 +109,8 @@ mod tests {
         assert_eq!(label, "cargo check");
     }
 
-    /// Python has nothing project-wide worth running, so the question is asked of the
-    /// files that changed and of nothing else.
+    /// Python has nothing project-wide worth running.
+    /// The check runs on the files that changed and on nothing else.
     #[test]
     fn python_is_asked_about_the_files_that_changed() {
         let dir = tempfile::tempdir().unwrap();

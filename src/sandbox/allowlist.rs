@@ -4,12 +4,11 @@ use thiserror::Error;
 
 /// A refusal, with where the file the caller meant actually is.
 ///
-/// The suggestion is built by the caller rather than by the resolver: finding it walks the
-/// project, which is not something a path check should ever do on its own.
+/// The suggestion is built by the caller, not by the resolver.
+/// Finding it walks the project, which a path check does not do.
 pub fn refusal(root: &Path, wanted: &Path, error: &PathError) -> String {
-    // Named the way the project names it. The absolute path says where this checkout
-    // happens to sit, which is not what the reader is looking for and not how they typed
-    // it.
+    // Named the way the project names it.
+    // The absolute path says where this checkout sits, not what the reader is looking for.
     let mut out = match error {
         PathError::NotFound { path } => format!(
             "path '{}' does not exist",
@@ -44,10 +43,10 @@ pub enum PathError {
 /// canonicalises it and verifies the result is a descendant of `root`.
 ///
 /// `must_exist = false` allows resolving a target that has not been created yet
-/// (write_file, apply_patch). In that case the deepest ancestor that does exist is
-/// canonicalised and the names below it are appended, so a file can be placed in
-/// directories that do not exist either. The containment check is applied to the result
-/// eitherway, and is what makes that safe.
+/// (write_file, apply_patch).
+/// The deepest ancestor that does exist is canonicalised and the names below it are appended.
+/// So a file can be placed in directories that do not exist either.
+/// The containment check is applied to the result either way, and is what makes that safe.
 pub fn resolve(root: &Path, candidate: &Path, must_exist: bool) -> Result<PathBuf, PathError> {
     let root_canon = root.canonicalize().map_err(|source| PathError::Io {
         path: root.to_path_buf(),
@@ -74,10 +73,12 @@ pub fn resolve(root: &Path, candidate: &Path, must_exist: bool) -> Result<PathBu
             }
         })?
     } else {
-        // A name that does not resolve may still exist as a symlink whose target has not
-        // been created yet: `exists()` follows the link and reports false, so the parent's
-        // canonical form says "inside the root" while a write through that name lands
-        // wherever the link points. Follow the link itself before trusting the name.
+        // A name that does not resolve may still exist as a symlink whose target has not been
+        // created yet.
+        // `exists()` follows the link and reports false.
+        // The parent's canonical form then says "inside the root".
+        // A write through that name lands wherever the link points.
+        // Follow the link itself before trusting the name.
         let via_link = match absolute.symlink_metadata() {
             Ok(m) if m.file_type().is_symlink() => Some(std::fs::read_link(&absolute).map_err(
                 |source| PathError::Io {
@@ -92,16 +93,14 @@ pub fn resolve(root: &Path, candidate: &Path, must_exist: bool) -> Result<PathBu
             Some(t) => absolute.parent().unwrap_or(&root_canon).join(t),
             None => absolute,
         };
-        // Everything below the deepest ancestor that exists is a name nothing has been
-        // created under yet. Requiring the immediate parent to exist meant a write to
-        // `src/new/thing.rs` was refused before the code that creates directories ever
-        // ran, which is a thing an agent tries constantly.
+        // Everything below the deepest ancestor that exists is a name nothing has been created
+        // under yet.
         //
-        // Safe to build a path through names that do not exist: a component that is not
-        // there cannot be a symlink, so none of them can redirect the result. The part
-        // that does exist is canonicalised, which resolves any link within it, and the
-        // containment check below still has the last word - a `..` among the new names
-        // simply lands the result outside the root and is refused there.
+        // A path built through names that do not exist is safe.
+        // A component that is not there cannot be a symlink.
+        // The part that does exist is canonicalised, which resolves any link within it.
+        // The containment check below still has the last word.
+        // A `..` among the new names lands the result outside the root and is refused there.
         let mut new_names: Vec<std::ffi::OsString> = Vec::new();
         let mut cursor = absolute.as_path();
         let existing = loop {
@@ -152,8 +151,7 @@ pub fn resolve(root: &Path, candidate: &Path, must_exist: bool) -> Result<PathBu
 mod tests {
     use std::path::PathBuf;
 
-    /// The absolute path says where this checkout happens to sit, which is not what the
-    /// reader is looking for and not how they typed it.
+    /// The absolute path says where this checkout sits, not what the reader is looking for.
     #[test]
     fn a_refusal_names_the_path_the_way_the_project_does() {
         let root = PathBuf::from("/somewhere/project");
@@ -193,7 +191,8 @@ mod tests {
     fn rejects_parent_escape() {
         let dir = tempdir().unwrap();
         let err = resolve(dir.path(), Path::new("../etc/passwd"), false).unwrap_err();
-        // Either Outside (if the parent escape canonicalises) or NotFound — both acceptable rejections.
+        // Either Outside (if the parent escape canonicalises) or NotFound.
+        // Both are acceptable rejections.
         assert!(matches!(
             err,
             PathError::Outside { .. } | PathError::NotFound { .. }
@@ -231,9 +230,9 @@ mod escape_tests {
     use std::fs;
     use tempfile::tempdir;
 
-    /// A symlink pointing at a file that does not exist yet is not caught by
-    /// `exists()`, so resolution falls to the branch that canonicalises only the
-    /// parent - and a write through that name lands wherever the link points.
+    /// A symlink pointing at a file that does not exist yet is not caught by `exists()`.
+    /// Resolution then falls to the branch that canonicalises only the parent.
+    /// A write through that name lands wherever the link points.
     #[test]
     fn rejects_a_dangling_symlink_that_leaves_the_root() {
         let dir = tempdir().unwrap();
@@ -251,7 +250,7 @@ mod escape_tests {
 
         let resolved = resolve(dir.path(), Path::new("link"), false);
         if let Ok(p) = &resolved {
-            // Demonstrate the consequence rather than asserting on the path alone.
+            // Assert on the consequence, not on the path alone.
             fs::write(p, b"escaped").unwrap();
             assert!(
                 !target.exists(),
@@ -272,8 +271,7 @@ mod new_directory_tests {
     use std::fs;
     use tempfile::tempdir;
 
-    /// A file in a directory that does not exist yet is the ordinary way an agent adds a
-    /// module. Requiring the immediate parent to exist refused it outright.
+    /// A file in a directory that does not exist yet is the ordinary way an agent adds a module.
     #[test]
     fn a_file_under_new_directories_resolves() {
         let dir = tempdir().unwrap();
@@ -321,8 +319,8 @@ mod new_directory_tests {
         );
     }
 
-    /// Writing through the resolved path must land inside the root - asserted on the
-    /// consequence, like the dangling-link case above it.
+    /// Writing through the resolved path must land inside the root.
+    /// Asserted on the consequence, like the dangling-link case above it.
     #[test]
     fn writing_through_a_resolved_new_path_stays_inside() {
         let dir = tempdir().unwrap();
@@ -348,12 +346,12 @@ mod new_directory_tests {
 
 /// Paths under `root` whose file name matches the one that was not found.
 ///
-/// A model that has not read the tree guesses a path, and the guess is usually right about
-/// the file and wrong about where it sits: `/workspace/src/a.rs` for `src/a.rs`. Answering
-/// the refusal with where the file actually is saves the round trip that would find it.
+/// A guessed path is usually right about the file and wrong about where it sits:
+/// `/workspace/src/a.rs` for `src/a.rs`.
+/// Answering the refusal with where the file is saves the round trip that would find it.
 ///
-/// Bounded on both sides: the walk stops once enough matches are in hand, and the answer
-/// names at most a few, because a refusal that lists 100 paths is not an answer.
+/// The walk stops once enough matches are in hand.
+/// The answer names at most a few.
 pub fn nearby(root: &Path, wanted: &Path) -> Vec<String> {
     const MOST: usize = 3;
     let Some(name) = wanted.file_name() else {

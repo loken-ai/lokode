@@ -1,20 +1,21 @@
 //! A history of what the agent changed, kept beside the project rather than in it.
 //!
-//! Approving a diff means agreeing to one change. It does not mean you can still see, 4
-//! turns later, everything that has happened since - and it certainly does not mean you can
-//! put any of it back. So every change the agent makes is committed to a git repository whose
-//! directory lives under the session's own state, with the project as its work tree.
+//! Every change the agent makes is committed to a git repository.
+//! The repository's directory lives under the session's own state.
+//! The project is its work tree.
 //!
-//! Nothing of the user's is touched: their `.git` is a different directory and is excluded
-//! from this one, their index is untouched, and their history gains nothing. What they get is
-//! `/diff`, which is everything the agent has done this session, and `/undo`, which puts a
-//! turn back.
+//! Nothing of the user's is touched.
+//! Their `.git` is a different directory and is excluded from this one.
+//! Their index is untouched, and their history gains nothing.
 //!
-//! The one operation here that writes to the user's files is `undo`. It commits the current
-//! state first, and then moves forward - a new commit carrying the old tree, rather than a
-//! rewind - so no state ever becomes unreachable. That matters because a file may have been
-//! edited by hand between the agent's change and the decision to take it back, and a history
-//! that discards it to make the undo tidy has made the wrong trade.
+//! `/diff` shows everything the agent has done this session.
+//! `/undo` puts a turn back.
+//!
+//! The one operation here that writes to the user's files is `undo`.
+//! It commits the current state first, then moves forward with a new commit carrying the old
+//! tree.
+//! It is not a rewind, so no state ever becomes unreachable.
+//! A file edited by hand between the agent's change and the undo stays in the history.
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +28,8 @@ const EXCLUDES: &str = "/.git/\n";
 pub struct Checkpoints {
     git_dir: PathBuf,
     root: PathBuf,
-    /// The commit made when the session opened; `diff` is measured from here.
+    /// The commit made when the session opened.
+    /// `diff` is measured from here.
     baseline: String,
 }
 
@@ -58,9 +60,7 @@ pub struct Undone {
 impl Checkpoints {
     /// Open the history for a session, taking a baseline of the project as it is now.
     ///
-    /// Fails rather than degrading if git is missing: a feature that silently does not record
-    /// anything is worse than one that says it is not available, because the moment you find
-    /// out is the moment you needed it.
+    /// Fails if git is missing, and does not degrade.
     pub async fn open(session_id: &str, root: &Path) -> Result<Self> {
         let git_dir = crate::paths::data_dir()
             .ok_or_else(|| anyhow::anyhow!("no home directory to keep checkpoints in"))?
@@ -71,8 +71,8 @@ impl Checkpoints {
 
     /// Open a history in a named directory.
     ///
-    /// Where it lives is a parameter rather than something read from the environment, so
-    /// that 2 of these can exist at once without either having to know about the other.
+    /// Where it lives is a parameter, not read from the environment.
+    /// So 2 of these can exist at once.
     pub async fn open_at(git_dir: PathBuf, root: &Path) -> Result<Self> {
         std::fs::create_dir_all(&git_dir)
             .with_context(|| format!("creating {}", git_dir.display()))?;
@@ -113,11 +113,12 @@ impl Checkpoints {
 
     /// Put back the most recent turn that has not been put back already.
     ///
-    /// The current state is committed first, and the undo is itself a new commit carrying
-    /// the old tree rather than a rewind. So nothing ever becomes unreachable: a file edited
-    /// by hand between the agent's change and the decision to take it back is still a commit
-    /// in this history, and calling this again walks one turn further back rather than
-    /// undoing the same one twice.
+    /// The current state is committed first.
+    /// The undo is itself a new commit carrying the old tree, not a rewind.
+    /// So nothing ever becomes unreachable.
+    /// A file edited by hand between the agent's change and the undo is still a commit in this
+    /// history.
+    /// Calling this again walks one turn further back, and never undoes the same one twice.
     pub async fn undo(&self) -> Result<Option<Undone>> {
         let Some(turn) = self.turns().await?.first().map(|t| t.turn) else {
             return Ok(None);
@@ -127,8 +128,7 @@ impl Checkpoints {
 
     /// The turns that changed something and have not been put back, newest first.
     ///
-    /// What a person needs to choose one: which turn, and what it touched. Undoing is
-    /// otherwise a single step into the dark, offered without saying where it lands.
+    /// Each turn comes with which turn it is and what it touched.
     pub async fn turns(&self) -> Result<Vec<Turn>> {
         self.commit("before listing", 0).await?;
         let entries = self.entries().await?;
@@ -141,8 +141,9 @@ impl Checkpoints {
             let Some(target) = Self::before(&entries, turn) else {
                 continue;
             };
-            // What that turn changed, not what everything since changed: the second is
-            // what undoing it costs, and it is said at the point of choosing instead.
+            // What that turn changed, not what everything since changed.
+            // What everything since changed is what undoing it costs.
+            // That is said at the point of choosing.
             let last = entries
                 .iter()
                 .find(|(_, s)| turn_of(s) == turn)
@@ -156,8 +157,8 @@ impl Checkpoints {
         Ok(out)
     }
 
-    /// What `turn` itself changed, as a unified diff. Empty when it changed nothing or is
-    /// not a turn the history holds.
+    /// What `turn` itself changed, as a unified diff.
+    /// Empty when it changed nothing or is not a turn the history holds.
     pub async fn diff_turn(&self, turn: u32) -> Result<String> {
         self.commit("before diff", 0).await?;
         let entries = self.entries().await?;
@@ -181,9 +182,10 @@ impl Checkpoints {
         };
         let files = self.changed(&target, "HEAD").await?;
 
-        // The only place this writes to the user's files. `read-tree -u` moves the working
-        // tree to the old state - removing files that turn created - without moving the
-        // branch, so the commit below records the undo as one more step forward.
+        // The only place this writes to the user's files.
+        // `read-tree -u` moves the working tree to the old state, removing files that turn created,
+        // without moving the branch.
+        // The commit below records the undo as one more step forward.
         self.git(&["read-tree", "-u", "--reset", &target]).await?;
         self.git(&[
             "commit",
@@ -233,8 +235,8 @@ impl Checkpoints {
 
     async fn commit(&self, label: &str, turn: u32) -> Result<Snapshot> {
         self.git(&["add", "--all", "."]).await?;
-        // `diff --cached --quiet` exits 1 when the index differs from HEAD, which is how an
-        // empty commit is avoided without parsing anything.
+        // `diff --cached --quiet` exits 1 when the index differs from HEAD.
+        // That avoids an empty commit without parsing anything.
         let unchanged = self
             .git_status(&["diff", "--cached", "--quiet"])
             .await?
@@ -242,8 +244,8 @@ impl Checkpoints {
         if unchanged && self.head().await.is_ok() {
             return Ok(Snapshot::Unchanged);
         }
-        // The turn goes in the subject rather than a trailer, because the log is read back
-        // one line per commit and a trailer is not on that line.
+        // The turn goes in the subject, not a trailer.
+        // The log is read back one line per commit.
         self.git(&[
             "commit",
             "--quiet",
@@ -258,8 +260,7 @@ impl Checkpoints {
         let mut cmd = Command::new("git");
         cmd.env("GIT_DIR", &self.git_dir)
             .env("GIT_WORK_TREE", &self.root)
-            // The user's identity is not this repository's business, and a machine without
-            // one configured would otherwise fail to commit at all.
+            // A fixed identity is used, so committing never depends on the user's configuration.
             .env("GIT_AUTHOR_NAME", "lokode")
             .env("GIT_AUTHOR_EMAIL", "lokode@localhost")
             .env("GIT_COMMITTER_NAME", "lokode")
@@ -368,8 +369,7 @@ mod tests {
         );
     }
 
-    /// Undoing is otherwise a step into the dark: which turn, and what it touched, is
-    /// what a person needs to choose one.
+    /// Undoing offers which turn it is, and what it touched.
     #[tokio::test]
     async fn the_turns_that_can_be_taken_back_are_named_with_what_they_touched() {
         let f = fixture();
@@ -387,8 +387,7 @@ mod tests {
         assert_eq!(turns[0].files, vec!["b.txt"]);
         assert_eq!(turns[1].files, vec!["a.txt"]);
 
-        // An older turn chosen puts the project back to before it, which is what going
-        // back to a point in a history means.
+        // An older turn chosen puts the project back to before it.
         let undone = cp.undo_turn(1).await.unwrap().expect("something to undo");
         assert_eq!(undone.turn, 1);
         assert_eq!(read(&root, "a.txt"), "original\n");
@@ -419,9 +418,9 @@ mod tests {
         assert!(cp.diff_turn(9).await.unwrap().is_empty());
     }
 
-    /// Undoing must not be able to lose a change somebody made by hand in between. The
-    /// guarantee is that nothing becomes unreachable, not that one keystroke reverses it:
-    /// the state is still a commit, and the history only ever moves forward.
+    /// Undoing must not be able to lose a change somebody made by hand in between.
+    /// Nothing becomes unreachable: the state is still a commit.
+    /// The history only moves forward.
     #[tokio::test]
     async fn nothing_is_lost_when_a_turn_is_taken_back() {
         let f = fixture();

@@ -1,11 +1,11 @@
 //! Settings, and the 4 places they can come from.
 //!
-//! Every knob used to be a command-line flag and nothing else, so the model had to be
-//! retyped at every launch and a project could not say anything about how it wanted to be
-//! worked on. Files answer both, and the precedence is the ordinary one: a flag beats the
-//! environment, the environment beats the project, the project beats the user, and the
-//! user beats the built-in default. The narrower statement wins, because it is the one
-//! made with more knowledge of the situation.
+//! The precedence is fixed.
+//! A flag beats the environment.
+//! The environment beats the project.
+//! The project beats the user.
+//! The user beats the built-in default.
+//! The narrower statement wins.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,8 +27,9 @@ pub fn project_config_path(root: &Path) -> PathBuf {
     root.join(".lokode.toml")
 }
 
-/// The project's standing instructions to the agent: its conventions, its build, what it
-/// must not touch. Committed, so the whole team works with the same ones.
+/// The project's standing instructions to the agent: its conventions, its build, what it must not
+/// touch.
+/// They are committed, so the whole team works with the same ones.
 pub fn project_instructions_path(root: &Path) -> PathBuf {
     root.join(".lokode.md")
 }
@@ -38,12 +39,12 @@ pub fn user_instructions_path() -> Option<PathBuf> {
     user_config_path().map(|p| p.with_file_name("lokode.md"))
 }
 
-/// The standing instructions, user's first and project's second, and anything the user
-/// should be told about reading them.
+/// The standing instructions, user's first and project's second, and anything the user should be
+/// told about reading them.
 ///
-/// They are appended to the system message, which compaction never drops, so they hold
-/// the window for the whole session and are bounded. Trimming is said out loud: text the
-/// agent was told to follow and did not receive would otherwise look like text it ignored.
+/// They are appended to the system message, which compaction never drops.
+/// They hold the window for the whole session and are bounded.
+/// Trimming is said out loud, so text the agent did not receive does not look like text it ignored.
 pub fn load_instructions(root: &Path, max_chars: usize) -> (Option<String>, Vec<String>) {
     let files = [
         user_instructions_path(),
@@ -52,8 +53,8 @@ pub fn load_instructions(root: &Path, max_chars: usize) -> (Option<String>, Vec<
     instructions_from(files.into_iter().flatten(), max_chars)
 }
 
-/// [`load_instructions`] against paths a caller names, which is what lets a test drive it
-/// without moving the process's home directory.
+/// [`load_instructions`] against paths a caller names.
+/// A test drives it without moving the process's home directory.
 fn instructions_from(
     files: impl IntoIterator<Item = PathBuf>,
     max_chars: usize,
@@ -100,8 +101,7 @@ pub fn commands_dir(root: &Path) -> PathBuf {
 
 /// A first draft of a project's instructions, from what the repository shows.
 ///
-/// Written rather than guessed at by the model: a file the user edits is a file they
-/// trust, and the layout and the test command are things the repository already states.
+/// It is written from the layout and the test command the repository already states.
 pub fn draft_instructions(root: &Path) -> String {
     let has = |name: &str| root.join(name).exists();
     let (language, test) = if has("Cargo.toml") {
@@ -169,9 +169,9 @@ pub struct FileConfig {
     pub mcp: McpSection,
     #[serde(default)]
     pub shell: ShellSection,
-    /// What a particular model needs, by name. Only the window differs in practice, and
-    /// it differs enough to matter: a budget inherited from another model is a budget
-    /// that either wastes the window or overruns it.
+    /// What a particular model needs, by name.
+    /// Only the window differs in practice.
+    /// A budget inherited from another model either wastes the window or overruns it.
     #[serde(default)]
     pub models: BTreeMap<String, ModelSection>,
     /// What may go ahead without a question, and what may never go ahead at all.
@@ -184,14 +184,13 @@ pub struct FileConfig {
     #[serde(default)]
     pub roles: crate::agent::roles::Roles,
     /// Whether to have a nearby backend hold the next model ready while other work runs.
-    /// On by default, and a no-op against anything that is not nearby.
+    /// It does nothing against a backend that is not nearby.
     pub preload: Option<bool>,
-    /// Guess the next read while the model is still thinking. On against a backend near
-    /// enough that the request never leaves the network, off against a hosted one, which
-    /// would bill for a guess the same as for an answer.
+    /// Guess the next read while the model is still thinking.
+    /// It suits a backend near enough that the request never leaves the network.
+    /// A hosted backend would bill for a guess the same as for an answer.
     pub speculate: Option<bool>,
-    /// Whether to look into the project while nobody is waiting, and remember what is
-    /// found. Off by default: it spends the machine's time on its own.
+    /// Whether to look into the project while nobody is waiting, and remember what is found.
     pub discover: Option<bool>,
     /// The language servers, by language.
     #[serde(default)]
@@ -221,8 +220,9 @@ pub struct LspSection {
     pub servers: BTreeMap<String, LspServer>,
 }
 
-/// One language server. For a built-in language, what is given replaces the built-in
-/// setting. A new language needs a command and its extensions.
+/// One language server.
+/// For a built-in language, what is given replaces the built-in setting.
+/// A new language needs a command and its extensions.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct LspServer {
@@ -302,8 +302,8 @@ impl HooksSection {
 #[serde(from = "HookForm")]
 pub struct Hook {
     pub command: String,
-    /// The tools it runs for, as patterns joined by `|`. Without it, the tools that change
-    /// something.
+    /// The tools it runs for, as patterns joined by `|`.
+    /// Without it, the tools that change something.
     pub matches: Option<String>,
     /// Seconds it may take.
     pub timeout: Option<u64>,
@@ -366,22 +366,22 @@ pub struct ModelSection {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ShellSection {
-    /// How far the commands the agent runs are confined. `workspace` when not given.
+    /// How far the commands the agent runs are confined.
     pub sandbox: Option<crate::sandbox::confine::Level>,
     /// The earlier form of `sandbox`: true is `workspace`, false is `off`.
     pub confine_writes: Option<bool>,
     /// Directories a confined command may still write to, on top of those of its level.
     ///
-    /// A `~` is expanded against the home directory and a relative name against the
-    /// project; see `resolve_sandbox`, which is where that has to happen.
+    /// A `~` is expanded against the home directory and a relative name against the project.
+    /// See `resolve_sandbox`, which is where that has to happen.
     #[serde(default)]
     pub writable: Vec<PathBuf>,
     /// Files and directories a confined command may not read, on top of the credentials
     /// it never reads. Written like `writable`.
     #[serde(default)]
     pub hidden: Vec<PathBuf>,
-    /// Whether a confined command may open TCP connections. Yes in the workspace, no in
-    /// read-only, when not given.
+    /// Whether a confined command may open TCP connections.
+    /// Yes in the workspace, no in read-only, when not given.
     pub network: Option<bool>,
 }
 
@@ -419,8 +419,8 @@ const SECRETS: &[&str] = &[
     ".terraform.d/credentials.tfrc.json",
 ];
 
-/// The build caches below the home directory that a command confined to the workspace may
-/// write to, when they are there.
+/// The build caches below the home directory that a command confined to the workspace may write
+/// to, when they are there.
 const CACHES: &[&str] = &[
     ".cache",
     ".cargo/registry",
@@ -484,11 +484,10 @@ pub struct McpServer {
     /// Headers sent to a server over HTTP.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
-    /// The variable that holds a token sent as `Authorization: Bearer` to a server over
-    /// HTTP.
+    /// The variable that holds a token sent as `Authorization: Bearer` to a server over HTTP.
     pub token_env: Option<String>,
-    /// The client to sign in as with `/mcp login`, for an authorization server that does
-    /// not register clients.
+    /// The client to sign in as with `/mcp login`, for an authorization server that does not
+    /// register clients.
     pub client_id: Option<String>,
     /// What to ask for when signing in, when the server does not say.
     #[serde(default)]
@@ -509,24 +508,22 @@ fn yes() -> bool {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct BackendSection {
-    /// A provider lokode knows by name, which gives the url, the kind and the variable of
-    /// the key when they are not written.
+    /// A provider lokode knows by name.
+    /// It gives the url, the kind and the variable of the key when they are not written.
     pub provider: Option<String>,
     /// Which API the backend speaks.
-    ///
-    /// `auto` reads it off the URL, which is right for every case anyone actually has:
-    /// api.anthropic.com is Anthropic, everything else is OpenAI-compatible. Name one
-    /// explicitly to reach an Anthropic-compatible proxy on your own host.
+    /// `auto` reads it off the URL.
+    /// api.anthropic.com is Anthropic, and everything else is OpenAI-compatible.
+    /// Name one explicitly to reach an Anthropic-compatible proxy on your own host.
     pub kind: Option<BackendKind>,
     pub url: Option<String>,
     /// A key written in the file itself.
-    ///
-    /// Refused when the file is readable by anyone else, the way ssh refuses a private
-    /// key with loose permissions - a secret in a world-readable file is not a secret,
-    /// and failing quietly here would be the worst of both.
+    /// Refused when the file is readable by anyone else, as ssh refuses a private key with loose
+    /// permissions.
+    /// A secret in a world-readable file is not a secret.
     pub api_key: Option<String>,
-    /// The name of an environment variable to take the key from instead. Preferred, since
-    /// it keeps the secret out of a file that tends to end up in version control.
+    /// The name of an environment variable to take the key from instead.
+    /// Preferred, since it keeps the secret out of a file that tends to end up in version control.
     pub api_key_env: Option<String>,
     /// Extra headers, sent with every request.
     #[serde(default)]
@@ -606,8 +603,8 @@ fn is_readable_by_others(_path: &Path) -> bool {
 
 /// Later files override earlier ones, field by field.
 pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
-    // A later file that names a provider names a different backend: nothing of the
-    // earlier one, its key least of all, carries over to it.
+    // A later file that names a provider names a different backend.
+    // Nothing of the earlier one carries over to it, its key least of all.
     let backend = match over.backend.provider.is_some() {
         true => over.backend.clone(),
         false => BackendSection {
@@ -653,8 +650,8 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
         },
         web: WebSection {
             allow_hosts: {
-                // Added to rather than replaced: a project naming its own dev server
-                // should not silently drop the ones the user allowed everywhere.
+                // Added to rather than replaced.
+                // A project naming its own dev server keeps the ones the user allowed everywhere.
                 let mut hosts = base.web.allow_hosts;
                 hosts.extend(over.web.allow_hosts);
                 hosts
@@ -686,8 +683,8 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
         lsp: LspSection {
             enabled: over.lsp.enabled.or(base.lsp.enabled),
             servers: {
-                // Merged by language and field, so a project can change one setting of a
-                // server the user configured.
+                // Merged by language and field.
+                // A project can change one setting of a server the user configured.
                 let mut servers = base.lsp.servers;
                 for (name, server) in over.lsp.servers {
                     let merged = match servers.remove(&name) {
@@ -713,9 +710,9 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
             },
         },
         approve: crate::sandbox::policy::Policy {
-            // Added to rather than replaced, on both sides: a project stating what is
-            // safe in it must not drop the user's own refusals, and a user's refusal must
-            // survive a project that says nothing about it.
+            // Added to rather than replaced, on both sides.
+            // A project stating what is safe in it does not drop the user's own refusals.
+            // A user's refusal survives a project that says nothing about it.
             allow: merge_rules(base.approve.allow, over.approve.allow),
             deny: merge_rules(base.approve.deny, over.approve.deny),
             ask: merge_rules(base.approve.ask, over.approve.ask),
@@ -728,8 +725,9 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
         },
         mcp: McpSection {
             servers: {
-                // Merged by name so a project can add a server without restating the
-                // user's, and can replace one of theirs by using the same name.
+                // Merged by name.
+                // A project can add a server without restating the user's.
+                // A project can replace one of theirs by using the same name.
                 let mut servers = base.mcp.servers;
                 servers.extend(over.mcp.servers);
                 servers
@@ -771,8 +769,9 @@ pub struct Loaded {
     pub untrusted: Option<Untrusted>,
 }
 
-/// The user's file, then the project's. The project's guarded settings are taken when the
-/// user trusted them or `trust` says to, and left out otherwise.
+/// The user's file, then the project's.
+/// The project's guarded settings are taken when the user trusted them or `trust` says to.
+/// They are left out otherwise.
 pub fn load(root: &Path, trust: bool) -> Result<Loaded> {
     let mut cfg = FileConfig::default();
     if let Some(path) = user_config_path() {
@@ -780,8 +779,8 @@ pub fn load(root: &Path, trust: bool) -> Result<Loaded> {
             cfg = merge(cfg, user);
         }
     }
-    // The plugins come after the user's file and before the project's: they are the
-    // user's, and the project still has the last word on its own settings.
+    // The plugins come after the user's file and before the project's.
+    // They are the user's, and the project still has the last word on its own settings.
     let (plugins, _) = crate::plugins::load();
     let added = crate::plugins::sections(&plugins);
     cfg.hooks = cfg.hooks.after(added.hooks);
@@ -831,9 +830,9 @@ fn merge_rules(
 
 /// Write the model into the user's configuration, so the next session starts on it.
 ///
-/// The rest of the file is left as it is, comments included: a tool that rewrites a
-/// file a person edits has to hand it back recognisable. Only a top-level `model =` line
-/// is touched, and one is added at the top when there is none.
+/// The rest of the file is left as it is, comments included.
+/// Only a top-level `model =` line is touched.
+/// One is added at the top when there is none.
 pub fn remember_model(path: &Path, name: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -854,8 +853,7 @@ fn with_model(text: &str, name: &str) -> String {
     let mut written = false;
     for raw in text.lines() {
         let trimmed = raw.trim_start();
-        // Past the first table header a `model =` belongs to that table, not to the
-        // top level, and rewriting it would change a different setting entirely.
+        // Past the first table header a `model =` belongs to that table, not to the top level.
         if !written && trimmed.starts_with('[') {
             out.push(line.clone());
             written = true;
@@ -888,8 +886,8 @@ pub struct Headers {
 
 /// Headers to send with every backend request, and anything worth warning about.
 ///
-/// The key is looked for in the environment first, because that is where a secret belongs
-/// and it lets a shared project file name a variable without holding its value.
+/// The key is looked for in the environment first.
+/// That lets a shared project file name a variable without holding its value.
 pub fn resolve_headers(
     cfg: &FileConfig,
     cli_headers: &[String],
@@ -921,7 +919,7 @@ pub fn resolve_headers(
         .or_else(|| cfg.backend.api_key.clone());
 
     if let Some(key) = key {
-        // Sent in the clear otherwise, to a machine that is not this one.
+        // The credential would otherwise be sent in the clear to a machine that is not this one.
         if sends_secret_in_clear(backend_url) {
             warnings.push(format!(
                 "sending an API key over plain http to {backend_url}; anyone on the path can read it"
@@ -940,8 +938,6 @@ pub struct NamedBackend {
     pub headers: Vec<Header>,
 }
 
-/// The backends of `[backends]`. A key comes from the variable `api-key-env` names, or from
-/// `api-key` in a file only the user can read. Says what it could not settle.
 /// `b` with what its provider gives filled in where nothing is written.
 pub fn with_preset(b: &BackendSection) -> Result<BackendSection, String> {
     let mut b = b.clone();
@@ -956,6 +952,11 @@ pub fn with_preset(b: &BackendSection) -> Result<BackendSection, String> {
     Ok(b)
 }
 
+/// The backends of `[backends]`, settled.
+///
+/// A key comes from the variable `api-key-env` names, or from `api-key` in a file only the user can
+/// read.
+/// What could not be settled comes back as a warning.
 pub fn resolve_backends(cfg: &FileConfig) -> (BTreeMap<String, NamedBackend>, Vec<String>) {
     let mut out = BTreeMap::new();
     let mut warnings = Vec::new();
@@ -992,13 +993,10 @@ pub fn resolve_backends(cfg: &FileConfig) -> (BTreeMap<String, NamedBackend>, Ve
     (out, warnings)
 }
 
-/// Whether a credential sent to this URL would cross a network unencrypted.
 /// Whether the backend's weights are near enough that loading them is worth arranging.
 ///
-/// Warming is about a server that holds gigabytes on a card beside you: the load is
-/// seconds and hiding it behind other work is time gained for nothing. A hosted endpoint
-/// has nothing to warm and would be charged for the attempt, so it is left alone. Read off
-/// the address rather than declared, since nobody would remember to declare it.
+/// A hosted endpoint has nothing to warm and would be charged for the attempt, so it is left alone.
+/// Nearness is read off the address, not declared.
 pub fn backend_is_nearby(url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
@@ -1020,6 +1018,7 @@ fn is_private(ip: std::net::IpAddr) -> bool {
     }
 }
 
+/// Whether a credential sent to this URL would cross a network unencrypted.
 fn sends_secret_in_clear(url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
@@ -1039,15 +1038,11 @@ fn sends_secret_in_clear(url: &str) -> bool {
 
 /// The directories a confined shell command may write to.
 ///
-/// The project first, then whatever `[shell] writable` named. The named ones are expanded
-/// here rather than handed to the kernel as written: a rule is attached to an open
-/// directory, so `~/.cargo` - which is what the documentation tells people to write - opens
-/// nothing and becomes no rule at all. The command then fails on a cache it was promised,
-/// which is the confusing build breakage confinement is already accused of.
+/// The project first, then whatever `[shell] writable` named.
+/// The named ones are expanded here, not handed to the kernel as written.
+/// A rule is attached to an open directory, so `~/.cargo` opens nothing and becomes no rule.
 ///
-/// What cannot be resolved is reported rather than dropped, because the difference between
-/// a directory that is writable and one that is silently not is a build that works and one
-/// that does not.
+/// What cannot be resolved is reported, not dropped.
 pub fn resolve_sandbox(
     cfg: &FileConfig,
     root: &Path,
@@ -1092,8 +1087,9 @@ pub fn resolve_sandbox(
     }
 }
 
-/// What a command confined to the workspace may write to: the project, the temporary
-/// directories, the build caches that are there, and what the file names.
+/// What a command confined to the workspace may write to.
+/// That is the project, the temporary directories, the build caches that are there, and what the
+/// file names.
 pub fn resolve_shell_writable(
     cfg: &FileConfig,
     root: &Path,
@@ -1128,8 +1124,9 @@ pub fn resolve_shell_writable(
 
 /// `~` against the home directory, anything relative against the project.
 fn expand_writable(dir: &Path, root: &Path) -> Result<PathBuf, String> {
-    // `strip_prefix` splits on components, so this is the `~` component and not any name
-    // that merely starts with one - `~other/x` is left alone rather than guessed at.
+    // `strip_prefix` splits on components, so this is the `~` component.
+    // It is not any name that starts with one.
+    // `~other/x` is left alone.
     let expanded = match dir.strip_prefix("~") {
         Ok(rest) => match std::env::var_os("HOME") {
             Some(home) => PathBuf::from(home).join(rest),
@@ -1164,8 +1161,8 @@ pub fn resolve_allow_hosts(cfg: &FileConfig, cli: Vec<String>) -> HashSet<String
 mod tests {
     use super::*;
 
-    /// A provider fills in what is not written, and a later file naming one replaces the
-    /// earlier backend, its key included.
+    /// A provider fills in what is not written.
+    /// A later file naming one replaces the earlier backend, its key included.
     #[test]
     fn a_provider_names_a_whole_backend() {
         let b = BackendSection {
@@ -1235,9 +1232,9 @@ mod tests {
         assert!(hosts.contains("extra.example"));
     }
 
-    /// `~/.cargo` is what SECURITY.md tells people to write, and a rule is attached to an
-    /// open directory - so if this is not expanded the cache is silently not writable and
-    /// the build fails for a reason nothing on screen explains.
+    /// `~/.cargo` is what SECURITY.md tells people to write.
+    /// A rule is attached to an open directory, so it must be expanded.
+    /// Otherwise the cache is not writable and the build fails for a reason nothing explains.
     #[test]
     fn a_writable_directory_written_with_a_tilde_reaches_the_home_directory() {
         let home = tempdir().unwrap();
@@ -1259,8 +1256,9 @@ mod tests {
         });
     }
 
-    /// The caches that are there are writable in the workspace, nothing is in read-only,
-    /// and the key is taken out of what a command inherits.
+    /// The caches that are there are writable in the workspace.
+    /// Nothing is writable in read-only.
+    /// The key is taken out of what a command inherits.
     #[test]
     fn the_level_decides_what_may_be_written() {
         use crate::sandbox::confine::Level;
@@ -1286,8 +1284,8 @@ mod tests {
         assert_eq!(old.shell.level(), Some(Level::Off));
     }
 
-    /// A named backend takes its key from the variable it names, and one without a url is
-    /// reported.
+    /// A named backend takes its key from the variable it names.
+    /// One without a url is reported.
     #[test]
     fn a_named_backend_is_settled() {
         crate::paths::with_env(&[("LOKODE_TEST_FAR_KEY", Some("k1"))], || {
@@ -1336,8 +1334,7 @@ mod tests {
         assert!(dirs.contains(&PathBuf::from("/tmp")));
     }
 
-    /// A relative name means somewhere in the project, not somewhere in the process's
-    /// working directory, which is not a thing the user was thinking about.
+    /// A relative name means somewhere in the project, not in the process's working directory.
     #[test]
     fn a_relative_writable_directory_is_taken_against_the_project() {
         let root = tempdir().unwrap();
@@ -1349,8 +1346,8 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
     }
 
-    /// Being told a directory will be writable when it will not is the failure this whole
-    /// resolution exists to prevent, so it has to be said out loud.
+    /// A directory said to be writable that is not is the failure this resolution prevents.
+    /// It is said out loud.
     #[test]
     fn a_writable_directory_that_is_not_there_is_reported() {
         let root = tempdir().unwrap();
@@ -1364,7 +1361,8 @@ mod tests {
         );
     }
 
-    /// A key in a file anyone can read is not a key. Failing loudly beats using it.
+    /// A key in a file anyone can read is not a key.
+    /// It fails loudly.
     #[cfg(unix)]
     #[test]
     fn a_world_readable_file_with_a_key_in_it_is_refused() {
@@ -1391,7 +1389,7 @@ mod tests {
         assert_eq!(cfg.backend.api_key.as_deref(), Some("secret"));
     }
 
-    /// A file with no key in it is nobody's business how it is chmodded.
+    /// A file with no key in it is not refused whatever its permissions.
     #[cfg(unix)]
     #[test]
     fn permissions_only_matter_when_there_is_a_secret() {
@@ -1409,7 +1407,7 @@ mod tests {
         assert!(read(&dir.path().join("nope.toml")).unwrap().is_none());
     }
 
-    /// A typo in a config file should be reported, not silently ignored.
+    /// A typo in a config file is reported, not silently ignored.
     #[test]
     fn an_unknown_key_is_refused() {
         let dir = tempdir().unwrap();
@@ -1430,8 +1428,8 @@ mod tests {
         );
     }
 
-    /// Sending a bearer token in the clear to another machine is worth saying out loud;
-    /// sending one to this machine is the ordinary local case and is not.
+    /// Sending a bearer token in the clear to another machine is warned about.
+    /// Sending one to this machine is the ordinary local case and is not.
     #[test]
     fn a_key_over_plain_http_to_elsewhere_is_warned_about() {
         assert!(sends_secret_in_clear("http://gpu.example.com:8000"));
@@ -1446,8 +1444,8 @@ mod tests {
 mod instruction_tests {
     use super::*;
 
-    /// A project's instructions come after the user's, and each is named so the model can
-    /// tell whose rule it is reading.
+    /// A project's instructions come after the user's.
+    /// Each is named so the model can tell whose rule it is reading.
     #[test]
     fn both_files_are_read_and_the_project_comes_last() {
         let dir = tempfile::tempdir().unwrap();
@@ -1477,8 +1475,9 @@ mod instruction_tests {
         assert!(text.contains("lokode.md"));
     }
 
-    /// A project's hooks and allow rules wait for trust, its refusals and its model apply
-    /// at once, and once trusted the whole file applies.
+    /// A project's hooks and allow rules wait for trust.
+    /// Its refusals and its model apply at once.
+    /// Once trusted, the whole file applies.
     #[test]
     fn an_untrusted_project_keeps_its_hooks_to_itself() {
         let dir = tempfile::tempdir().unwrap();
@@ -1532,8 +1531,8 @@ mod instruction_tests {
         assert!(warnings.is_empty());
     }
 
-    /// Text the agent was told to follow and did not receive would read as text it
-    /// ignored, so a trim is announced.
+    /// Text the agent was told to follow and did not receive would read as text it ignored.
+    /// A trim is announced.
     #[test]
     fn what_does_not_fit_is_trimmed_and_said() {
         let dir = tempfile::tempdir().unwrap();
@@ -1603,8 +1602,8 @@ mod remember_tests {
         assert_eq!(with_model("", "m"), "model = \"m\"\n");
     }
 
-    /// The file and the directory are made when they are not there, so remembering works
-    /// on a machine that has never had a configuration.
+    /// The file and the directory are made when they are not there.
+    /// Remembering works on a machine that has never had a configuration.
     #[test]
     fn remembering_creates_what_is_missing() {
         let dir = tempfile::tempdir().unwrap();
@@ -1626,8 +1625,8 @@ mod remember_tests {
 mod nearby_tests {
     use super::*;
 
-    /// Warming is about a server whose weights sit on a card beside you. A hosted
-    /// endpoint has nothing to warm and would be billed for the attempt.
+    /// Warming is about a server whose weights sit near the caller.
+    /// A hosted endpoint has nothing to warm and would be billed for the attempt.
     #[test]
     fn a_nearby_backend_is_one_on_this_machine_or_this_network() {
         assert!(backend_is_nearby("http://127.0.0.1:11435"));

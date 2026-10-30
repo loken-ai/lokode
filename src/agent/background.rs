@@ -1,18 +1,18 @@
 //! Work done while nobody is waiting.
 //!
-//! A session spends its first minutes finding out what it is working on, and spends them
-//! again tomorrow. The finding out is cheap to do and expensive to do at the wrong moment:
-//! it costs the window and it costs the user's time, and it happens exactly when they are
-//! waiting for an answer.
+//! A session spends its first minutes finding out what it is working on.
+//! Doing that while the user waits costs the window and the user's time.
+//! So it is moved to the moments when the user reads, types or thinks.
 //!
-//! So it is moved. While the user reads, types or thinks, one question about the project
-//! is taken off a queue, answered by a read-only session of its own, and what it found is
-//! written into the digest. The queue and the digest both outlive the session, so the work
-//! is never repeated and never has to finish in one sitting.
+//! One question about the project is taken off a queue.
+//! A read-only session of its own answers it.
+//! What it found is written into the digest.
+//! The queue and the digest both outlive the session, so the work is never repeated.
 //!
-//! 3 rules hold it in place. It runs only while nothing else does, it asks the server
-//! at a priority that yields, and it changes nothing: it reads, and it writes one sentence
-//! into a file of sentences.
+//! 3 rules hold it in place.
+//! It runs only while nothing else does.
+//! It asks the server at a priority that yields.
+//! It changes nothing: it reads, and it writes one sentence into a file of sentences.
 
 use std::sync::Arc;
 
@@ -31,8 +31,8 @@ pub struct Discovery {
     pub protocol: crate::agent::protocol::SharedProtocol,
     pub context_tokens: usize,
     pub max_answer_tokens: usize,
-    /// Shared with the session, because what is learned has to be there for the next turn
-    /// rather than for the next process.
+    /// Shared with the session.
+    /// What is learned is there for the next turn and for the next process.
     pub digest: Arc<Mutex<Digest>>,
     /// Turns in a row that came back with nothing said at all.
     pub stalls: std::sync::atomic::AtomicU32,
@@ -40,22 +40,20 @@ pub struct Discovery {
 
 /// How many turns may come back saying nothing before the background gives up.
 ///
-/// A question that is put back is asked again straight away, so a backend that is down
-/// would be hammered by a queue that never drains. 3 is enough to ride out one bad
-/// response and short enough that a real outage stops the loop rather than feeding it.
+/// A question that is put back is asked again straight away.
+/// A backend that is down would be hammered by a queue that never drains, so the loop stops here.
 const MAX_STALLS: u32 = 3;
 
 /// How many steps one question may take.
 ///
-/// Small deliberately. A question that needs 12 tool calls is not a question, it is a
-/// task, and a task belongs to the person whose turn it is.
+/// A question that needs many tool calls is a task, and a task belongs to the person whose turn
+/// it is.
 const STEPS_PER_QUESTION: usize = 4;
 
 /// What the first questions are, for a project nothing is known about.
 ///
-/// Written down rather than asked of a model: these are the things every project has an
-/// answer to, and spending a round trip to be told what to ask would be the wrong first
-/// use of a background turn.
+/// They are written down, not asked of a model.
+/// Every project has an answer to each of them.
 pub fn opening_questions() -> Vec<String> {
     vec![
         "What is this project, in one sentence: what does it build and what language is \
@@ -75,8 +73,7 @@ pub fn opening_questions() -> Vec<String> {
 
 /// The first 2 sentences of an answer, or nothing when there is no answer in it.
 ///
-/// A model that was asked for 2 sentences and wrote a page still found something out.
-/// What follows the first 2 sentences is its reasoning, and the digest is read as fact.
+/// What follows the first 2 sentences is reasoning, and the digest is read as fact.
 fn shorten(answer: &str) -> Option<String> {
     let answer = answer.trim();
     // The reasoning a thinking model shows is not part of what it found out.
@@ -100,16 +97,14 @@ fn shorten(answer: &str) -> Option<String> {
     }
     let short = if end > 0 { &answer[..end] } else { answer };
     let short = short.trim();
-    // 2 sentences that run past this are not 2 sentences.
+    // Text longer than `MAX_ANSWER_CHARS` is not 2 sentences.
     (!short.is_empty() && short.len() <= MAX_ANSWER_CHARS).then(|| short.to_string())
 }
 
-/// Whether the text is an attempt at calling a tool rather than a statement about the
-/// project.
+/// Whether the text is an attempt at calling a tool rather than a statement about the project.
 ///
-/// A model that reaches for a tool in its last breath leaves the call itself as the
-/// answer. Filed as a fact it becomes a line of XML that every later session is handed as
-/// something known about the project.
+/// A model that reaches for a tool in its last breath leaves the call itself as the answer.
+/// Filed as a fact, it becomes a line of XML that every later session is handed as known.
 fn is_a_tool_call(text: &str) -> bool {
     let text = text.trim();
     (text.starts_with('{') && text.contains("\"name\""))
@@ -123,8 +118,7 @@ const MAX_ANSWER_CHARS: usize = 400;
 
 /// Which part of the digest an answer belongs in, guessed from the question.
 ///
-/// Guessed rather than asked, for the same reason: a round trip to classify a sentence
-/// costs more than the occasional wrong shelf.
+/// It is guessed, not asked of a model.
 fn kind_for(question: &str) -> Kind {
     let q = question.to_lowercase();
     if q.contains("command") || q.contains("test") || q.contains("build") {
@@ -140,9 +134,10 @@ fn kind_for(question: &str) -> Kind {
 
 impl Discovery {
     /// Whether the background has given up for this session.
+    /// Whether the background has given up for this session.
     ///
-    /// It gives up on turns that said nothing, which is what a backend that is down looks
-    /// like from here. An answer of any kind clears it.
+    /// It gives up on turns that said nothing, which is what a backend that is down looks like.
+    /// An answer of any kind clears it.
     pub fn stalled(&self) -> bool {
         self.stalls.load(std::sync::atomic::Ordering::Relaxed) >= MAX_STALLS
     }
@@ -159,10 +154,12 @@ impl Discovery {
         }
     }
 
-    /// Answer one question, if there is one waiting. Returns what was learned.
+    /// Answer one question, if there is one waiting.
+    /// Returns what was learned.
     ///
-    /// Everything here is best effort: a background turn that failed is a background turn
-    /// that will be tried again tomorrow, and nothing in the foreground depends on it.
+    /// Everything here is best effort.
+    /// A background turn that failed is tried again later.
+    /// Nothing in the foreground depends on it.
     pub async fn answer_one(&self, cancel: CancellationToken) -> Option<String> {
         let question = self.digest.lock().await.next_question()?;
         let known = self
@@ -171,10 +168,10 @@ impl Discovery {
             .await
             .preamble(crate::agent::digest::MAX_PREAMBLE_CHARS);
 
-        // The tool contract, then this turn's own stance. Not the planning prompt: the
-        // turn runs in plan mode, which is what makes every tool that changes anything
-        // refuse before it runs, but a model told to finish with numbered steps writes
-        // them instead of looking anything up.
+        // The tool contract, then this turn's own stance.
+        // It is not the planning prompt.
+        // The turn runs in plan mode, so every tool that changes anything refuses before it runs.
+        // A model told to finish with numbered steps writes them instead of looking anything up.
         let mut system =
             crate::agent::agent_loop::Agent::contract(&self.registry, self.protocol.get());
         system.push_str(
@@ -246,8 +243,8 @@ impl Discovery {
 
         let outcome = agent.collect_turn(question.clone(), cancel.clone()).await;
         if outcome.is_err() || cancel.is_cancelled() {
-            // Put it back: an interrupted question is not an answered one, and the whole
-            // point is that the work survives being interrupted.
+            // Put it back: an interrupted question is not an answered one.
+            // The work survives being interrupted.
             self.put_back(&question).await;
             return None;
         }
@@ -267,16 +264,16 @@ impl Discovery {
             }
         }
         if answer.trim().is_empty() {
-            // The turn ended without saying anything: a backend that would not answer, or
-            // a turn that ran out of steps. Nothing was asked and answered, so the
-            // question goes back rather than being spent.
+            // The turn ended without saying anything.
+            // The backend did not answer, or the turn ran out of steps.
+            // Nothing was asked and answered, so the question goes back and is not spent.
             tracing::info!(%question, "background turn said nothing");
             self.put_back(&question).await;
             return None;
         }
         if is_a_tool_call(&answer) {
-            // Not put back: the model was asked a question and reached for a tool instead
-            // of answering, and asking it again is asking the same model the same thing.
+            // Not put back: the model reached for a tool instead of answering.
+            // Asking it again is asking the same model the same thing.
             tracing::info!(%question, "the background answer was a tool call, discarded");
             return None;
         }
@@ -288,14 +285,15 @@ impl Discovery {
         // Something came back, so whatever was wrong before is not wrong now.
         self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
         if !looked {
-            // An answer that read nothing is a guess, and a guess in the digest is worse
-            // than an empty digest: everything later in the session is told it as fact.
+            // An answer that read nothing is a guess.
+            // A guess in the digest is worse than an empty digest.
+            // Later turns are told it as fact.
             tracing::info!(%question, "background answer read nothing, discarded");
             return None;
         }
         let Some(answer) = shorten(&answer) else {
-            // Not asked again: a question this model would not answer plainly once will
-            // not be answered by asking it a second time.
+            // Not asked again.
+            // A question this model would not answer plainly once is not answered by a second ask.
             tracing::info!(%question, "background question produced nothing usable");
             return None;
         };
@@ -306,9 +304,9 @@ impl Discovery {
             &answer,
             "looked into in the background",
         );
-        // What was worked out here is this machine's. A statement worth keeping belongs
-        // in the repository, where the rest of the team gets it too - but that is the
-        // user's call, so it is suggested rather than written.
+        // What was worked out here belongs to this machine.
+        // A statement worth keeping belongs in the repository, where the team gets it too.
+        // That is the user's call, so it is suggested and not written.
         if digest.questions.is_empty() {
             digest.suggest(
                 "the project has been looked into: /digest shows what was found, and what                  is worth keeping belongs in .lokode.md where everyone gets it",
@@ -354,7 +352,7 @@ mod tests {
     }
 
     /// A model that reaches for a tool in its last breath leaves the call as the answer.
-    /// Filed as a fact it becomes a line of XML every later session is handed as known.
+    /// Filed as a fact, it becomes a line of XML every later session is handed as known.
     #[test]
     fn an_attempt_at_a_tool_call_is_not_a_fact() {
         assert!(is_a_tool_call(
@@ -412,8 +410,8 @@ mod tests {
         assert_eq!(kind_for("Where does the code live?"), Kind::Layout);
     }
 
-    /// The opening questions are the ones every project answers, so a first session has
-    /// something to do without asking a model what to ask.
+    /// The opening questions are the ones every project answers.
+    /// A first session has something to do without asking a model what to ask.
     #[test]
     fn a_project_nothing_is_known_about_has_somewhere_to_start() {
         let qs = opening_questions();

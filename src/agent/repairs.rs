@@ -1,25 +1,21 @@
 //! What fixed this before.
 //!
-//! The same project fails the same way. A missing trait import, a field renamed in one
-//! place and read in another, a test fixture that has to be updated beside the code: the
-//! compiler says the same thing it said last week, and the model works it out again from
-//! nothing, at the cost of the steps that took last time.
+//! The same mistake in the same project gives the same complaint from the compiler.
 //!
-//! So the pair is written down. When a change does not check out, the complaint is kept;
-//! when a later change makes the same complaint go away, what that change did is filed
-//! against it. The next time the complaint comes back, it arrives with the note.
+//! When a change does not check out, the complaint is kept.
+//! When a later change makes the same complaint go away, what that change did is filed against it.
+//! When the complaint comes back, it arrives with the note.
 //!
-//! Small and local by construction. A signature and a sentence, on this machine, beside
-//! the rest of the state, never in the repository: what fixed it here says nothing about
-//! anyone else's project and has no business travelling.
+//! The pairs are small and local.
+//! A signature and a sentence are kept on this machine, beside the rest of the state.
+//! They are never written in the repository.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// How many pairs are kept. A project's failures repeat; its whole history does not need
-/// to.
+/// How many pairs are kept.
 const REMEMBERED: usize = 40;
 
 /// How much of a complaint makes its signature.
@@ -61,15 +57,19 @@ impl Repairs {
         me
     }
 
-    /// A change did not check out. Hold what the check said, waiting for what fixes it.
+    /// A change did not check out.
+    ///
+    /// Hold what the check said, waiting for what fixes it.
     pub fn failed(&mut self, said: &str) {
         self.open = Some(signature(said));
     }
 
-    /// A change checked out. If something was waiting, this is what fixed it.
+    /// A change checked out.
     ///
-    /// Only the first clean step after a failure counts. What comes after it is the work
-    /// carrying on, and filing that against the complaint would teach the wrong lesson.
+    /// If something was waiting, this is what fixed it.
+    ///
+    /// Only the first clean step after a failure counts.
+    /// What comes after it is the work carrying on.
     pub fn fixed(&mut self, what: &str) {
         let Some(signature) = self.open.take() else {
             return;
@@ -127,9 +127,9 @@ impl Repairs {
 
 /// What makes 2 complaints the same complaint.
 ///
-/// Line and column numbers, and the paths in front of them, are where it happened rather
-/// than what happened: the same mistake made twice is the same mistake at 2 places. What
-/// is left is the wording and the names in it, which is what a person would recognise.
+/// Line and column numbers, and the paths in front of them, say where it happened.
+/// The same mistake made twice is the same mistake at 2 places.
+/// What is left is the wording and the names in it.
 fn signature(said: &str) -> String {
     let line = said
         .lines()
@@ -181,7 +181,8 @@ fn strip_place(line: &str) -> &str {
     if std::ptr::eq(rest, line) {
         return line;
     }
-    // `rest` is now the part before the numbers; what is wanted is what follows them.
+    // `rest` is now the part before the numbers.
+    // What is wanted is what follows them.
     let after = &line[rest.len()..];
     let after = after.trim_start_matches(|c: char| c.is_ascii_digit() || c == ':');
     after.trim()
@@ -198,8 +199,8 @@ fn now() -> u64 {
 mod tests {
     use super::*;
 
-    /// The same mistake at 2 places is the same mistake: where it happened is not what
-    /// happened.
+    /// The same mistake at 2 places is the same mistake.
+    /// Where it happened is not what happened.
     #[test]
     fn a_complaint_is_recognised_wherever_it_happened() {
         let a = "src/a.rs:12:5: cannot find value `foo` in this scope";
@@ -221,8 +222,8 @@ mod tests {
         assert_eq!(r.recall("something else entirely"), None);
     }
 
-    /// Only the first clean step after a failure is the fix. What comes after it is the
-    /// work carrying on.
+    /// Only the first clean step after a failure is the fix.
+    /// What comes after it is the work carrying on.
     #[test]
     fn only_the_step_that_fixed_it_is_filed_against_it() {
         let mut r = Repairs::default();

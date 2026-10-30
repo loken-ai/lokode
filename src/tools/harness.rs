@@ -1,9 +1,11 @@
 //! A `ToolCtx` to run tools against in tests.
 //!
-//! Every gated tool needs a root, an approval channel with something on the other end of
-//! it, and a context to be handed. Written once here so that a tool's tests are about the
-//! tool rather than about assembling one of these, and so the approval answers can be
-//! chosen per case instead of stubbed the same way everywhere.
+//! Every gated tool needs a root.
+//! It needs an approval channel with something on the other end.
+//! It needs a context to be handed.
+//!
+//! The harness assembles these once, so a tool's tests are about the tool.
+//! The approval answers are chosen per case.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -44,8 +46,7 @@ pub struct Harness {
 impl Harness {
     pub fn new(answer: Answer) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        // Canonicalised because the sandbox does the same to everything it is given, and
-        // on macOS the temp directory is reached through a symlink.
+        // Canonicalised, as the sandbox canonicalises every path it is given.
         let root = dir.path().canonicalize().expect("canonicalize root");
 
         let (tx, mut rx) = approval::channel();
@@ -142,10 +143,10 @@ impl Harness {
 
     /// Run a tool the way the agent loop does.
     ///
-    /// A tool may report a failure either by returning `Ok` with an error output or by
-    /// returning `Err`; `dispatch_tool` folds the second into the first so the model sees
-    /// something either way. Tests go through the same fold, so they describe what the
-    /// model would actually be told.
+    /// A tool reports a failure either by returning `Ok` with an error output, or by returning
+    /// `Err`.
+    /// `dispatch_tool` folds the second into the first, so the model sees something either way.
+    /// Tests go through the same fold, so they describe what the model would be told.
     pub async fn run(&self, tool: &dyn Tool, args: Value) -> ToolOutput {
         match tool.run(&self.ctx, args).await {
             Ok(o) => o,

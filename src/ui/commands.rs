@@ -8,9 +8,7 @@ use crate::ui::state::UiState;
 
 /// Put a turn back, or offer the turns that can be.
 ///
-/// Asked rather than done: undoing used to take the most recent turn without saying which
-/// it was or what it held, which is a step into the dark on the one command whose whole
-/// purpose is to recover from one.
+/// The person is asked which turn to put back.
 pub(crate) async fn undo_command(checkpoints: Option<&Checkpoints>, rest: &str) -> Ran {
     let Some(cp) = checkpoints else {
         return Ran::Said("no change history for this session".into());
@@ -67,9 +65,7 @@ pub(crate) fn how_long_ago(when: u64) -> String {
 
 /// Add one rule to what this project tells the agent, and say where it went.
 ///
-/// Appended rather than rewritten: the file is the team's, it is in version control with
-/// the code it is about, and a tool that reorganises it would be a tool nobody lets near
-/// it twice.
+/// The rule is appended to the file, which is never rewritten.
 pub(crate) fn remember_rule(rule: &str, root: &std::path::Path) -> String {
     use std::io::Write;
     let path = crate::config::project_instructions_path(root);
@@ -82,8 +78,8 @@ pub(crate) fn remember_rule(rule: &str, root: &std::path::Path) -> String {
         Ok(f) => f,
         Err(e) => return format!("could not write {}: {e}", path.display()),
     };
-    // A heading only where the file is being started, so an existing one keeps whatever
-    // shape its authors gave it.
+    // A heading is written only where the file is being started.
+    // An existing file keeps the shape its authors gave it.
     let text = match fresh {
         true => format!("# What this project expects\n\n- {rule}\n"),
         false => format!("- {rule}\n"),
@@ -96,9 +92,8 @@ pub(crate) fn remember_rule(rule: &str, root: &std::path::Path) -> String {
 
 /// Take the last question out of the conversation and give it back as text.
 ///
-/// The conversation is rewound past it, so what the agent did in answer leaves with it: a
-/// second attempt that can still see the first one is a model reading its own failure
-/// while it tries again.
+/// The conversation is rewound past it.
+/// What the agent did in answer leaves with it.
 pub(crate) async fn take_back(
     control: &mpsc::Sender<crate::agent::agent_loop::Control>,
 ) -> Option<String> {
@@ -115,13 +110,12 @@ pub(crate) async fn take_back(
 
 /// Run one command the person typed, and give back what it said.
 ///
-/// Theirs rather than the model's, so it is not approved and not confined: they typed it,
-/// which is the same decision they make at a shell prompt. It still goes through the
-/// project root, because that is where the question they are asking lives.
+/// The command is the person's, not the model's, so it is not approved and not confined.
+/// It runs through the project root.
 ///
-/// Bounded like any other result that lands in the pane, and the 2 streams are kept in
-/// the order the command wrote them as far as reading them separately allows: what a
-/// failing command prints is usually the only thing worth having.
+/// The result is bounded like any other result that lands in the pane.
+/// The 2 streams keep the order the command wrote them, as far as reading them separately
+/// allows.
 pub(crate) async fn run_shell(
     command: &str,
     root: &std::path::Path,
@@ -130,7 +124,7 @@ pub(crate) async fn run_shell(
     lines: impl Fn(String),
 ) -> (bool, String) {
     use tokio::io::AsyncBufReadExt;
-    // Killed when it is stopped or dropped, rather than left running unseen.
+    // Killed when it is stopped or dropped.
     let child = tokio::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(command)
@@ -201,12 +195,10 @@ pub(crate) async fn run_shell(
     (!ok, body)
 }
 
-/// Put the conversation where a person can take it: on the terminal's clipboard, and in a
-/// file that is always there whether or not the terminal took it.
+/// Put the conversation where a person can take it: on the terminal's clipboard, and in a file.
+/// The file is always there, whether or not the terminal took the copy.
 ///
-/// Both, because neither can be relied on alone. A terminal either understands the copy
-/// sequence or ignores it without saying so, and a file is no use to somebody who wanted
-/// to paste into a message.
+/// A terminal may ignore the copy sequence without saying so.
 pub(crate) fn copy_out(entries: &[Entry], last_only: bool, root: &std::path::Path) -> String {
     let text = match last_only {
         true => entries
@@ -242,16 +234,16 @@ pub(crate) fn copy_out(entries: &[Entry], last_only: bool, root: &std::path::Pat
 }
 
 /// Ask the agent what it is on and how full the window is.
-/// Both move under the interface, and both are drawn every frame, so they are read back
-/// at the moments they can have changed rather than watched.
+/// Both move under the interface, and both are drawn every frame.
+/// They are read back at the moments they can have changed.
 pub(crate) async fn refresh_status(
     control: &mpsc::Sender<crate::agent::agent_loop::Control>,
     checkpoints: Option<&Checkpoints>,
     state: &mut UiState,
 ) {
     state.git = git_state(&state.root).await;
-    // What the change history holds, for the rail: the turns that can be put back and
-    // what the session changed, file by file.
+    // What the change history holds, for the rail.
+    // That is the turns that can be put back, and what the session changed, file by file.
     if let Some(cp) = checkpoints {
         state.turns = cp.turns().await.unwrap_or_default();
         state.changes = cp
@@ -391,8 +383,7 @@ pub(crate) enum Ran {
     Resumed(Box<crate::agent::agent_loop::Resumed>),
 }
 
-/// Everything a command may need. One struct rather than 9 arguments, since every new
-/// command was adding another to a call nobody could read.
+/// Everything a command may need.
 pub(crate) struct CommandCtx<'a> {
     pub(crate) checkpoints: Option<&'a Checkpoints>,
     pub(crate) root: &'a std::path::Path,
@@ -408,13 +399,14 @@ pub(crate) struct CommandCtx<'a> {
     pub(crate) session_id: &'a str,
     /// What has been agreed to here, which is the half of the policy that can change.
     pub(crate) approvals: &'a crate::sandbox::approval::SessionApprovals,
-    /// A control request is answered between turns, so a command that needs one has to
-    /// wait rather than sit silent behind a running turn.
+    /// A control request is answered between turns.
+    /// A command that needs one waits, rather than sitting silent behind a running turn.
     pub(crate) busy: bool,
 }
 
-/// Sign in to the server `name` over HTTP: the address is given at once, and the server is
-/// started again once the browser comes back.
+/// Sign in to the server `name` over HTTP.
+/// The address is given at once.
+/// The server is started again once the browser comes back.
 async fn login(
     name: &str,
     servers: &std::collections::BTreeMap<String, crate::config::McpServer>,
@@ -471,9 +463,8 @@ async fn login(
 
 /// Answer a slash command.
 ///
-/// These do not reach the model and do not become part of the conversation: they are things
-/// the user is asking of the tool about the session, and putting them in the transcript
-/// would describe a turn that never happened.
+/// These do not reach the model and are not part of the conversation.
+/// They are things the user asks of the tool about the session.
 pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
     let CommandCtx {
         checkpoints,
@@ -492,16 +483,14 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         Some((v, r)) => (v, r.trim()),
         None => (command, ""),
     };
-    // The commands written as files, under any name the built-ins leave free. What
-    // follows the name is handed to the command, which is how one command serves a family
-    // of tasks.
+    // The commands written as files, under any name the built-ins leave free.
+    // What follows the name is handed to the command.
     if let Some(c) = written_commands(root).into_iter().find(|c| c.name == verb) {
         return Ran::Prompt(c.prompt(rest));
     }
     if verb == "digest" {
-        // Asked first, because this throws away everything a session worked out about the
-        // project and there is nothing to put it back with. A word typed by mistake is
-        // the cheapest way there is to lose an afternoon of reading.
+        // Asked first: this throws away everything a session worked out about the project.
+        // Nothing can put it back.
         if rest == "forget" {
             return Ran::Choose(Box::new(crate::ui::chooser::Chooser::new(
                 "digest forget",
@@ -643,9 +632,7 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                     Err(e) => Ran::Said(format!("{server}/{prompt}: {e:#}")),
                 };
             }
-            // A server named and nothing else: what it offers, to be chosen from. Its
-            // prompts are named by whoever wrote the server, and nobody keeps those in
-            // their head either.
+            // A server named and nothing else: what it offers, to be chosen from.
             (Some(server), None) => {
                 let Some(client) = mcp.iter().find(|c| c.server == server) else {
                     return Ran::Said(format!("no server called {server}"));
@@ -845,10 +832,9 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         return Ran::Said(out);
     }
     if verb == "approve" {
-        // What is in force, which is 2 things: what the configuration settles without
-        // asking, and what was agreed to here. The second used to be invisible - a
-        // session could be running commands unasked because of a key pressed an hour ago,
-        // with nothing anywhere to say so and no way to take it back.
+        // What is in force has 2 parts.
+        // The configuration settles some without asking.
+        // The rest was agreed to here.
         if rest == "forget" {
             let had = approvals.forget_always().await;
             return Ran::Said(match had {
@@ -930,13 +916,13 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         };
     }
     if verb == "model" {
-        // The agent reads control requests between turns, so asking during one would
-        // wait for the turn to end with nothing on screen explaining the silence.
+        // The agent reads control requests between turns.
+        // Asking during a turn waits for the turn to end.
         if busy {
             return Ran::Said("the agent is working; ask again when the turn is over".into());
         }
-        // Named, it switches. Unnamed, it offers the list: printing the catalogue and
-        // leaving the person to type a name back exactly is not a way to choose.
+        // Named, it switches.
+        // Unnamed, it offers the list.
         if rest.is_empty() {
             let (tx, rx) = tokio::sync::oneshot::channel();
             if control
@@ -956,9 +942,7 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
                         .all
                         .iter()
                         .map(|m| {
-                            // What else a model is used for, beside its name: a session
-                            // that plans with one model and edits with another has to be
-                            // able to see which is which before it changes one of them.
+                            // What else a model is used for, beside its name.
                             let roles: Vec<&str> = models
                                 .roles
                                 .iter()
@@ -982,9 +966,8 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         }
         return Ran::Said(rx.await.unwrap_or_else(|_| "the agent said nothing".into()));
     }
-    // On the verb, not on the whole line: matching the line meant a command given an
-    // argument was an unknown command, so anything typed after one of these got the help
-    // text back instead of being done.
+    // On the verb, not on the whole line.
+    // A command given an argument is still that command.
     Ran::Said(match verb {
         "help" | "" => help(root),
         "undo" => return undo_command(checkpoints, rest).await,
@@ -1021,7 +1004,8 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
 
 /// The commands, the project's own listed after the built-ins.
 pub(crate) fn help(root: &std::path::Path) -> String {
-    // One table, so the columns line up down the page, with each group a row of its own.
+    // One table, so the columns line up down the page.
+    // Each group is a row of its own.
     let mut out = String::from("## Commands\n\n| Command | What it does |\n|---|---|\n");
     for (group, names) in GROUPS {
         out.push_str(&format!("| **{group}** | |\n"));
@@ -1058,8 +1042,8 @@ pub(crate) fn help(root: &std::path::Path) -> String {
     out
 }
 
-/// The commands by what they are for, in the order `/help` lists them. Every command of
-/// the help text is in one group.
+/// The commands by what they are for, in the order `/help` lists them.
+/// Every command of the help text is in one group.
 const GROUPS: [(&str, &[&str]); 4] = [
     ("Asking", &["plan", "act", "retry", "model", "compact"]),
     ("Changes", &["diff", "undo", "approve"]),
@@ -1107,8 +1091,7 @@ const KEYS: [(&str, &str); 15] = [
 
 /// The commands, as a list to choose from.
 ///
-/// Read off the same text the help prints, so a command cannot be offered by one and
-/// missing from the other.
+/// Read off the same text the help prints, so a command is in both or in neither.
 pub(crate) fn command_choices(root: &std::path::Path) -> Vec<crate::ui::picker::Choice> {
     let mut out: Vec<crate::ui::picker::Choice> = HELP
         .lines()
@@ -1220,8 +1203,8 @@ mod shell_tests {
     use std::sync::{Arc, Mutex};
     use tokio_util::sync::CancellationToken;
 
-    /// Each line reaches the screen as it is printed, from either stream, and the body and
-    /// the failure are what the command said and how it ended.
+    /// Each line reaches the screen as it is printed, from either stream.
+    /// The body and the failure are what the command said and how it ended.
     #[tokio::test]
     async fn a_command_of_your_own_prints_as_it_goes() {
         let seen = Arc::new(Mutex::new(Vec::new()));

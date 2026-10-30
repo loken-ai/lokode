@@ -1,16 +1,17 @@
 //! `lokode serve`: the sessions of a project in a browser page, on this machine only.
 //!
-//! The page speaks the Agent Client Protocol, as an editor does. What lokode sends reaches
-//! every open page as a stream of events, and what a page sends is posted. 2 requests of
-//! lokode's own complete the protocol for pages that come and go:
+//! The page speaks the Agent Client Protocol, as an editor does.
+//! What lokode sends reaches every open page as a stream of events.
+//! What a page sends is posted.
+//! 2 requests of lokode's own complete the protocol for pages that come and go:
 //!
 //! | Request | Answer |
 //! |---|---|
 //! | `_lokode/hello` | the project, the sessions open and those recorded |
 //! | `_lokode/attach` | everything a session said so far, and what it still waits on |
 //!
-//! The end of a turn reaches every page as a session update of lokode's own,
-//! `_lokode/turn`, with why it stopped and what it came to.
+//! The end of a turn reaches every page as a session update of lokode's own, `_lokode/turn`.
+//! It carries why the turn stopped and what it came to.
 //!
 //! | Guard | What it keeps out |
 //! |---|---|
@@ -68,7 +69,8 @@ struct Web {
 }
 
 impl Web {
-    /// What lokode sends: kept where a later page needs it, and given to every page.
+    /// What lokode sends.
+    /// It is kept where a later page needs it, and given to every page.
     fn send(&self, msg: Value) {
         let method = msg.get("method").and_then(|m| m.as_str());
         if method == Some("session/update") {
@@ -403,8 +405,9 @@ async fn events(web: &Arc<Web>, mut stream: TcpStream) -> Result<()> {
     }
 }
 
-/// A message a page posted: answered here when it is one of lokode's own, handed to the
-/// session otherwise, its answer then coming on the stream.
+/// A message a page posted.
+/// It is answered here when it is one of lokode's own.
+/// Otherwise it is handed to the session, and its answer comes on the stream.
 async fn posted(web: &Arc<Web>, msg: Value) -> Value {
     let method = msg
         .get("method")
@@ -478,8 +481,8 @@ async fn posted(web: &Arc<Web>, msg: Value) -> Value {
             json!({"accepted": true})
         }
         _ => {
-            // What was asked is part of the thread every page shows, and an editor's
-            // agent does not echo it.
+            // What was asked is part of the thread every page shows.
+            // An editor's agent does not echo it.
             if method == "session/prompt" {
                 if let (Some(id), Some(session)) = (
                     msg.get("id"),

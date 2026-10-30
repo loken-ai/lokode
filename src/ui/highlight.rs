@@ -1,8 +1,8 @@
-//! Code coloured by what each part of it is: comments, strings, numbers, keywords,
-//! functions and types, each in the theme's colour for it.
+//! Code coloured by what each part of it is.
+//! Comments, strings, numbers, keywords, functions and types each take the theme's colour for it.
 //!
-//! The grammars are the TextMate grammars syntaxmate bundles, read once on first use. A
-//! language they do not know is left to the caller to draw plain.
+//! The grammars are the TextMate grammars syntaxmate bundles, read once on first use.
+//! A language they do not know is left to the caller to draw plain.
 
 use std::sync::OnceLock;
 
@@ -33,11 +33,11 @@ pub fn warm() {
     highlighter();
 }
 
-/// The rows of `code` in `lang`, each a list of spans over `base`, or `None` when the
-/// language is not one the grammars know.
+/// The rows of `code` in `lang`, each a list of spans over `base`, or `None` when the language is
+/// not one the grammars know.
 ///
-/// A line the grammars could only partly read keeps the colours they found and the rest
-/// of it in `base`.
+/// A line the grammars could only partly read keeps the colours they found and the rest of it in
+/// `base`.
 pub fn rows(lang: &str, code: &str, base: Style) -> Option<Vec<Vec<Span<'static>>>> {
     if lang.is_empty() {
         return None;
@@ -147,8 +147,8 @@ mod tests {
             .collect()
     }
 
-    /// A keyword, a string and a comment each take their own colour, and the text comes
-    /// out whole.
+    /// A keyword, a string and a comment each take their own colour.
+    /// The text comes out whole.
     #[test]
     fn rust_is_coloured_by_what_each_part_is() {
         let syntax = &theme().syntax;

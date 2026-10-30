@@ -70,9 +70,7 @@ impl Tool for Grep {
 
         let output = match cmd.output().await {
             Ok(o) => o,
-            // ripgrep is faster and knows more about what to skip, but it was an undocumented
-            // hard requirement: without it on the path this tool simply did not work, and the
-            // agent lost the ability to search at all.
+            // The built-in walker answers when ripgrep is not installed.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::info!("ripgrep not found; searching with the built-in walker");
                 return match search_here(ctx, &search_root, &a).await {
@@ -84,7 +82,7 @@ impl Tool for Grep {
             Err(e) => return Ok(ToolOutput::err(format!("rg failed: {e}"))),
         };
 
-        // ripgrep exit code 1 = no matches; treat as empty success.
+        // ripgrep exit code 1 means no matches: an empty success.
         if !output.status.success() && output.status.code() != Some(1) {
             return Ok(ToolOutput::err(format!(
                 "rg exit {:?}: {}",
@@ -132,8 +130,8 @@ mod tests {
         );
     }
 
-    /// No matches is an answer, not a failure: ripgrep exits 1 for it, and treating that
-    /// as an error would tell the model its search was broken.
+    /// No matches is an answer, not a failure.
+    /// ripgrep exits 1 for it.
     #[tokio::test]
     async fn grep_finding_nothing_is_a_success() {
         if !have_ripgrep() {
@@ -198,10 +196,11 @@ const MAX_HITS: usize = 500;
 
 /// Search without ripgrep.
 ///
-/// The same shape of answer - `path:line:text` - from the same walk `glob` uses, so ignore
-/// files are still honoured and a build directory is still skipped. Slower than ripgrep and
-/// not trying to be otherwise: the point is that the tool works on a machine that does not
-/// have it.
+/// The answer has the same shape, `path:line:text`.
+/// It uses the same walk `glob` uses.
+/// Ignore files are honoured and a build directory is skipped.
+/// It is slower than ripgrep.
+/// It works on a machine that does not have ripgrep.
 async fn search_here(
     ctx: &ToolCtx,
     root: &std::path::Path,
@@ -242,8 +241,8 @@ async fn search_here(
                 .display()
                 .to_string();
 
-            // Read by line rather than whole: a match is a line, and a file too big to hold
-            // is exactly the kind this has to keep working on.
+            // Read by line, not whole: a match is a line.
+            // A file too big to hold in memory still works.
             for (n, line) in BufReader::new(file).lines().enumerate() {
                 // A line that will not decode is a binary file saying so.
                 let Ok(line) = line else { break };
@@ -280,8 +279,7 @@ mod native_tests {
         }
     }
 
-    /// The fallback exists so the tool works on a machine without ripgrep, which means it
-    /// has to answer in the same shape.
+    /// The fallback answers in the same shape as ripgrep.
     #[tokio::test]
     async fn it_reports_path_line_and_text() {
         let h = Harness::new(Answer::No);

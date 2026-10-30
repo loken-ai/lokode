@@ -113,8 +113,9 @@ impl Translator {
         }
     }
 
-    /// What the turn came to, for the `_meta` of the answer, and the turn's receipt
-    /// forgotten so the next turn starts without it.
+    /// What the turn came to, for the `_meta` of the answer.
+    ///
+    /// Takes the turn's receipt, so the next turn starts without it.
     pub fn meta(&mut self) -> Value {
         let mut lokode = serde_json::Map::new();
         if let Some(r) = self.receipt.take() {
@@ -157,8 +158,7 @@ impl Translator {
             }
             AgentEvent::AssistantText(text) => {
                 let streamed = std::mem::take(&mut self.streamed);
-                // The finished answer settles what streamed: only what did not stream yet
-                // is sent, since a chunk cannot be taken back.
+                // The finished answer sends only what did not stream yet.
                 let rest = match text.strip_prefix(streamed.as_str()) {
                     Some(rest) => rest,
                     None if streamed.is_empty() => text.as_str(),

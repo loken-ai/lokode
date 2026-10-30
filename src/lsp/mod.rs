@@ -1,8 +1,9 @@
 //! Language servers: one per language the project uses, started when first needed.
 //!
-//! A server that stops is started again once. A second stop, or a server that cannot be
-//! started at all, leaves it down for the session with what it said, so a tool asks once
-//! and is answered at once afterwards.
+//! A server that stops is started again once.
+//! A second stop leaves it down for the session with what it said.
+//! A server that cannot be started leaves it down the same way.
+//! A tool asks once and is answered at once afterwards.
 
 pub mod check;
 pub mod language;
@@ -94,14 +95,16 @@ impl LspPool {
         })
     }
 
-    /// Told when a server starts, stops, publishes or reports progress. One waiter.
+    /// Told when a server starts, stops, publishes or reports progress.
+    ///
+    /// One waiter.
     pub fn changed(&self) -> Arc<Notify> {
         self.changed.clone()
     }
 
     /// Where each server of the project stands: those it uses, then any other started.
-    /// `None` while a server is being started, which holds the servers: the caller keeps
-    /// what it had and is told again once the start is over.
+    /// `None` while a server is being started, which holds the servers.
+    /// The caller keeps what it had and is told again once the start is over.
     pub async fn status(&self) -> Option<Vec<Status>> {
         let slots = self.slots.try_lock().ok()?;
         let mut languages: Vec<String> = self.available.clone();
@@ -260,8 +263,9 @@ impl LspPool {
             .collect()
     }
 
-    /// Tell every running server that `paths` were written or removed: created when it
-    /// never had the file open and the file is there, deleted when the file is gone.
+    /// Tell every running server that `paths` were written or removed.
+    /// Created when it never had the file open and the file is there.
+    /// Deleted when the file is gone.
     pub async fn files_changed(&self, paths: &[PathBuf]) {
         for server in self.running().await {
             let opened = server.opened.lock().await;

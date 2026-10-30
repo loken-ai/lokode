@@ -1,8 +1,8 @@
 //! The conversation as entries, and the rows they are drawn as.
 //!
-//! Every entry carries a revision that changes whenever the entry does, so what it was
-//! drawn as can be kept and drawn again until it changes. A frame then costs the entries
-//! that moved, not the whole session.
+//! Every entry carries a revision that changes whenever the entry does.
+//! What it was drawn as can be kept and drawn again until it changes.
+//! A frame then costs the entries that moved, not the whole session.
 
 use std::collections::HashMap;
 use std::ops::{Deref, Index, IndexMut};
@@ -149,8 +149,8 @@ impl Drawings {
 
     /// Drop what was drawn for revisions the thread no longer holds.
     ///
-    /// Only once there are more drawings than entries, so a frame that changed nothing does
-    /// not walk the thread for it.
+    /// Only once there are more drawings than entries.
+    /// A frame that changed nothing does not walk the thread for it.
     pub fn forget_gone(&mut self, thread: &Thread) {
         if self.by_rev.len() <= thread.len() * 2 {
             return;
@@ -162,8 +162,8 @@ impl Drawings {
 
 /// The pane's rows, as the blocks each entry was drawn as.
 ///
-/// Held as shared blocks rather than one list, so laying out a frame copies a pointer per
-/// entry instead of every row of the session.
+/// Held as shared blocks rather than one list.
+/// Laying out a frame copies a pointer per entry instead of every row of the session.
 #[derive(Debug, Default)]
 pub struct Pane {
     blocks: Vec<Arc<Vec<Line<'static>>>>,

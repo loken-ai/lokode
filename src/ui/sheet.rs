@@ -1,12 +1,13 @@
 //! What a command has to say, on a page of its own.
 //!
-//! A command's answer is not part of the conversation: the model did not say it, it will
-//! not be sent anywhere, and it is read once. So it goes on a page over the conversation,
-//! scrolls, and closes leaving nothing.
+//! A command's answer is not part of the conversation.
+//! The model did not say it, it will not be sent anywhere, and it is read once.
+//! So it goes on a page over the conversation, scrolls, and closes leaving nothing.
 //!
-//! The page is a surface of its own: a title band naming the command, the answer drawn as
-//! what it is (markdown, a diff, the window's map, or lines of text), and a foot that says
-//! how to move and how much is left.
+//! The page is a surface of its own.
+//! It has a title band naming the command.
+//! It draws the answer as what it is: markdown, a diff, the window's map, or lines of text.
+//! It has a foot that says how to move and how much is left.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -64,8 +65,9 @@ fn subtitle_of(verb: &str) -> &'static str {
 }
 
 impl Sheet {
-    /// The page a command's answer makes, drawn as what it is: a diff as a diff, the answer
-    /// of a command that writes markdown as markdown, anything else as lines of text.
+    /// The page a command's answer makes, drawn as what it is.
+    /// A diff is a diff, the answer of a command that writes markdown is markdown, anything else is
+    /// lines of text.
     pub fn new(verb: &str, body: &str) -> Self {
         let body = if crate::ui::chat::looks_like_diff(body) {
             Body::Diff(body.to_string())
@@ -202,9 +204,10 @@ impl Sheet {
     }
 }
 
-/// Lines of text, each kept as written and wrapped to `width`. The first line is the
-/// answer and stands out, a line that ends in a colon heads what follows, and an indented
-/// `name: value` has its name receding.
+/// Lines of text, each kept as written and wrapped to `width`.
+/// The first line is the answer and stands out.
+/// A line that ends in a colon heads what follows.
+/// An indented `name: value` has its name receding.
 fn text_rows(s: &str, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     let mut out = Vec::new();
@@ -298,7 +301,7 @@ fn window_rows(w: &Occupancy, width: usize) -> Vec<Line<'static>> {
     }
     out.push(Line::from(""));
     out.push(Line::from(Span::styled(
-        "Past a hundred per cent the oldest steps are elided. /compact does it now.",
+        "Past 100% the oldest steps are elided. /compact does it now.",
         t.dim,
     )));
     out
@@ -346,7 +349,8 @@ mod tests {
         assert_eq!(s.text(), "one\ntwo");
     }
 
-    /// A command that writes markdown gets its tables drawn, and plain text keeps its lines.
+    /// A command that writes markdown gets its tables drawn.
+    /// Plain text keeps its lines.
     #[test]
     fn markdown_is_drawn_and_text_keeps_its_lines() {
         let mut help = Sheet::new("help", "| Key | What |\n|---|---|\n| esc | close |");

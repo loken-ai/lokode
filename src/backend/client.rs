@@ -17,8 +17,8 @@ pub enum StreamEvent {
     Delta(String),
     /// A piece of the model's scratchpad, however the server chose to mark it.
     ///
-    /// Shown and then dropped: it never enters the conversation, because it is not what
-    /// the model said - it is what it was working through on the way to saying it.
+    /// Shown and then dropped.
+    /// It never enters the conversation, because it is not what the model said.
     Reasoning(String),
     /// A fragment of a native tool call, to be reassembled by index.
     Call(ToolCallDelta),
@@ -38,8 +38,8 @@ pub enum StreamEvent {
 
 /// Raised when a server will not take something the request asked for.
 ///
-/// Distinguished from an ordinary refusal so the caller can drop the feature and try
-/// again rather than give up on the turn.
+/// Distinct from an ordinary refusal.
+/// The caller can drop the feature and try again rather than give up on the turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unsupported {
     Usage,
@@ -54,19 +54,21 @@ const MAX_ATTEMPTS: usize = 3;
 /// How long a connection may stay silent before the client gives up.
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(900);
 
-/// Wait before the first retry; doubled each time after.
+/// Wait before the first retry.
+/// Doubled after each retry.
 const BACKOFF_BASE: Duration = Duration::from_millis(400);
 
 pub struct BackendClient {
     http: reqwest::Client,
     base: String,
-    /// Cleared the first time the server rejects `stream_options`, so the cost of finding
-    /// out is paid once per session rather than on every request.
+    /// Cleared the first time the server rejects `stream_options`.
+    /// Later requests omit the field.
     usage_supported: AtomicBool,
-    /// Whether the server takes `reasoning_effort`; learned, as `usage_supported` is.
+    /// Whether the server takes `reasoning_effort`.
+    /// Learned the way `usage_supported` is.
     effort_supported: AtomicBool,
-    /// The widest window the server takes for the model last asked about, as its model list
-    /// states it, once learned.
+    /// The widest window the server takes for the model last asked about.
+    /// Set from the model list of the server once learned.
     served_window: std::sync::Mutex<Option<(String, usize)>>,
 }
 
@@ -77,10 +79,10 @@ impl BackendClient {
 
     /// A client that sends `headers` with every request.
     ///
-    /// Built into the client's defaults rather than added per call, so there is one place
-    /// a credential can be attached and no request path that can forget it. Headers that
-    /// will not encode are dropped with a warning naming the header - never its value,
-    /// which is the thing that must not reach a log.
+    /// Headers are built into the client's defaults.
+    /// That gives one place to attach a credential, and no request path that can omit it.
+    /// Headers that will not encode are dropped with a warning naming the header.
+    /// The warning never carries the value, which must not reach a log.
     pub fn with_headers(base_url: impl Into<String>, headers: &[(String, String)]) -> Self {
         let mut map = reqwest::header::HeaderMap::new();
         for (name, value) in headers {
@@ -100,8 +102,9 @@ impl BackendClient {
 
         Self {
             http: reqwest::Client::builder()
-                // A silence, not a duration: a stream the server keeps alive runs as long as it
-                // produces, and an answer that is not streamed is still bounded.
+                // The timeout bounds silence, not total duration.
+                // A stream the server keeps alive runs as long as it produces.
+                // An answer that is not streamed is still bounded.
                 .read_timeout(READ_TIMEOUT)
                 .default_headers(map)
                 .build()
@@ -113,9 +116,10 @@ impl BackendClient {
         }
     }
 
-    /// Learn the widest window the server takes for `model` from its model list, once per
-    /// model: a server serves each request with the window it needs up to that one, and
-    /// names it `max_model_len`. A server that does not say leaves the window unknown.
+    /// Learn the widest window the server takes for `model` from its model list, once per model.
+    /// A server serves each request with the window it needs up to that one.
+    /// It names that window `max_model_len`.
+    /// A server that does not say leaves the window unknown.
     async fn learn_window(&self, model: &str) {
         let known = self
             .served_window
@@ -151,8 +155,8 @@ impl BackendClient {
         crate::backend::presets::endpoint(&self.base, "chat/completions")
     }
 
-    /// Non-streaming chat completion: returns the assistant content as
-    /// a single string. Convenience for repair round-trips.
+    /// Non-streaming chat completion that returns the assistant content as a single string.
+    /// Convenience for repair round-trips.
     async fn complete_request(
         &self,
         mut req: ChatCompletionRequest,
@@ -190,7 +194,8 @@ impl BackendClient {
                 .await;
             match attempt {
                 Ok(body) => break body,
-                // A server that does not know the field says so with a 4xx. Ask without it.
+                // A server that does not know the field says so with a 4xx.
+                // Ask without it.
                 Err(e) if asked_for_effort && mentions(&e, &["reasoning_effort"]) => {
                     tracing::warn!(why = %e, "backend will not take reasoning_effort; asking without it");
                     self.effort_supported.store(false, Ordering::Relaxed);
@@ -212,9 +217,9 @@ impl BackendClient {
 
     /// Streaming chat completion.
     ///
-    /// Retries cover establishing the response only. Once bytes are flowing the answer is
-    /// partly on screen and partly in the transcript, and starting again would duplicate
-    /// what the user has already read.
+    /// Retries cover establishing the response only.
+    /// Once bytes are flowing the answer is partly on screen and partly in the transcript.
+    /// Starting again would duplicate what the user has already read.
     async fn stream_request(
         &self,
         mut req: ChatCompletionRequest,
@@ -256,8 +261,8 @@ impl BackendClient {
 
             match attempt {
                 Ok(resp) => break resp,
-                // A server that does not know the field says so with a 4xx. Give up the
-                // token counts rather than the request.
+                // A server that does not know the field says so with a 4xx.
+                // Give up the token counts rather than the request.
                 Err(e) if asked_for_usage && mentions(&e, &["stream_options", "include_usage"]) => {
                     tracing::warn!(
                         why = %e,
@@ -266,8 +271,9 @@ impl BackendClient {
                     self.usage_supported.store(false, Ordering::Relaxed);
                     continue;
                 }
-                // Not something to work around here: the caller has to change protocol,
-                // which means changing the system prompt and how the answer is read.
+                // It is not worked around here.
+                // The caller has to change protocol.
+                // That means changing the system prompt and how the answer is read.
                 Err(e) if req.tools.is_some() && mentions(&e, &["tools", "tool_choice"]) => {
                     tracing::warn!(why = %e, "backend will not take native tool calls");
                     return Err(e.context(UNSUPPORTED_NATIVE_TOOLS));
@@ -278,10 +284,13 @@ impl BackendClient {
 
         self.learn_window(&req.model).await;
 
-        // One splitter per response: the tags it tracks can straddle chunk boundaries, so
-        // the state has to outlive a single chunk and must not outlive the stream.
-        // A keep-alive is an SSE comment, which an event parser drops; it is turned into an
-        // event of its own so a server reading a long prompt is known to be working.
+        // One splitter per response.
+        // The tags it tracks can straddle chunk boundaries.
+        // Its state outlives a single chunk and does not outlive the stream.
+        //
+        // A keep-alive is an SSE comment, which an event parser drops.
+        // It is turned into an event of its own.
+        // That tells the caller that a server reading a long prompt is working.
         let sse = resp
             .bytes_stream()
             .map(|chunk| {
@@ -291,12 +300,15 @@ impl BackendClient {
                 })
             })
             .eventsource();
-        // One chunk can carry several things at once - a piece of prose, fragments of more
-        // than one tool call, and the reason generation ended - so a chunk becomes a list
-        // of events rather than one.
-        // One splitter per response, moved into the closure: the tags it tracks can
-        // straddle chunk boundaries, so the state must outlive a single chunk - and must
-        // not outlive the stream, or one response's half-open tag would corrupt the next.
+        // One chunk can carry several things at once.
+        // It can carry a piece of prose, fragments of more than one tool call, and the reason
+        // generation ended.
+        // A chunk becomes a list of events rather than one.
+        //
+        // One splitter per response, moved into the closure.
+        // The tags it tracks can straddle chunk boundaries.
+        // Its state outlives a single chunk and does not outlive the stream.
+        // A half-open tag of one response never reaches the next.
         let mut think = crate::backend::reasoning::ThinkSplitter::default();
         let mapped = sse.flat_map(move |ev| {
             let events: Vec<Result<StreamEvent>> = match ev {
@@ -368,8 +380,9 @@ fn is_keep_alive(chunk: &[u8]) -> bool {
 const PREFILL_COMMENT: &str = "loken-prefill";
 
 /// A chunk of comments alone, as the event it stands for, which an event parser would
-/// otherwise drop: the last progress of a prompt being read when one is there, a
-/// keep-alive when not. `None` for a chunk that carries anything else.
+/// otherwise drop.
+/// That is the last progress of a prompt being read when there is one, a keep-alive when not.
+/// `None` for a chunk that carries anything else.
 pub(crate) fn comment_event(chunk: &[u8]) -> Option<Vec<u8>> {
     if !is_keep_alive(chunk) {
         return None;
@@ -419,8 +432,8 @@ fn events_of(
             reasoning.push_str(&s);
         }
         if let Some(s) = choice.delta.content {
-            // And a server that does not: the tags arrive inside the content, a few
-            // characters at a time, so this is a state machine rather than a search.
+            // Otherwise the tags arrive inside the content, a few characters at a time.
+            // That makes this a state machine rather than a search.
             let split = think.push(&s);
             text.push_str(&split.answer);
             reasoning.push_str(&split.reasoning);
@@ -438,11 +451,12 @@ fn events_of(
     if !reasoning.is_empty() {
         out.insert(0, StreamEvent::Reasoning(reasoning));
     }
-    // The usage report arrives on a chunk of its own, after the one that ends generation,
-    // so an end is reported whenever either shows up.
+    // The usage report arrives on a chunk of its own, after the one that ends generation.
+    // An end is reported whenever either shows up.
     if finish_reason.is_some() || c.usage.is_some() {
-        // Generation is over, so anything the splitter is still holding will never be
-        // disambiguated by a later fragment - release it rather than swallow it.
+        // Generation is over.
+        // Anything the splitter still holds will never be disambiguated by a later fragment.
+        // It is released rather than swallowed.
         let last = think.finish();
         if !last.answer.is_empty() {
             out.push(StreamEvent::Delta(last.answer));
@@ -466,9 +480,8 @@ enum Retry {
 
 /// A request that never reached a server at all.
 ///
-/// Refusing to connect is the most retryable failure there is - it is what a backend that
-/// is still starting up looks like from here, and it was the one case the first version
-/// of this treated as final.
+/// Refusing to connect is the most retryable failure there is.
+/// It is what a backend that is still starting up looks like from here.
 fn classify_transport(e: reqwest::Error, url: &str) -> Retry {
     let wrapped = anyhow::Error::new(e);
     let transient = wrapped
@@ -493,14 +506,14 @@ fn classify(status: reqwest::StatusCode, body: &str) -> Retry {
     }
 }
 
-/// Marker put on the error when a backend rejects native tool calls, so the agent can
-/// recognise it after the error has travelled and drop to the envelope protocol.
+/// Marker put on the error when a backend rejects native tool calls.
+/// The agent recognises it after the error has travelled and drops to the envelope protocol.
 pub const UNSUPPORTED_NATIVE_TOOLS: &str = "backend does not support native tool calls";
 
 /// Whether a failure names one of the fields we could stop sending.
 ///
-/// Matched on the text because that is all a rejected request gives back - the reason is
-/// prose in a body, and every implementation words it differently.
+/// Matched on the text, which is all a rejected request gives back.
+/// The reason is prose in a body, and every implementation words it differently.
 fn mentions(e: &anyhow::Error, needles: &[&str]) -> bool {
     let text = format!("{e:#}");
     needles.iter().any(|n| text.contains(n))
@@ -509,9 +522,9 @@ fn mentions(e: &anyhow::Error, needles: &[&str]) -> bool {
 /// The OpenAI-compatible wire format, which is what almost every server speaks.
 ///
 /// LLMuse, ollama, vLLM, llama.cpp, LM Studio, OpenAI itself and the hosted services that
-/// copied it all land here. What differs between them is dialect - which optional fields
-/// they accept - and that is what its capabilities carry, not a separate implementation
-/// each.
+/// copied it all land here.
+/// Servers differ in dialect, meaning which optional fields they accept.
+/// Its capabilities carry the dialect.
 ///
 /// See [`crate::backend::provider::Capabilities`] for what it declares it can do.
 #[async_trait::async_trait]
@@ -528,8 +541,9 @@ impl crate::backend::provider::Provider for BackendClient {
         crate::backend::provider::Capabilities {
             native_tools: true,
             grammar: true,
-            // Learned rather than declared: the client stops asking for usage once a
-            // server has rejected the field, so this reports what is actually happening.
+            // Learned rather than declared.
+            // The client stops asking for usage once a server has rejected the field.
+            // This reports what is actually happening.
             usage_in_stream: self.usage_supported.load(Ordering::Relaxed),
         }
     }
@@ -546,8 +560,10 @@ impl crate::backend::provider::Provider for BackendClient {
 
     /// One token, which is what makes the server read the weights.
     ///
-    /// There is no endpoint for "load this": every server loads on the first request, so
-    /// the smallest possible request is the way to ask. Its answer is thrown away.
+    /// There is no endpoint for "load this".
+    /// Every server loads on the first request.
+    /// The smallest possible request asks for it.
+    /// Its answer is thrown away.
     async fn warm(&self, model: &str) -> Result<()> {
         let req = ChatCompletionRequest {
             model: model.to_string(),
@@ -591,8 +607,8 @@ fn model_window(body: &serde_json::Value, model: &str) -> Option<usize> {
 
 /// The ids out of a models listing, in the order the server gave them.
 ///
-/// Both shapes seen in the wild are read: the OpenAI `data` array, and the bare array a
-/// few local servers answer with.
+/// Both shapes are read: the OpenAI `data` array, and the bare array a few local servers
+/// answer with.
 fn model_ids(body: &serde_json::Value) -> Vec<String> {
     let rows = body
         .get("data")
@@ -637,7 +653,8 @@ impl BackendClient {
 
 #[cfg(test)]
 mod tests {
-    /// A chunk of comments alone is a keep-alive; one that carries data, or nothing, is not.
+    /// A chunk of comments alone is a keep-alive.
+    /// One that carries data, or nothing, is not.
     #[test]
     fn a_comment_only_chunk_is_a_keep_alive() {
         assert!(super::is_keep_alive(b":\n\n"));
@@ -647,8 +664,8 @@ mod tests {
         assert!(!super::is_keep_alive(b""));
     }
 
-    /// A question beside the turn asks the server for as little reasoning as it allows; the
-    /// turn itself asks nothing of the kind.
+    /// A question beside the turn asks the server for as little reasoning as it allows.
+    /// The turn itself asks nothing of the kind.
     #[test]
     fn a_side_question_asks_for_no_reasoning() {
         let c = BackendClient::new("http://127.0.0.1:1");
@@ -731,8 +748,8 @@ mod tests {
         assert!(!mentions(&unrelated, &["stream_options", "include_usage"]));
     }
 
-    /// The measurements a loken server adds to the closing usage are read, each one
-    /// optional, and the standard speculation counts with them.
+    /// The measurements a loken server adds to the closing usage are read, each one optional.
+    /// The standard speculation counts are read with them.
     #[test]
     fn a_loken_usage_is_read_off_the_last_chunk() {
         let raw = r#"{"choices":[],"usage":{"prompt_tokens":20431,"completion_tokens":120,
@@ -767,8 +784,9 @@ mod tests {
         assert!(plain.usage.expect("a usage").loken.is_none());
     }
 
-    /// The comment that says how far a prompt has been read becomes an event of its own;
-    /// any other comment is a keep-alive, and a chunk with data is left alone.
+    /// The comment that says how far a prompt has been read becomes an event of its own.
+    /// Any other comment is a keep-alive.
+    /// A chunk with data is left alone.
     #[test]
     fn a_prefill_comment_is_an_event_of_its_own() {
         let event = comment_event(b": loken-prefill {\"done\": 8192, \"total\": 20431}\n\n")

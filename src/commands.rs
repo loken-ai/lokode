@@ -1,10 +1,11 @@
 //! Commands written as Markdown files.
 //!
-//! A command is a prompt a person runs by name: `/review`, `/git:commit`. It lives in
-//! `~/.config/lokode/commands/` for every project or in the project's `.lokode/commands/`,
-//! the project's taking the place of the user's of the same name. A file in a directory
-//! is named after both, joined by `:`. A file may open with settings between 2 `---`
-//! lines:
+//! A command is a prompt a person runs by name: `/review`, `/git:commit`.
+//! It lives in `~/.config/lokode/commands/` for every project or in the project's
+//! `.lokode/commands/`.
+//! The project's command takes the place of the user's of the same name.
+//! A file in a directory is named after both, joined by `:`.
+//! A file may open with settings between 2 `---` lines:
 //!
 //! ```text
 //! ---
@@ -15,7 +16,8 @@
 //! Write a commit message for what is staged, scoped to $1.
 //! ```
 //!
-//! What is typed after the name replaces `$ARGUMENTS`, and its words replace `$1` to `$9`.
+//! What is typed after the name replaces `$ARGUMENTS`.
+//! Its words replace `$1` to `$9`.
 //! A command that names none of them has what was typed appended.
 
 use std::path::{Path, PathBuf};
@@ -56,8 +58,9 @@ pub fn dirs(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The commands of `dirs`, by name, a later directory's taking the place of an earlier
-/// one's. Says what it could not read.
+/// The commands of `dirs`, by name.
+/// A later directory's command takes the place of an earlier one's.
+/// Says what it could not read.
 pub fn load(dirs: &[PathBuf]) -> (Vec<Command>, Vec<String>) {
     let mut out: Vec<Command> = Vec::new();
     let mut warnings = Vec::new();
@@ -80,9 +83,10 @@ pub fn load(dirs: &[PathBuf]) -> (Vec<Command>, Vec<String>) {
     (out, warnings)
 }
 
-/// The command files of `dir` with their names: a file of `dir` by its own name, a file
-/// of a directory in it by both names joined by `:`. A name that is not made of letters,
-/// digits, `-` and `_` is left out.
+/// The command files of `dir` with their names.
+/// A file of `dir` is named by its own name.
+/// A file of a directory in it is named by both names joined by `:`.
+/// A name that is not made of letters, digits, `-` and `_` is left out.
 fn files(dir: &Path) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -124,7 +128,7 @@ pub fn parse(name: &str, text: &str, from: &str) -> Result<Command, String> {
             "description" => command.description = value,
             "argument-hint" => command.argument_hint = Some(value).filter(|v| !v.is_empty()),
             "agent" => command.agent = Some(value).filter(|v| !v.is_empty()),
-            // Written by other tools' commands, and harmless here.
+            // Written by other tools' commands, and ignored here.
             "allowed-tools" | "model" | "disable-model-invocation" | "hooks" | "name" | "color" => {
             }
             other => return Err(format!("it has a setting {other:?} lokode does not know")),
@@ -139,9 +143,10 @@ pub fn parse(name: &str, text: &str, from: &str) -> Result<Command, String> {
     Ok(command)
 }
 
-/// `body` with what was typed put in: all of it for `$ARGUMENTS` and `$ARGS`, its words
-/// for `$1` to `$9`, a word in double quotes keeping its spaces. Appended when the body
-/// names none of them.
+/// `body` with what was typed put in.
+/// All of it goes for `$ARGUMENTS` and `$ARGS`.
+/// Its words go for `$1` to `$9`, and a word in double quotes keeps its spaces.
+/// It is appended when the body names none of them.
 pub fn expand(body: &str, args: &str) -> String {
     let args = args.trim();
     let words = words(args);
@@ -202,8 +207,8 @@ fn words(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// What was typed goes where the body says, whole or word by word, and is appended
-    /// when the body says nothing.
+    /// What was typed goes where the body says, whole or word by word.
+    /// It is appended when the body says nothing.
     #[test]
     fn what_was_typed_is_put_in() {
         assert_eq!(
@@ -237,8 +242,8 @@ mod tests {
         assert!(parse("x", "", "here").is_err());
     }
 
-    /// A file in a directory is named after both, and the project's command takes the
-    /// place of the user's.
+    /// A file in a directory is named after both.
+    /// The project's command takes the place of the user's.
     #[test]
     fn commands_are_found_by_name() {
         let dir = tempfile::tempdir().unwrap();

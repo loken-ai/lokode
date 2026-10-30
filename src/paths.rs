@@ -1,9 +1,7 @@
 //! Where lokode keeps things on disk.
 //!
-//! The XDG base directories, read from the environment where it says so and falling back
-//! to the conventional places. Written out rather than taken from a crate: it is 3
-//! variables and a home directory, and the fallbacks are the whole of the specification
-//! that matters here.
+//! The XDG base directories, read from the environment where it says so.
+//! Each falls back to the conventional place.
 
 use std::path::PathBuf;
 
@@ -39,9 +37,10 @@ pub fn log_file() -> Option<PathBuf> {
     state_dir().map(|p| p.join("lokode.log"))
 }
 
-/// Guards the process-wide environment, so tests that set a variable do not race each
-/// other. One lock for the whole crate rather than one per module: `HOME` is read here and
-/// in `config`, and 2 locks around one environment guard nothing.
+/// Guards the process-wide environment, so tests that set a variable do not race each other.
+///
+/// One lock covers the whole crate.
+/// `HOME` is read here and in `config`, so 2 locks would guard nothing.
 #[cfg(test)]
 pub(crate) fn with_env<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
     use std::sync::Mutex;
@@ -83,9 +82,8 @@ mod tests {
         });
     }
 
-    /// The specification says a relative value is invalid and must be ignored - not
-    /// resolved against the working directory, which would scatter state through whatever
-    /// project the agent happened to be pointed at.
+    /// The specification says a relative value is invalid and must be ignored.
+    /// It is not resolved against the working directory.
     #[test]
     fn a_relative_xdg_value_is_ignored() {
         with_env(
@@ -123,8 +121,9 @@ mod tests {
         );
     }
 
-    /// Nowhere to put anything is an answer, not a panic: the agent still works without a
-    /// home directory, it just cannot remember anything afterwards.
+    /// Nowhere to put anything is an answer, not a panic.
+    /// The agent still works without a home directory.
+    /// It cannot remember anything afterwards.
     #[test]
     fn no_home_is_not_a_failure() {
         with_env(&[("XDG_STATE_HOME", None), ("HOME", None)], || {

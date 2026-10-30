@@ -1,24 +1,23 @@
 //! The Anthropic Messages API.
 //!
-//! The first provider whose wire format is genuinely different rather than a dialect, and
-//! the reason the seam next door exists. 4 things do not line up with the conversation
-//! the agent keeps internally, and each is translated here so that nothing above has to
-//! know:
+//! Its wire format differs from the conversation the agent keeps internally.
+//! 4 things do not line up, and each is translated here so that nothing above has to know:
 //!
-//! - The system prompt is a **top-level field**, not a message with a role. lokode's whole
-//!   compaction design rests on the system message being at index 0 and never dropped, so
-//!   the invariant is kept internally and the message is lifted out at render time.
+//! - The system prompt is a **top-level field**, not a message with a role.
+//!   The system message stays at index 0 and is never dropped, which compaction relies on.
+//!   The message is lifted out at render time.
 //! - A tool result is a **content block inside a `user` message**, not a message with role
-//!   `tool`. Consecutive results coalesce into one user message, which is not cosmetic:
-//!   splitting them across several messages teaches the model to stop making parallel
-//!   calls, and parallel calls are exactly what the loop now produces.
+//!   `tool`.
+//!   Consecutive results coalesce into one user message.
+//!   Splitting them across several messages teaches the model to stop making parallel calls.
 //! - Tool calls arrive as `tool_use` blocks whose arguments stream as `input_json_delta`
-//!   fragments, so the accumulator that reassembles OpenAI's fragments works here too.
-//! - Streaming is a different alphabet: `content_block_start` / `content_block_delta` /
-//!   `message_delta`, with the stop reason and output-token count on the last of those.
+//!   fragments.
+//!   The accumulator that reassembles OpenAI's fragments works here too.
+//! - Streaming uses its own events: `content_block_start`, `content_block_delta` and
+//!   `message_delta`.
+//!   The stop reason and output-token count arrive on the last of those.
 //!
-//! Thinking blocks map onto the same `Reasoning` event as every other dialect, so a model
-//! that reasons here looks the same on screen as one served by ollama.
+//! Thinking blocks map onto the same `Reasoning` event as every other dialect.
 
 use std::pin::Pin;
 
@@ -33,8 +32,8 @@ use crate::backend::client::{ChunkStream, StreamEvent};
 use crate::backend::provider::{Capabilities, Provider, TurnRequest};
 use crate::backend::wire::{FunctionDelta, ToolCallDelta, Usage};
 
-/// The API revision this speaks. Anthropic requires it on every request and treats its
-/// absence as an error rather than a default.
+/// The API revision this speaks.
+/// Anthropic requires it on every request and treats its absence as an error.
 const API_VERSION: &str = "2023-06-01";
 
 pub struct AnthropicProvider {
@@ -45,9 +44,8 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     /// Build a client that carries the credential on every request.
     ///
-    /// The key goes in `x-api-key`, not `Authorization` - converting a working
-    /// OpenAI-compatible configuration is a header change, not a value change - and the
-    /// header is marked sensitive so nothing that formats the client can echo it.
+    /// The key goes in `x-api-key`, not `Authorization`.
+    /// The header is marked sensitive, so nothing that formats the client can echo it.
     pub fn new(base: String, api_key: &str) -> Result<Self> {
         use reqwest::header::{HeaderMap, HeaderValue};
         let mut headers = HeaderMap::new();
@@ -57,8 +55,9 @@ impl AnthropicProvider {
         headers.insert("anthropic-version", HeaderValue::from_static(API_VERSION));
         Ok(Self {
             http: reqwest::Client::builder()
-                // A silence, not a duration: a stream the server keeps alive runs as long as it
-                // produces, and an answer that is not streamed is still bounded.
+                // A silence, not a duration.
+                // A stream the server keeps alive runs as long as it produces.
+                // An answer that is not streamed is still bounded.
                 .read_timeout(crate::backend::client::READ_TIMEOUT)
                 .user_agent(concat!("lokode/", env!("CARGO_PKG_VERSION")))
                 .default_headers(headers)
@@ -74,8 +73,7 @@ impl AnthropicProvider {
 
 /// Turn the internal conversation into an Anthropic request body.
 ///
-/// Split out from the request so it can be tested without a server: the shape of this
-/// translation is the whole of what makes the provider correct.
+/// It is separate from the request so it can be tested without a server.
 pub fn render(req: &TurnRequest, stream: bool) -> Value {
     let mut system: Option<String> = None;
     let mut messages: Vec<Value> = Vec::new();
@@ -91,9 +89,9 @@ pub fn render(req: &TurnRequest, stream: bool) -> Value {
                     format!("{existing}\n\n{}", m.content)
                 });
             }
-            // A tool result belongs to the user turn, as a block. Consecutive results
-            // join the message already being built rather than starting a new one -
-            // splitting them is what stops the model making parallel calls.
+            // A tool result belongs to the user turn, as a block.
+            // Consecutive results join the message already being built.
+            // Splitting them stops the model making parallel calls.
             "tool" => {
                 let block = json!({
                     "type": "tool_result",
@@ -119,10 +117,10 @@ pub fn render(req: &TurnRequest, stream: bool) -> Value {
                     blocks.push(json!({"type": "text", "text": m.content}));
                 }
                 for call in m.tool_calls.iter().flatten() {
-                    // Arguments travel as an object here, not the JSON string OpenAI
-                    // uses. A model that produced unparseable arguments has already been
-                    // repaired or refused upstream; anything still broken is sent as an
-                    // empty object rather than failing the whole turn over one call.
+                    // Arguments travel as an object here, not the JSON string OpenAI uses.
+                    // Unparseable arguments were repaired or refused upstream.
+                    // Arguments still broken are sent as an empty object.
+                    // One bad call does not fail the whole turn.
                     let input: Value = serde_json::from_str(&call.function.arguments)
                         .unwrap_or_else(|_| json!({}));
                     blocks.push(json!({
@@ -142,7 +140,7 @@ pub fn render(req: &TurnRequest, stream: bool) -> Value {
 
     let mut body = json!({
         "model": req.model,
-        // Required here, unlike everywhere else - a request without it is rejected.
+        // Required here, and a request without it is rejected.
         "max_tokens": req.max_tokens,
         "temperature": req.temperature,
         "messages": messages,
@@ -203,9 +201,8 @@ struct Block {
 
 #[derive(Debug, Deserialize)]
 struct Delta {
-    // Deliberately not read: which field is present already says which kind of delta this
-    // is, and branching on presence survives a new delta type being added beside the ones
-    // handled here rather than falling through a name match.
+    // Deliberately not read: which field is present says which kind of delta this is.
+    // Branching on presence survives a new delta type being added.
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
@@ -231,8 +228,8 @@ struct AnthropicUsage {
 /// Translate one Anthropic event into the events the loop reads.
 fn events_of(e: Event) -> Vec<StreamEvent> {
     match e.kind.as_str() {
-        // A tool call opens with its id and name and then streams its arguments, so the
-        // opening event is what tells the accumulator which index is which call.
+        // A tool call opens with its id and name, then streams its arguments.
+        // The opening event tells the accumulator which index is which call.
         "content_block_start" => match e.content_block {
             Some(b) if b.kind == "tool_use" => vec![StreamEvent::Call(ToolCallDelta {
                 index: e.index,
@@ -266,9 +263,9 @@ fn events_of(e: Event) -> Vec<StreamEvent> {
             }
             None => Vec::new(),
         },
-        // Where the stop reason and the output count arrive. `tool_use` means the model
-        // wants tools run, which the loop already reads off the calls themselves; the one
-        // that has to survive translation is the truncation case.
+        // Where the stop reason and the output count arrive.
+        // `tool_use` means the model wants tools run, which the loop reads off the calls.
+        // The stop reason that has to survive translation is truncation.
         "message_delta" => {
             let finish_reason = e
                 .delta
@@ -288,7 +285,7 @@ fn events_of(e: Event) -> Vec<StreamEvent> {
                 }),
             }]
         }
-        // The prompt token count arrives up front rather than at the end.
+        // The prompt token count arrives up front.
         "message_start" => match e.message.and_then(|m| m.usage) {
             Some(u) if u.input_tokens > 0 => vec![StreamEvent::End {
                 finish_reason: None,
@@ -312,10 +309,9 @@ impl Provider for AnthropicProvider {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             native_tools: true,
-            // Anthropic does have a schema-constrained output mode, but it is a different
-            // parameter with different restrictions from the one the envelope grammar is
-            // built for. Reporting false keeps the agent on native tool calling here
-            // rather than handing over a schema that would be accepted and not applied.
+            // Anthropic has a schema-constrained output mode with a different parameter and
+            // different restrictions from the one the envelope grammar is built for.
+            // Reporting false keeps the agent on native tool calling here.
             grammar: false,
             usage_in_stream: true,
         }
@@ -445,8 +441,8 @@ mod tests {
         }
     }
 
-    /// The invariant lokode's compaction rests on is that the system message is history[0].
-    /// Anthropic has no such role, so it is lifted into a field rather than sent as a turn.
+    /// The system message is history[0], and compaction rests on that invariant.
+    /// Anthropic has no such role, so it is lifted into a field instead of sent as a turn.
     #[test]
     fn the_system_message_becomes_a_field() {
         let body = render(
@@ -462,8 +458,8 @@ mod tests {
         assert_eq!(msgs[0]["role"], "user");
     }
 
-    /// Not cosmetic: results split across several user messages teach the model to stop
-    /// making parallel calls, and parallel calls are what the loop now produces.
+    /// Results split across several user messages teach the model to stop making parallel
+    /// calls.
     #[test]
     fn consecutive_tool_results_coalesce_into_one_user_message() {
         let body = render(
@@ -483,8 +479,8 @@ mod tests {
         assert_eq!(blocks[1]["tool_use_id"], "c2");
     }
 
-    /// A result that follows a fresh assistant turn starts its own message rather than
-    /// joining an unrelated earlier one.
+    /// A result that follows a fresh assistant turn starts its own message.
+    /// It does not join an unrelated earlier one.
     #[test]
     fn results_do_not_join_across_an_assistant_turn() {
         let body = render(
@@ -574,7 +570,8 @@ mod tests {
         );
     }
 
-    /// The opening event carries the id and name; the arguments arrive after it.
+    /// The opening event carries the id and name.
+    /// The arguments arrive after it.
     #[test]
     fn a_tool_call_is_assembled_from_its_start_and_its_fragments() {
         let start = ev(
@@ -603,8 +600,9 @@ mod tests {
         }
     }
 
-    /// Truncation is the stop reason that has to survive translation: a cut-off answer is
-    /// otherwise indistinguishable from a model that cannot produce the shape asked for.
+    /// Truncation is the stop reason that has to survive translation.
+    /// A cut-off answer is otherwise indistinguishable from a model that cannot produce the
+    /// shape asked for.
     #[test]
     fn stop_reasons_are_translated_to_the_ones_the_loop_reads() {
         let out = ev(
@@ -625,8 +623,9 @@ mod tests {
         }
     }
 
-    /// The prompt count arrives up front here, and it is what calibrates the context
-    /// budget - losing it would leave the chars-per-token estimate uncorrected.
+    /// The prompt count arrives up front here.
+    /// It calibrates the context budget, so losing it leaves the chars-per-token estimate
+    /// uncorrected.
     #[test]
     fn the_prompt_token_count_is_reported_from_the_opening_event() {
         let out = ev(

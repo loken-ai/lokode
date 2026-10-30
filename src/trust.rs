@@ -2,8 +2,10 @@
 //!
 //! Some settings of a project's `.lokode.toml` run programs, loosen what goes ahead without
 //! a question, widen what the shell may write, send requests elsewhere or write files
-//! outside the project. Those apply once the user has trusted them for this project, and
-//! again after each change to them. The rest of the file applies at once.
+//! outside the project.
+//! Those apply once the user has trusted them for this project, and again after each change
+//! to them.
+//! The rest of the file applies at once.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -85,8 +87,8 @@ pub fn grant(root: &Path, guarded: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// What runs programs or loosens approvals waits, the rest applies, and a refusal
-    /// stays with what applies.
+    /// What runs programs or loosens approvals waits.
+    /// The rest applies, and a refusal stays with what applies.
     #[test]
     fn the_guarded_settings_are_set_apart() {
         let s = split(
@@ -119,7 +121,8 @@ mod tests {
         assert_eq!(s.guarded, None);
     }
 
-    /// Trust holds for the settings trusted, and a change to them asks again.
+    /// Trust holds for the settings trusted.
+    /// A change to them asks again.
     #[test]
     fn trust_is_for_what_was_shown() {
         let data = tempfile::tempdir().unwrap();

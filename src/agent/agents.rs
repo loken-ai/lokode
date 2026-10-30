@@ -1,10 +1,12 @@
 //! Named agents a turn can hand work to.
 //!
-//! An agent is a prompt, the tools it may use, and the model it runs on. One is built in,
-//! `explore`, which searches the project to answer a question. Others are Markdown files
-//! in `~/.config/lokode/agents/` and in the project's `.lokode/agents/`, named by their
-//! file, the project's last. A file opens with a block of settings between 2 `---`
-//! lines, and the rest is the prompt.
+//! An agent is a prompt, the tools it may use, and the model it runs on.
+//! One is built in, `explore`, which searches the project to answer a question.
+//! Others are Markdown files in `~/.config/lokode/agents/` and in the project's
+//! `.lokode/agents/`.
+//! A file names its agent, and the project's agents are read last.
+//! A file opens with a block of settings between 2 `---` lines.
+//! The rest is the prompt.
 //!
 //! ```text
 //! ---
@@ -67,8 +69,9 @@ pub fn dirs(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The agents of a session: the built-in one, then those of `dirs` in order, a later one
-/// taking the place of an earlier one of the same name. Says what it could not read.
+/// The agents of a session: the built-in one, then those of `dirs` in order.
+/// A later agent takes the place of an earlier one of the same name.
+/// Says what it could not read.
 pub fn load(dirs: &[PathBuf]) -> (Vec<AgentSpec>, Vec<String>) {
     let mut agents = vec![AgentSpec::explore()];
     let mut warnings = Vec::new();
@@ -126,9 +129,9 @@ pub fn parse(name: &str, text: &str, from: &str) -> Result<AgentSpec, String> {
     for (key, value) in settings {
         match key.as_str() {
             "description" => spec.description = value,
-            // Named as lokode names its tools or as other tools do.
+            // Tool names are read as lokode names them or as other tools do.
             "tools" => spec.tools = Some(crate::claude::tools_named(&value)),
-            // Another tool's name for its own models names nothing lokode can run.
+            // Another tool's model names are ignored, as lokode cannot run them.
             "model" => {
                 spec.model = Some(value).filter(|v| {
                     !v.is_empty()
@@ -143,7 +146,7 @@ pub fn parse(name: &str, text: &str, from: &str) -> Result<AgentSpec, String> {
                         .map_err(|_| format!("max-steps must be a number, got {value:?}"))?,
                 )
             }
-            // Written by other tools' agents, and harmless here.
+            // Settings written by other tools' agents are ignored.
             "name" | "color" | "skills" | "permissionMode" | "isolation" | "memory" | "effort"
             | "disallowedTools" | "hooks" | "mcpServers" => {}
             other => return Err(format!("it has a setting {other:?} lokode does not know")),
@@ -199,8 +202,8 @@ mod tests {
         assert!(parse("t", "---\ndescription: x\n---\n", "here").is_err());
     }
 
-    /// The project's agent takes the place of the user's of the same name, and the
-    /// built-in one is always there.
+    /// The project's agent takes the place of the user's of the same name.
+    /// The built-in agent is always there.
     #[test]
     fn the_project_comes_last() {
         let dir = tempfile::tempdir().unwrap();

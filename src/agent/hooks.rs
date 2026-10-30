@@ -1,13 +1,13 @@
 //! Commands run at the edges of a session, a turn and a tool call.
 //!
-//! A project states how it wants work checked: a formatter, a linter, a policy script. A
-//! hook makes it part of the loop. What a pre-tool hook refuses does not happen, and what a
-//! hook says is handed to the model, which is the only form of guidance an agent cannot
-//! skip.
+//! A project states how it wants work checked: a formatter, a linter, a policy script.
+//! A hook makes it part of the loop.
+//! What a pre-tool hook refuses does not happen.
+//! What a hook says is handed to the model, the only form of guidance an agent cannot skip.
 //!
-//! A hook is given what happened as one JSON object on its standard input, and the same
-//! facts in `LOKODE_HOOK`, `LOKODE_TOOL` and `LOKODE_ROOT`. It answers by its exit code
-//! and what it prints:
+//! A hook is given what happened as one JSON object on its standard input.
+//! The same facts are in `LOKODE_HOOK`, `LOKODE_TOOL` and `LOKODE_ROOT`.
+//! It answers by its exit code and what it prints:
 //!
 //! | Exit | Meaning |
 //! |---|---|
@@ -15,8 +15,9 @@
 //! | 2 | block. What it printed to its error output, or else to its output, says why |
 //! | other | it failed. A pre-tool hook that fails blocks the call |
 //!
-//! A decision is `{"decision": "block", "reason": "..."}`, with `context` for text to hand
-//! the model and, before a tool, `args` for the arguments to call it with instead.
+//! A decision is `{"decision": "block", "reason": "..."}`.
+//! It may add `context` for text to hand the model.
+//! Before a tool, it may add `args` for the arguments to call it with instead.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -30,9 +31,8 @@ use crate::config::Hook;
 
 /// How long a hook may take before it is stopped, when it does not say.
 ///
-/// A hook sits between the model and its tool, so a slow one is felt on every call. Long
-/// enough for a formatter on a file, short enough that a wedged command cannot hold the
-/// turn.
+/// A hook sits between the model and its tool, so a slow one is felt on every call.
+/// The limit stops a wedged command from holding the turn.
 pub const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How much of a hook's output reaches the conversation.
@@ -90,9 +90,11 @@ pub struct Ran {
     pub args: Option<Value>,
 }
 
-/// Whether `hook` runs for `tool`. A hook that names tools with `match` runs for those,
-/// written as patterns joined by `|`. One that names none runs for the tools that change
-/// something. Away from a tool, every hook runs.
+/// Whether `hook` runs for `tool`.
+///
+/// A hook that names tools with `match` runs for those, written as patterns joined by `|`.
+/// One that names none runs for the tools that change something.
+/// Away from a tool, every hook runs.
 pub fn applies(hook: &Hook, tool: Option<(&str, bool)>) -> bool {
     match (tool, &hook.matches) {
         (None, _) => true,
@@ -103,8 +105,9 @@ pub fn applies(hook: &Hook, tool: Option<(&str, bool)>) -> bool {
     }
 }
 
-/// Tell the hooks of `event` that the session waits for the person, and go on without waiting
-/// for them: what they do is the person's to be told, and the turn is not held up.
+/// Tell the hooks of `event` that the session waits for the person.
+///
+/// The turn goes on without waiting for them.
 pub fn notify(hooks: &std::sync::Arc<Vec<Hook>>, root: &Path, message: &str) {
     if hooks.is_empty() {
         return;
@@ -121,8 +124,9 @@ pub fn notify(hooks: &std::sync::Arc<Vec<Hook>>, root: &Path, message: &str) {
     });
 }
 
-/// Run each of `hooks` that applies, in order, and gather what they said. A pre-tool
-/// hook's new arguments are what the next one is given.
+/// Run each of `hooks` that applies, in order, and gather what they said.
+///
+/// A pre-tool hook's new arguments are what the next one is given.
 pub async fn run_all(
     hooks: &[Hook],
     event: Event,
@@ -269,8 +273,8 @@ pub async fn run(hook: &Hook, event: Event, root: &Path, tool: &str, input: &Val
     }
 }
 
-/// A hook's output lands in the conversation, so it is bounded rather than left to fill
-/// the window with a build log.
+/// A hook's output lands in the conversation, so it is bounded.
+/// A build log does not fill the window.
 fn bounded(mut text: String) -> String {
     if text.len() > OUTPUT_CHARS {
         let cut = (0..=OUTPUT_CHARS)
@@ -332,7 +336,8 @@ mod tests {
         assert_eq!(ran.output, "\"cmd\":\"ls\"");
     }
 
-    /// Exit 2 blocks with what was said, and another failure blocks only a pre-tool hook.
+    /// Exit 2 blocks with what was said.
+    /// Another failure blocks only a pre-tool hook.
     #[tokio::test]
     async fn exit_codes_say_what_a_hook_decided() {
         let ran = once("echo not on this branch >&2; exit 2", Event::TurnEnd).await;
@@ -357,8 +362,9 @@ mod tests {
         assert_eq!(ran.args, Some(json!({"cmd": "cargo test"})));
     }
 
-    /// A hook that names tools runs for those, one that names none for the tools that
-    /// change something, and every hook away from a tool.
+    /// A hook that names tools runs for those.
+    /// One that names none runs for the tools that change something.
+    /// Every hook runs away from a tool.
     #[test]
     fn a_hook_runs_for_the_tools_it_names() {
         let any = hook("x");

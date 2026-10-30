@@ -1,21 +1,19 @@
 //! A list to choose from, opened by a command.
 //!
-//! A command could only ever print. So the one that changes the model printed the whole
-//! catalogue - 80 names on a page - and left the person to type one back exactly, from
-//! memory, with no completion on the argument and no sign of which one was already
-//! answering. That is a catalogue, not a choice.
+//! A command hands over what there is to choose from.
+//! It also hands over the name of the command to run with what is chosen.
 //!
-//! This is the choice. A command hands over what there is to choose from and the name of
-//! the command to run with what is chosen; the list filters as it is typed into, the
-//! arrows move, enter picks, escape leaves everything as it was.
+//! The list filters as it is typed into.
+//! The arrows move.
+//! Enter picks.
+//! Escape leaves everything as it was.
 
 use ratatui::layout::Rect;
 use ratatui::Frame;
 
 pub use crate::ui::picker::Choice;
 
-/// How many rows of the list are shown at once. Enough to see a set of related names
-/// together, short enough to leave the conversation behind it visible.
+/// How many rows of the list are shown at once.
 const ROWS: usize = 12;
 
 /// A list over the conversation, and what to do with what is taken from it.
@@ -48,8 +46,7 @@ impl Chooser {
             typed: String::new(),
             at: 0,
         };
-        // Open on what is in force. A list of 80 that opens on the first name makes
-        // the person find where they already are before they can move.
+        // Open on what is in force.
         if let Some(marked) = out.marked.clone() {
             if let Some(i) = out.shown().iter().position(|c| c.value == marked) {
                 out.at = i;
@@ -119,9 +116,8 @@ impl Chooser {
 
     /// The rows to show, and where the highlight sits among them.
     ///
-    /// A window that follows the highlight rather than the top of the list: with 80
-    /// names and 12 rows, walking down a list pinned to its first row shows the same
-    /// 12 names however far down the person has gone.
+    /// The window follows the highlight, not the top of the list.
+    /// The names shown change as the highlight moves down.
     fn window(&self) -> (usize, usize) {
         let shown = self.shown().len();
         let rows = shown.min(ROWS);
@@ -133,8 +129,8 @@ impl Chooser {
     }
 
     /// Draw it over `area`, filling it.
-    /// Draw it at the foot of `area`, and say where: the card's area and the first item on
-    /// screen, for the mouse.
+    /// Draw it at the foot of `area`.
+    /// Return the card's area and the first item on screen, for the mouse.
     pub fn render(&self, f: &mut Frame, area: Rect) -> (Rect, usize) {
         let shown = self.shown();
         let (first, rows) = self.window();
@@ -178,15 +174,14 @@ mod tests {
         )
     }
 
-    /// A list of 80 that opens on the first name makes a person find where they are
-    /// before they can move.
+    /// A list opens on the item in force, not on the first name.
     #[test]
     fn the_list_opens_on_what_is_in_force() {
         assert_eq!(models().chosen().as_deref(), Some("qwen3:8b"));
     }
 
-    /// Typing narrows, and what starts with the letters comes before what merely holds
-    /// them.
+    /// Typing narrows the list.
+    /// What starts with the letters comes before what merely holds them.
     #[test]
     fn typing_narrows_to_what_was_meant() {
         let mut c = models();
@@ -223,8 +218,8 @@ mod tests {
         assert_eq!(c.chosen(), None);
     }
 
-    /// The rows shown follow the highlight: a window pinned to the top of the list shows
-    /// the same names however far down the person has walked.
+    /// The rows shown follow the highlight.
+    /// A window pinned to the top would show the same names however far down the highlight goes.
     #[test]
     fn the_rows_shown_follow_the_highlight() {
         let many: Vec<Choice> = (0..40)

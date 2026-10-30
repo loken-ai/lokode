@@ -1,13 +1,9 @@
 //! Handing a self-contained piece of work to a session of its own.
 //!
-//! The window is the scarce resource on a local model. A search that reads 6 files to
-//! answer one question spends the whole conversation's budget on text nobody needs
-//! afterwards - and once compaction drops it, what is left is the middle of a hunt with
-//! no beginning. Delegating gives that hunt its own window and brings back only its
-//! answer.
+//! The delegated work has a window of its own.
 //!
-//! What comes back is a summary, never the sub-session's history: the point is that the
-//! caller's window holds the answer and not the search.
+//! What comes back is a summary, never the sub-session's history.
+//! The caller's window holds the answer and not the search.
 
 use std::sync::Arc;
 
@@ -23,14 +19,15 @@ static BACKGROUND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 
 /// Everything a delegated turn needs to be built, kept from the session that owns it.
 ///
-/// Held as a builder rather than as an `Agent`: a sub-session is made and dropped per
-/// call, and sharing one would share its history, which is the opposite of the point.
+/// Held as a builder rather than as an `Agent`.
+/// A sub-session is made and dropped per call, so no history is shared.
 #[derive(Clone)]
 pub struct Delegation {
     pub backend: Arc<dyn crate::backend::provider::Provider>,
     /// The other backends an agent can run on, by their name in `[backends]`.
     pub backends: std::collections::HashMap<String, Arc<dyn crate::backend::provider::Provider>>,
-    /// The session's tools, without the delegation. Each agent gets its share of them.
+    /// The session's tools, without the delegation.
+    /// Each agent gets its share of them.
     pub registry: Arc<Registry>,
     pub agents: Vec<crate::agent::agents::AgentSpec>,
     /// The model of an agent that names none and changes nothing: the search role, or the
@@ -49,7 +46,8 @@ pub struct Delegation {
     pub grammar_enabled: bool,
     /// The session's step limit, which no agent goes past.
     pub max_steps: usize,
-    /// How many delegated turns run at once. The others wait for a place.
+    /// How many delegated turns run at once.
+    /// The others wait for a place.
     pub slots: Arc<tokio::sync::Semaphore>,
     /// How many places there are.
     pub parallel: usize,
@@ -59,8 +57,8 @@ pub struct Delegation {
     pub lsp: Option<Arc<crate::lsp::LspPool>>,
     /// Where the answer of an agent working in the background is handed to the session.
     pub answers: Option<tokio::sync::mpsc::Sender<String>>,
-    /// How many levels of agents may be under this one, itself included. An agent that
-    /// names `delegate` among its tools has it when there is a level under it.
+    /// How many levels of agents may be under this one, itself included.
+    /// An agent that names `delegate` among its tools has it when there is a level under it.
     pub depth: usize,
     /// The work agents did in their own copies, waiting for the session to take it.
     pub works: crate::tools::worktree::Pending,
@@ -93,8 +91,8 @@ impl Delegation {
         }
     }
 
-    /// The delegation an agent hands work on with: one level less, and places of its own
-    /// so an agent waiting on its own agents never holds the place they wait for.
+    /// The delegation an agent hands work on with: one level less, and places of its own.
+    /// An agent waiting on its own agents never holds the place they wait for.
     fn under(&self) -> Delegation {
         Delegation {
             depth: self.depth - 1,
@@ -183,8 +181,8 @@ impl Tool for Delegate {
         "delegate"
     }
 
-    /// The sub-session's own tools ask for what they need, so the call itself changes
-    /// nothing and is not gated twice.
+    /// The sub-session's own tools ask for what they need.
+    /// The call itself changes nothing and is not gated twice.
     fn mutates(&self) -> bool {
         false
     }
@@ -226,8 +224,8 @@ impl Tool for Delegate {
                 names.join(", ")
             )));
         };
-        // Its own backend when it names one, which it then needs a model for. The way the
-        // session's backend takes tools is not that backend's, so it starts native.
+        // Its own backend when it names one, which it then needs a model for.
+        // The way the session's backend takes tools is not that backend's, so it starts native.
         let (backend, protocol, elsewhere) = match &spec.backend {
             None => (w.backend.clone(), w.protocol.get(), false),
             Some(b) => match (w.backends.get(b), &spec.model) {
@@ -305,8 +303,8 @@ impl Tool for Delegate {
             session: crate::agent::session::Session::new(system, window, w.max_answer_tokens),
             cfg: crate::agent::agent_loop::AgentConfig {
                 model,
-                // The sub-session is short and its model is already chosen; nothing after
-                // it is known, so there is nothing to hold ready.
+                // The sub-session is short and its model is already chosen.
+                // Nothing after it is known, so there is nothing to hold ready.
                 preload: false,
                 guess_with: None,
                 roles: w.roles.clone(),
@@ -327,8 +325,8 @@ impl Tool for Delegate {
                 delegated: true,
             },
             // The caller's context, so its approvals, its cancellation and its root are
-            // the sub-session's too: this is the same user's work, delegated. Its own count
-            // of what a policy granted, so its turn does not restart the caller's.
+            // the sub-session's too.
+            // Its own count of what a policy granted, so its turn does not restart the caller's.
             ctx: crate::tools::registry::ToolCtx {
                 auto_used: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 ..ctx.clone()
@@ -341,13 +339,14 @@ impl Tool for Delegate {
 
         let task = a.task.clone();
         if a.background {
-            // A job of its own: the turn does not wait for it and stopping the turn does
-            // not stop it. The screen lists it with what stops it, and its answer is
-            // handed to the session when it comes.
+            // A job of its own: the turn does not wait for it.
+            // Stopping the turn does not stop it.
+            // The screen lists it with what stops it.
+            // Its answer is handed to the session when it comes.
             let stop = tokio_util::sync::CancellationToken::new();
             let id = BACKGROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            // An agent that changes files works in a copy of its own when the project is
-            // in git; elsewhere it writes in the project, holding what it writes.
+            // An agent that changes files works in a copy of its own when the project is in git.
+            // Elsewhere it writes in the project, holding what it writes.
             let copy = match (writes, crate::tools::worktree::home()) {
                 (true, Some(home)) => {
                     match crate::tools::worktree::Work::make(&home, &ctx.root, id, name, &task)
@@ -450,8 +449,9 @@ impl Tool for Delegate {
     }
 }
 
-/// Run a delegated session on `task` and bring back its answer, with the files it changed,
-/// what the agent-end hooks said, and a word when it did not finish.
+/// Run a delegated session on `task` and bring back its answer.
+/// The result holds the files it changed, what the agent-end hooks said,
+/// and a word when it did not finish.
 async fn finish(
     mut sub: crate::agent::agent_loop::Agent,
     task: String,
@@ -459,8 +459,7 @@ async fn finish(
     ctx: ToolCtx,
     hooks: crate::config::HooksSection,
 ) -> ToolOutput {
-    // Each call the sub-session makes is shown as it is made, under this call's step,
-    // so delegated work running side by side is seen as lanes rather than as silence.
+    // Each call the sub-session makes is shown as it is made, under this call's step.
     let cancel = ctx.cancel.clone();
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let shown = ctx.clone();
@@ -509,8 +508,9 @@ async fn finish(
     if let Err(e) = outcome {
         return ToolOutput::err(format!("the delegated turn failed: {e:#}"));
     }
-    // The answer is what it said last with nothing called after it. What it said
-    // before a call is narration, and is returned as such when nothing came after.
+    // The answer is what it said last with nothing called after it.
+    // What it said before a call is narration.
+    // It is returned as such when nothing came after.
     let mut answer = String::new();
     let mut called_after = false;
     let mut notices = Vec::new();
@@ -542,8 +542,8 @@ async fn finish(
         answer_chars = answer.len(),
         "delegated turn finished"
     );
-    // What it changed, in the words a write reports, so the caller counts the files
-    // as its own turn's.
+    // What it changed, in the words a write reports.
+    // The caller counts the files as its own turn's.
     if !sub.this_turn.files.is_empty() {
         let changed: Vec<String> = sub
             .this_turn

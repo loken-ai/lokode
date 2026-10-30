@@ -1,8 +1,9 @@
 //! lokode as the agent of an editor, over the Agent Client Protocol.
 //!
 //! The editor starts `lokode acp` and speaks JSON-RPC to it, one message a line on its
-//! standard input and output. Each session the editor opens is a session of its own, built
-//! as the terminal builds one, for the project the editor names.
+//! standard input and output.
+//! Each session the editor opens is a session of its own, built as the terminal builds one,
+//! for the project the editor names.
 //!
 //! | Editor asks | lokode does |
 //! |---|---|
@@ -12,8 +13,8 @@
 //! | `session/cancel` | stops the turn |
 //!
 //! lokode asks the editor in turn: before a change, with `session/request_permission`, and
-//! for a tool server's form, with `elicitation/create` when the editor offers it. Commands
-//! the model runs are run by lokode, in its sandbox, never in a terminal of the editor's.
+//! for a tool server's form, with `elicitation/create` when the editor offers it.
+//! Commands the model runs are run by lokode, in its sandbox, never in a terminal of the editor's.
 
 pub mod updates;
 
@@ -473,8 +474,9 @@ fn editor_servers(servers: &Value) -> Vec<(String, crate::config::McpServer)> {
         .collect()
 }
 
-/// Open a session for the project at `cwd`, or come back to `resume`. Gives the session and
-/// the conversation it comes back with.
+/// Open a session for the project at `cwd`, or come back to `resume`.
+///
+/// Gives the session and the conversation it comes back with.
 async fn open(
     conn: &Arc<Conn>,
     cwd: &Path,
@@ -789,7 +791,9 @@ fn commands_of(session: &Session) -> Vec<Value> {
 }
 
 impl Session {
-    /// Run what the editor sent: a command, or a turn. Answers with why it stopped.
+    /// Run what the editor sent: a command, or a turn.
+    ///
+    /// Answers with why it stopped.
     async fn prompt(&self, conn: &Arc<Conn>, text: String) -> Result<Value, Refusal> {
         let notes = self
             .notes
@@ -837,7 +841,9 @@ impl Session {
         Ok(json!({"stopReason": reason, "_meta": meta}))
     }
 
-    /// Run a command as the terminal would. Gives the prompt it makes, when it makes one.
+    /// Run a command as the terminal would.
+    ///
+    /// Gives the prompt it makes, when it makes one.
     async fn command(&self, conn: &Arc<Conn>, command: &str) -> Option<String> {
         use crate::ui::commands::{run_command, CommandCtx, Ran};
         let say = |text: &str| {

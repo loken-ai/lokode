@@ -1,13 +1,18 @@
 //! How a turn's tool calls travel, and the one shape the loop reads them in.
 //!
-//! 2 ways of asking the same thing. The envelope makes the model emit a single JSON
-//! object, constrained by a grammar built from the tool schemas; the native protocol uses
-//! the server's own `tools` field and gets back `tool_calls`. Small local models are the
-//! reason the envelope exists and the reason it stays: a server that will not do native
-//! tool calls, or a model that does them badly, still works against a grammar.
+//! 2 ways of asking the same thing.
 //!
-//! The loop sees neither. It gets a [`ModelTurn`], and everything downstream of that -
-//! dispatch, approval, the transcript - is the same either way.
+//! The envelope makes the model emit a single JSON object, constrained by a grammar built from the
+//! tool schemas.
+//! The native protocol uses the server's own `tools` field and gets back `tool_calls`.
+//!
+//! The envelope serves a server that will not do native tool calls.
+//! It also serves a model that does them badly.
+//! Both still work against a grammar.
+//!
+//! The loop sees neither.
+//! It gets a [`ModelTurn`].
+//! Dispatch, approval and the transcript are the same either way.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -33,10 +38,12 @@ impl ToolProtocol {
 
 /// The protocol in force, shared by everything that opens a session of its own.
 ///
-/// Which protocol works is a property of the backend, not of one session, and it is not
-/// known until something has asked. A delegated turn or a background question started
-/// after the answer came in has to speak what the main session settled on, or it does its
-/// work with tools the server never passes on.
+/// Which protocol works is a property of the backend, not of one session.
+/// It is not known until something has asked.
+///
+/// A delegated turn or a background question started after the answer came in speaks what the
+/// main session settled on.
+/// Otherwise it works with tools the server never passes on.
 #[derive(Clone)]
 pub struct SharedProtocol(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
@@ -81,16 +88,16 @@ pub struct ModelTurn {
 pub struct ResolvedCall {
     /// The id the result must be returned against.
     ///
-    /// In the native protocol this is the server's own id, which is the point: a
-    /// `role: "tool"` message answering an id nobody issued is a message a strict server
-    /// rejects, and inventing one per result - as this used to - means every result
-    /// answered a call that never existed.
+    /// In the native protocol this is the server's own id.
+    /// A `role: "tool"` message answering an id nobody issued is rejected by a strict server.
+    /// Each result is therefore returned against the id of the call it answers.
     pub id: String,
     pub name: String,
     pub arguments: Value,
 }
 
-/// The envelope protocol's per-turn object. Mirrors `build_turn_schema`.
+/// The envelope protocol's per-turn object.
+/// Mirrors `build_turn_schema`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TurnEnvelope {
     #[serde(default)]
@@ -121,9 +128,9 @@ struct Part {
 impl CallAccumulator {
     /// Take in one fragment.
     ///
-    /// The index is the only thing tying fragments together: the name arrives once, the
-    /// arguments arrive a few characters at a time, and a turn can be assembling several
-    /// calls at once.
+    /// The index is the only thing tying fragments together.
+    /// The name arrives once and the arguments arrive a few characters at a time.
+    /// A turn can be assembling several calls at once.
     pub fn push(&mut self, delta: crate::backend::wire::ToolCallDelta) {
         if self.parts.len() <= delta.index {
             self.parts.resize(delta.index + 1, Part::default());
@@ -148,8 +155,8 @@ impl CallAccumulator {
 
     /// The calls as assembled, with their arguments still unparsed.
     ///
-    /// A fragment index that was never filled leaves an empty name; those are dropped
-    /// rather than dispatched, since a call with no tool is not a call.
+    /// A fragment index that was never filled leaves an empty name.
+    /// Such a call is dropped rather than dispatched, since a call with no tool is not a call.
     pub fn finish(self) -> Vec<(Option<String>, String, String)> {
         self.parts
             .into_iter()
@@ -180,8 +187,8 @@ mod tests {
         }
     }
 
-    /// Arguments arrive a few characters at a time; nothing means anything until they are
-    /// back together.
+    /// Arguments arrive a few characters at a time.
+    /// Nothing means anything until they are back together.
     #[test]
     fn fragments_of_one_call_reassemble_in_order() {
         let mut acc = CallAccumulator::default();
@@ -213,8 +220,9 @@ mod tests {
         assert_eq!(calls[1].2, "{\"pattern\":\"two\"}");
     }
 
-    /// A server that numbers its calls from something other than zero must not make the
-    /// accumulator index out of bounds, and must not produce a phantom call either.
+    /// A server that numbers its calls from something other than zero must not make the accumulator
+    /// index out of bounds.
+    /// It must not produce a phantom call either.
     #[test]
     fn a_gap_in_the_indices_does_not_become_a_call() {
         let mut acc = CallAccumulator::default();

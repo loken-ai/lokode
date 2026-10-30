@@ -1,17 +1,13 @@
 //! What window the backend actually offers for a model.
 //!
-//! A client that guesses is a client that is wrong in both directions. Guessing small
-//! wastes the window that is there; guessing large sends prompts the server has to cut,
-//! and a prompt cut in the middle produces an answer that is fluent and wrong about what
-//! it was asked. The default here was twice what the server offered, and every request
-//! went out too big without either side saying so.
-//!
-//! So it is asked. The OpenAI surface has nowhere to say it, but the Ollama one does, and
-//! a backend that says nothing is simply left alone.
+//! The window is asked of the backend, never guessed.
+//! The OpenAI surface has no field for it.
+//! The Ollama surface reports it.
+//! A backend that reports nothing is left alone.
 
 use std::time::Duration;
 
-/// How long to wait. Asked once, at startup, of a server on this machine or this network.
+/// How long to wait for the backend to answer.
 const TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The window `model` is loaded with, when the backend says.
@@ -32,7 +28,7 @@ pub async fn of(http: &reqwest::Client, base: &str, model: &str) -> Option<usize
 /// The context length for `model` in a loaded-models listing.
 fn from_listing(body: &serde_json::Value, model: &str) -> Option<usize> {
     body.get("models")?.as_array()?.iter().find_map(|m| {
-        // A model listed in parts carries its name and then the part in brackets.
+        // A model listed in parts carries its name, then the part in brackets.
         let name = m.get("model")?.as_str()?;
         let name = name.split(" (").next().unwrap_or(name).trim();
         (name == model)

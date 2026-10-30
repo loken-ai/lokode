@@ -1,8 +1,9 @@
 //! The rail beside the conversation: the model's plan, what the session changed, what fills
 //! the window, how fast the model answers, and the turns that can be put back.
 //!
-//! A section with nothing to say is left out. The rail takes its own column from a wide
-//! enough pane, and opens over the conversation on a narrow one when asked for.
+//! A section with nothing to say is left out.
+//! The rail takes its own column from a wide enough pane.
+//! On a narrow pane it opens over the conversation when asked for.
 
 use std::collections::VecDeque;
 
@@ -27,9 +28,8 @@ pub const WIDTH: u16 = 36;
 /// How many speeds the sparkline keeps.
 pub const RATES_KEPT: usize = 24;
 
-/// How many turns that can be put back are listed.
-/// For each of the rail's first rows, the running thing on it, laid out as the rail lays
-/// out its section of running things.
+/// For each of the rail's first rows, the running thing on it.
+/// The rows follow the layout of the section of running things.
 pub fn running_rows(jobs: &[crate::ui::state::Job]) -> Vec<Option<usize>> {
     if jobs.is_empty() {
         return Vec::new();
@@ -274,9 +274,9 @@ impl Rail<'_> {
         out
     }
 
-    /// What the backend measured: how long the latest request waited, read and wrote, how
-    /// full its cache is, how much of a draft it kept, and the energy of the turn and the
-    /// session. Each line only when the backend said what it needs.
+    /// What the backend measured: how long the latest request waited, read and wrote, how full
+    /// its cache is, how much of a draft it kept, and the energy of the turn and the session.
+    /// Each line appears only when the backend said what it needs.
     fn engine_lines(&self, inner: usize) -> Vec<Line<'static>> {
         let t = theme();
         let mut out = Vec::new();
@@ -392,8 +392,8 @@ impl Rail<'_> {
 pub(crate) fn window_bar(window: &Occupancy, cells: usize) -> Line<'static> {
     let budget = window.budget.max(1);
     let mut spans = vec![Span::raw(" ")];
-    // Each part ends where the running total of the parts falls on the bar, so rounding
-    // never loses or adds a cell.
+    // Each part ends where the running total of the parts falls on the bar.
+    // Rounding never loses or adds a cell.
     let mut used = 0usize;
     let mut total = 0usize;
     for (at, (_, chars)) in window.parts.iter().enumerate() {
@@ -469,9 +469,10 @@ mod tests {
         }
     }
 
-    /// A section with nothing in it is left out, and the engine is always there.
-    /// What runs heads the rail, each with how long it has run and, for a delegated
-    /// session, the call it is on.
+    /// A section with nothing in it is left out.
+    /// The engine is always there.
+    /// What runs heads the rail, each with how long it has run.
+    /// For a delegated session, each also shows the call it is on.
     #[test]
     fn what_runs_heads_the_rail() {
         let rates = VecDeque::new();

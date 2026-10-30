@@ -1,27 +1,23 @@
 //! What each step of a turn asked for, and what it cost.
 //!
-//! Recorded before anything is routed on it. A router that chose models on a guess would
-//! be impossible to argue with: the claim "this was faster" needs the same step measured
-//! both ways, and that needs the measurement to exist first. Every field here is either
-//! known before the request goes out - which is what a later decision could use - or
-//! measured after it, which is what would judge the decision.
+//! Every field is either known before the request goes out, or measured after it.
+//! The fields known before are what a decision can use.
+//! The fields measured after are what judges the decision.
 
 use serde::{Deserialize, Serialize};
 
 /// What was knowable before the request went out.
 ///
-/// Deliberately cheap: no model is asked anything to fill this in. A feature that costs a
-/// round trip to compute cannot be used to decide which round trip to make.
+/// No model is asked anything to fill this in.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Before {
     /// Characters of history the request carried.
     pub context_chars: usize,
-    /// How full the history budget was, in per cent.
+    /// How full the history budget was, as a percentage.
     pub context_percent: u8,
     /// Which step of the turn this was, from one.
     pub step: usize,
-    /// The tools the previous step called, if any: what an agent did last is the best
-    /// cheap signal for what it is about to do.
+    /// The tools the previous step called, if any.
     pub previous_tools: Vec<String>,
     /// Whether the previous step's write came back with diagnostics.
     pub previous_failed_check: bool,
@@ -42,14 +38,13 @@ pub struct After {
     pub tool_ms: u64,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
-    /// How many repair round trips the reply needed. Anything above zero is the cost of
-    /// a model that cannot hold the shape it was asked for.
+    /// How many repair round trips the reply needed.
     pub repairs: u32,
     /// Why the model stopped, as the server said it.
     pub finish_reason: Option<String>,
-    /// `Some(false)` when a write in this step came back with diagnostics, `Some(true)`
-    /// when it came back clean, `None` when nothing was written. This is the objective
-    /// signal a cascade would escalate on, which is why it is recorded from the start.
+    /// `Some(false)` when a write in this step came back with diagnostics.
+    /// `Some(true)` when it came back clean.
+    /// `None` when nothing was written.
     pub check_passed: Option<bool>,
     /// Whether any tool of the step changed something.
     pub wrote: bool,

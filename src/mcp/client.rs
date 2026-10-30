@@ -1,16 +1,17 @@
 //! A Model Context Protocol client, over a server's standard input and output, or over
 //! HTTP.
 //!
-//! JSON-RPC again, but not framed the way the language server protocol frames it: one
-//! message per line, no headers. Close enough to be confusing and different enough to
-//! break if you assume. Over HTTP, each message is posted, and the answer comes back as
-//! one JSON body or as a stream of events that may carry the server's own requests
-//! before it.
+//! JSON-RPC, with one message per line and no headers.
+//! Over HTTP, each message is posted.
+//! The answer comes back as one JSON body, or as a stream of events.
+//! The stream may carry the server's own requests before the answer.
 //!
-//! The server may ask things of the client as well as answer it. Its requests are told
-//! apart from its replies by their method, and answered: `ping`, `roots/list` with the
-//! project, and through the session's host a question for the model or a form for the
-//! person. A server that stops fails every request still waiting at once.
+//! The server may ask things of the client as well as answer it.
+//! Its requests are told apart from its replies by their method.
+//! They are answered: `ping`, `roots/list` with the project,
+//! and through the session's host a question for the model or a form for the person.
+//!
+//! A server that stops fails every request still waiting at once.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -47,8 +48,8 @@ pub struct McpToolInfo {
     pub name: String,
     #[serde(default)]
     pub description: String,
-    /// JSON Schema for the arguments. Written by somebody else, so it is checked before it
-    /// is allowed anywhere near the grammar the model is held to.
+    /// JSON Schema for the arguments.
+    /// It is checked before it reaches the grammar the model is held to.
     #[serde(rename = "inputSchema", default)]
     pub input_schema: Value,
     /// What the server says of the tool: `readOnlyHint` among others.
@@ -110,7 +111,8 @@ pub struct McpClient {
 }
 
 impl McpClient {
-    /// Start a server and complete the handshake. Each request waits `timeout` at most.
+    /// Start a server and complete the handshake.
+    /// Each request waits `timeout` at most.
     pub async fn start(
         server: &str,
         command: &str,
@@ -171,8 +173,8 @@ impl McpClient {
         .await
     }
 
-    /// Reach a server over HTTP at `url`, sending `headers` with every message, and
-    /// complete the handshake.
+    /// Reach a server over HTTP at `url`, sending `headers` with every message.
+    /// Completes the handshake.
     pub async fn connect(
         server: &str,
         url: &str,
@@ -353,8 +355,8 @@ impl McpClient {
 
     /// What this server offers besides tools: its resources and its prompts.
     ///
-    /// A server that does not do either answers with an error, which is not a failure of
-    /// the server: the protocol makes both optional. Both come back empty then.
+    /// The protocol makes both optional.
+    /// A server that does not do either answers with an error, and both come back empty.
     pub async fn list_resources(&self) -> Vec<(String, String)> {
         self.list_named("resources/list", "resources", "uri").await
     }
@@ -435,7 +437,8 @@ impl McpClient {
         Ok(text)
     }
 
-    /// Run one of its tools. Stopped with `cancel`, the server is told.
+    /// Run one of its tools.
+    /// Stopped with `cancel`, the server is told.
     pub async fn call_tool(
         &self,
         name: &str,
@@ -456,8 +459,8 @@ impl McpClient {
         Ok((render_result(&reply), is_error))
     }
 
-    /// Tell the server to stop: close its input, and kill it if it is still there after a
-    /// moment.
+    /// Tell the server to stop: close its input.
+    /// It is killed if it is still there after a moment.
     pub async fn shutdown(&self) {
         // A session over HTTP is ended by deleting it.
         if let Some(http) = &self.http {
@@ -497,8 +500,8 @@ impl McpClient {
         }
     }
 
-    /// Send a request and wait for its answer. When `cancel` fires first, the server is
-    /// told the request is withdrawn.
+    /// Send a request and wait for its answer.
+    /// When `cancel` fires first, the server is told the request is withdrawn.
     async fn request(
         &self,
         method: &str,
@@ -587,9 +590,11 @@ impl McpClient {
         write_to(&self.shared, payload).await
     }
 
-    /// Post one message over HTTP. For a request, `id` names it, and its reply is read
-    /// from the body: one JSON message, or a stream of events where the server's own
-    /// requests are answered as they come. For anything else, nothing is read.
+    /// Post one message over HTTP.
+    /// For a request, `id` names it, and its reply is read from the body.
+    /// The body is one JSON message, or a stream of events.
+    /// The server's own requests in the stream are answered as they come.
+    /// For anything else, nothing is read.
     async fn post(&self, http: &Http, payload: &Value, id: Option<i64>) -> Result<Value> {
         use futures::StreamExt;
         let mut req = http
@@ -730,8 +735,8 @@ async fn reader_loop(shared: Arc<Shared>, stdout: tokio::process::ChildStdout) {
         };
         let method = msg.get("method").and_then(|m| m.as_str());
         match (msg.get("id"), method) {
-            // A request of the server's own, answered with the id it gave. Answered beside
-            // the reading, since the person or the model may take a while.
+            // A request of the server's own, answered with the id it gave.
+            // Answered beside the reading, since the person or the model may take a while.
             (Some(id), Some(method)) => {
                 let (shared, id, method) = (shared.clone(), id.clone(), method.to_string());
                 let params = msg.get("params").cloned().unwrap_or(Value::Null);
@@ -783,9 +788,10 @@ async fn drain_stderr(stderr: tokio::process::ChildStderr, shared: Arc<Shared>) 
     }
 }
 
-/// A tool's result as text: its text blocks, the text of the resources it embeds, a line
-/// naming each block that is not text, and its structured content when it has nothing
-/// else to say.
+/// A tool's result as text.
+/// It holds the text blocks and the text of the resources it embeds.
+/// It holds a line naming each block that is not text.
+/// It holds the structured content when there is nothing else to say.
 fn render_result(reply: &Value) -> String {
     let mut parts: Vec<String> = Vec::new();
     for block in reply
@@ -829,8 +835,9 @@ fn render_result(reply: &Value) -> String {
 mod tests {
     use super::*;
 
-    /// Text and embedded text come through, other blocks are named, and structured content
-    /// speaks when nothing else does.
+    /// Text and embedded text come through.
+    /// Other blocks are named.
+    /// Structured content speaks when nothing else does.
     #[test]
     fn a_result_is_rendered_as_text() {
         let reply = json!({"content": [
@@ -847,9 +854,10 @@ mod tests {
         assert!(render_result(&structured).contains("\"n\": 1"));
     }
 
-    /// A small server written in shell. Before it answers the handshake it pings the
-    /// client with the handshake's own id and asks for its roots. It answers one tool
-    /// call, then exits on the second.
+    /// A small server written in shell.
+    /// Before it answers the handshake it pings the client with the handshake's own id.
+    /// It also asks for the client's roots.
+    /// It answers one tool call, then exits on the second.
     const SERVER: &str = r#"
 read -r init
 echo '{"jsonrpc":"2.0","id":1,"method":"ping"}'
@@ -865,8 +873,9 @@ read -r second
 exit 3
 "#;
 
-    /// A request of the server's own with the same id as one of ours is answered and not
-    /// taken for our reply, and a server that stops fails what waits on it at once.
+    /// A request of the server's own with the same id as one of ours is answered.
+    /// It is not taken for our reply.
+    /// A server that stops fails what waits on it at once.
     #[tokio::test]
     async fn the_server_is_answered_and_its_end_is_noticed() {
         let dir = tempfile::tempdir().unwrap();
@@ -937,8 +946,9 @@ exit 3
         (head, msg)
     }
 
-    /// Over HTTP the session the server gives is sent back, a reply may come as a stream
-    /// of events, and a request of the server's inside that stream is answered.
+    /// Over HTTP the session the server gives is sent back.
+    /// A reply may come as a stream of events.
+    /// A request of the server's inside that stream is answered.
     #[tokio::test]
     async fn a_server_over_http_is_spoken_to() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

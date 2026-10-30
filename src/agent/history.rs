@@ -1,15 +1,14 @@
 //! What each model has actually managed, in this project.
 //!
-//! The escalation ladder reacts: it raises the model after a change has already failed to
-//! compile, which costs one bad step every time. What the steps recorded before it can add
-//! is the memory of those steps - if the cheap model has failed most of its writes in this
-//! repository, the next turn can start where the last one ended up rather than paying the
-//! same bad step again.
+//! The escalation ladder raises the model after a change has already failed to compile.
+//! That costs one bad step every time.
+//! The memory of earlier steps lets the next turn start where the last one ended up.
+//! If the cheap model failed most of its writes in this repository, the bad step is skipped.
 //!
-//! Deliberately the smallest thing that could work: counts of writes and of writes that
-//! checked out, per model, per project, kept on this machine. No training, no features
-//! beyond the outcome, nothing that leaves the disk. A model that cannot be explained in
-//! one line has no place deciding which model answers.
+//! The memory is the smallest thing that works.
+//! It holds counts of writes and of writes that checked out, per model, per project.
+//! It is kept on this machine, and nothing leaves the disk.
+//! It uses no training and no feature beyond the outcome.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -18,15 +17,13 @@ use serde::{Deserialize, Serialize};
 
 /// How many recent writes are remembered per model.
 ///
-/// A project changes - its code, its conventions, the models available - so evidence has
-/// to age out. 50 is enough to be more than noise and short enough that a month-old
-/// judgement does not decide today's.
+/// Evidence ages out, because a project's code, conventions and available models change.
 const REMEMBERED: usize = 50;
 
 /// How much evidence before the memory is allowed to decide anything.
 const ENOUGH: usize = 4;
 
-/// Above this share of failed writes, the cheap model is not worth the bad step.
+/// Above this share of failed writes, the cheap model is not started on.
 const TOO_MANY_FAILURES: f64 = 0.5;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -44,8 +41,8 @@ impl Outcomes {
         }
     }
 
-    /// The share of remembered writes that did not check out, once there are enough of
-    /// them to mean anything.
+    /// The share of remembered writes that did not check out.
+    /// It is `None` until there are enough writes to mean anything.
     pub fn failure_rate(&self) -> Option<f64> {
         if self.recent.len() < ENOUGH {
             return None;
@@ -67,8 +64,8 @@ pub struct ModelHistory {
 impl ModelHistory {
     /// Read what is remembered about `root`, or start empty.
     ///
-    /// Kept beside the state rather than in the repository: it is a record of what
-    /// happened on this machine, not a fact about the project that others should inherit.
+    /// Kept beside the state, not in the repository.
+    /// It records what happened on this machine, not a fact about the project.
     pub fn open(state_dir: Option<PathBuf>, root: &Path) -> Self {
         let Some(path) = state_dir.map(|d| d.join("models").join(format!("{}.json", key(root))))
         else {
@@ -91,8 +88,8 @@ impl ModelHistory {
 
     /// Whether starting on `model` is worth the risk of a step that has to be redone.
     ///
-    /// `None` when there is not enough evidence, which is the usual answer and the one
-    /// that leaves the configuration's choice alone.
+    /// `None` when there is not enough evidence.
+    /// That is the usual answer, and it leaves the configuration's choice alone.
     pub fn should_avoid(&self, model: &str) -> Option<bool> {
         let rate = self.by_model.get(model)?.failure_rate()?;
         Some(rate > TOO_MANY_FAILURES)
@@ -133,8 +130,7 @@ impl ModelHistory {
 
 /// A file name for a project root that is stable and says nothing about the path.
 ///
-/// The directory listing of a state folder should not be a list of what someone is
-/// working on.
+/// The directory listing of a state folder does not list what someone is working on.
 pub(super) fn key(root: &Path) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in root.as_os_str().as_encoded_bytes() {
@@ -169,7 +165,7 @@ mod tests {
         assert_eq!(h.should_avoid("small"), Some(false));
     }
 
-    /// A project changes, so evidence ages out rather than accumulating for ever.
+    /// Evidence ages out rather than accumulating.
     #[test]
     fn only_the_recent_writes_are_remembered() {
         let mut h = ModelHistory::default();

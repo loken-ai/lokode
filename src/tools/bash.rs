@@ -100,8 +100,8 @@ impl Tool for Bash {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        // Kept until the spawn is over. A sandbox that cannot be applied refuses the
-        // command rather than run it unconfined.
+        // Kept until the spawn is over.
+        // A sandbox that cannot be applied refuses the command rather than run it unconfined.
         let (mut cmd, _held) = match crate::sandbox::confine::command(
             sandbox.map(|s| s.as_ref()),
             "/bin/sh",
@@ -114,15 +114,13 @@ impl Tool for Bash {
                 )))
             }
         };
-        // Without this, abandoning the turn leaves the command running: the future is
-        // dropped, nobody is left to read its output, and a build carries on burning the
-        // machine the user just told us to stop using.
+        // Abandoning the turn drops the future, and nobody is left to read the output.
+        // The command is killed with it so that it does not keep running.
         cmd.kill_on_drop(true);
         cmd.current_dir(&cwd);
 
-        // Read as it comes rather than at the end: a build that says nothing for 2
-        // minutes cannot be told from one that has hung, and the line that says which
-        // test failed is worth having before the suite finishes.
+        // Output is read as it comes rather than at the end.
+        // The line that says which test failed is shown before the suite finishes.
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -175,8 +173,9 @@ mod live_tests {
     use super::*;
     use crate::tools::harness::{Answer, Harness};
 
-    /// A command that prints for a while shows its lines while it prints them, and the
-    /// result still carries all of them: the screen sees the tail, the model sees the text.
+    /// A command that prints for a while shows its lines while it prints them.
+    /// The result still carries all of them.
+    /// The screen sees the tail and the model sees the text.
     #[tokio::test]
     async fn a_command_shows_its_output_while_it_runs() {
         let h = Harness::new(Answer::Yes);
@@ -300,7 +299,7 @@ mod tests {
     }
 
     /// The scope of an `Always` here is the command as shown, not the shell in general.
-    /// Anything else and one approved `ls` is a standing permission to run anything.
+    /// Otherwise one approved `ls` would be a standing permission to run anything.
     #[tokio::test]
     async fn agreeing_always_covers_only_that_command() {
         let h = Harness::new(Answer::Always);
@@ -320,8 +319,8 @@ mod tests {
         );
     }
 
-    /// The whole claim of `--confine-shell`, stated as the thing it prevents. Building a
-    /// ruleset is tested next door; this is whether the write actually fails.
+    /// The whole claim of `--confine-shell`, stated as the thing it prevents.
+    /// This is whether the write actually fails.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_confined_command_cannot_write_outside_the_project() {
@@ -340,8 +339,8 @@ mod tests {
             )
             .await;
 
-        // The shell ran and its redirection was refused, so this is a report of a failure
-        // rather than a refusal to run.
+        // The shell ran and its redirection was refused.
+        // This is a report of a failure, not a refusal to run.
         succeeded(&out);
         assert!(
             !outside.exists(),
@@ -356,8 +355,8 @@ mod tests {
         let _ = std::fs::remove_file(&outside);
     }
 
-    /// A command the model asks to run outside the sandbox is put to the user as such, and
-    /// once agreed it runs unconfined.
+    /// A command the model asks to run outside the sandbox is put to the user as such.
+    /// Once agreed, it runs unconfined.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_command_outside_the_sandbox_is_asked_for_and_unconfined() {
@@ -384,8 +383,8 @@ mod tests {
         assert!(asked[0].summary.ends_with("(outside the sandbox)"));
     }
 
-    /// A confined command may discard its output, and does not see the variables the
-    /// sandbox takes out.
+    /// A confined command may discard its output.
+    /// It does not see the variables the sandbox takes out.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_confined_command_writes_to_devices_and_misses_the_key() {
@@ -414,9 +413,10 @@ mod tests {
         );
     }
 
-    /// The control for the test above. Without it, that one would keep passing if the
-    /// command had stopped writing for some reason of its own, and a confinement test that
-    /// cannot fail is worse than none. This is also the documented default: unconfined.
+    /// The control for the test above.
+    /// Without it, that one would keep passing if the command had stopped writing for some reason
+    /// of its own.
+    /// This is also the documented default: unconfined.
     #[tokio::test]
     async fn an_unconfined_command_does_write_outside_the_project() {
         let h = Harness::new(Answer::Yes);
@@ -453,8 +453,8 @@ mod tests {
         assert_eq!(h.read("inside.txt").trim(), "made");
     }
 
-    /// Reading is deliberately not confined, and a protection has to be described by what
-    /// it does not do as much as by what it does.
+    /// Reading is deliberately not confined.
+    /// A protection is described by what it does not do as much as by what it does.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_confined_command_can_still_read_outside_the_project() {
@@ -467,8 +467,8 @@ mod tests {
         assert!(out.content.contains("exit: 0"), "{}", out.content);
     }
 
-    /// A child cannot hand back what its parent gave up, which is the property that makes
-    /// this worth having at all: the approved command is not the only thing that runs.
+    /// A child cannot hand back what its parent gave up.
+    /// The approved command is not the only thing that runs.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn confinement_is_inherited_by_what_the_command_starts() {
@@ -511,10 +511,10 @@ mod tests {
 
 /// Read one of a child's streams to the end, showing each line as it arrives.
 ///
-/// Shared with the test runner, which has the same problem in a longer form.
+/// Shared with the test runner.
 ///
-/// The whole text is still returned: what the model reads has to be what ran, and a
-/// screen that showed the last 20 lines has not told it about the first 100.
+/// The whole text is returned.
+/// What the model reads is what ran, whatever the screen showed.
 pub(crate) async fn read_lines(
     stream: Option<impl tokio::io::AsyncRead + Unpin>,
     ctx: &ToolCtx,

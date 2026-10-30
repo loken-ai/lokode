@@ -2,7 +2,8 @@
 //!
 //! Every response that carries a loken measurement is recorded here, against the purpose
 //! its caller gave: a step of a turn, a read guessed ahead, a second opinion, a repaired
-//! reply, the probe at startup. A turn's cost is what the totals moved by while it ran.
+//! reply, the probe at startup.
+//! A turn's cost is what the totals moved by while it ran.
 //! A backend that measures nothing leaves the totals at zero, and nothing is shown.
 
 use std::sync::{Mutex, OnceLock};

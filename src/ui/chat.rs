@@ -65,8 +65,11 @@ impl Step {
         }
     }
 
-    /// The page a step opens on: its call, then for a session it ran each of that
-    /// session's steps with what it came to, then what it answered or printed, whole.
+    /// The page a step opens on.
+    ///
+    /// It holds the call.
+    /// For a session the call ran, it then holds each of that session's steps with what it came to.
+    /// It ends with what the call answered or printed, whole.
     pub fn page(&self) -> String {
         // The page's band names the call, so the page starts with what it did.
         let mut out = String::new();
@@ -125,9 +128,9 @@ pub enum Entry {
     Receipt(Receipt),
     /// A change waiting to be agreed to, in the thread where the rest of the turn is.
     ///
-    /// In the thread rather than over it: a modal hides the conversation the change has to
-    /// be judged against, and the diff it covers is the one thing a reader wants beside
-    /// it. It scrolls with everything else, and is replaced by what the tool did.
+    /// It sits in the thread, not over it, so the conversation stays visible beside the diff.
+    /// It scrolls with everything else.
+    /// It is replaced by what the tool did.
     Approval {
         tool: String,
         summary: String,
@@ -136,16 +139,15 @@ pub enum Entry {
     },
     /// The model's scratchpad, accumulated while it streams.
     ///
-    /// Shown dimmed and set apart, because it is the one thing in the pane the user must
-    /// not mistake for the answer.
+    /// Shown dimmed and set apart, so it is not mistaken for the answer.
     Reasoning(String),
 }
 
 impl Entry {
     /// Whether there is more to this entry than what is shown.
     ///
-    /// Only the entries that hold evidence: a result, a command's output, a scratchpad. A
-    /// question and an answer are shown whole because they are what the pane is for.
+    /// Only the entries that hold evidence: a result, a command's output, a scratchpad.
+    /// A question and an answer are shown whole.
     pub fn can_unfold(&self) -> bool {
         match self {
             Entry::Step(step) => {
@@ -162,8 +164,7 @@ impl Entry {
 
     /// The entry as plain text, for taking the conversation out of the pane.
     ///
-    /// The same content the screen carries, without the colour and the box drawing: what a
-    /// person pastes into an issue or a message.
+    /// The same content the screen carries, without the colour and the box drawing.
     pub fn to_text(&self) -> String {
         match self {
             Entry::User(s) => format!("> {s}"),
@@ -192,14 +193,16 @@ impl Entry {
 
     /// The entry's lines, with what is shown decided by the caller.
     ///
-    /// `open` shows the evidence whole rather than counted; `here` marks the entry the
-    /// keys are pointing at, so moving between them is visible.
+    /// `open` shows the evidence whole rather than counted.
+    /// `here` marks the entry the keys are pointing at.
     pub fn render(&self, open: bool, here: bool) -> Vec<Line<'static>> {
         self.render_within(open, here, 0)
     }
 
-    /// The entry's lines for a pane `width` columns wide, which a step uses to put its
-    /// outcome at the right edge. Zero leaves the outcome beside the call.
+    /// The entry's lines for a pane `width` columns wide.
+    ///
+    /// A step uses the width to put its outcome at the right edge.
+    /// Zero leaves the outcome beside the call.
     pub fn render_within(&self, open: bool, here: bool, width: usize) -> Vec<Line<'static>> {
         self.render_joined(open, here, width, false)
     }
@@ -225,8 +228,8 @@ impl Entry {
             _ => self.lines_inner(open, width),
         };
         if here {
-            // The mark goes in the left margin every line already leaves empty, so
-            // pointing at an entry does not move its text.
+            // The mark goes in the left margin every line leaves empty.
+            // Pointing at an entry does not move its text.
             for line in lines.iter_mut() {
                 let mark = Span::styled("▌", Style::default().fg(theme().accent));
                 match line.spans.first_mut() {
@@ -244,9 +247,7 @@ impl Entry {
 
     fn lines_inner(&self, open: bool, width: usize) -> Vec<Line<'static>> {
         match self {
-            // The person's own words, marked the way a shell marks a prompt rather than
-            // with a header of their own: a line that says "you" over what you just typed
-            // is a line spent saying nothing.
+            // The person's own words, marked the way a shell marks a prompt.
             Entry::User(s) => {
                 let mut out: Vec<Line<'static>> = s
                     .lines()
@@ -273,8 +274,7 @@ impl Entry {
             }
             Entry::Step(step) => step_lines(step, open, 0, false),
             Entry::Receipt(r) => receipt_lines(r, 0, false),
-            // `/diff` answers through a notice, and a wall of uncoloured diff is the thing
-            // it is least useful as.
+            // `/diff` answers through a notice, so a diff body is coloured.
             Entry::Reasoning(s) => s
                 .lines()
                 .map(|l| {
@@ -284,8 +284,8 @@ impl Entry {
                     ))
                 })
                 .collect(),
-            // The one thing on screen that is waiting for the reader, so it is the one
-            // thing that is neither dim nor the colour of an answer.
+            // The one thing on screen that is waiting for the reader.
+            // It is neither dim nor the colour of an answer.
             Entry::Approval {
                 summary,
                 diff,
@@ -319,9 +319,8 @@ impl Entry {
                         )));
                     }
                 }
-                // The keys as badges, the letter on the colour of the question. The line a
-                // shell command is given is the one worth correcting, so the key that does it
-                // is offered only where there is a command to correct.
+                // The keys as badges, the letter on the colour of the question.
+                // The key that corrects the command is offered only where there is a command.
                 let badge = |k: &str| {
                     Span::styled(
                         format!(" {k} "),
@@ -349,8 +348,7 @@ impl Entry {
                 }
                 out.push(Line::from(""));
                 out.push(Line::from(keys));
-                // On a raised surface of its own, where the terminal can show one: the one
-                // thing on screen that waits for the reader.
+                // On a raised surface of its own, where the terminal can show one.
                 if let (Some(tint), true) = (t.tint, width > 0) {
                     for line in out.iter_mut() {
                         for span in line.spans.iter_mut() {
@@ -370,9 +368,9 @@ impl Entry {
                 out.push(Line::from(""));
                 out
             }
-            // What the program says about itself, not what the model said. 2 weights:
-            // an ordinary remark recedes, and something that went wrong does not - an
-            // error in the same grey as a footnote is an error nobody reads.
+            // What the program says about itself, not what the model said.
+            // An ordinary remark recedes.
+            // Something that went wrong does not.
             Entry::Notice(s) => {
                 if looks_like_diff(s) {
                     return crate::ui::diff::rows(s, width);
@@ -401,13 +399,10 @@ impl Entry {
 
 /// Break rendered lines so that one line is one row on screen.
 ///
-/// The pane used to hand its lines to a paragraph that wrapped them itself. That left the
-/// program counting logical lines while the terminal showed rows, so scrolling was off by
-/// however much had wrapped, and nothing could be said about what sits at a given row -
-/// which is what selecting with the mouse needs to know.
+/// Scrolling and mouse selection count rows, so a line is cut to the rows it takes on screen.
 ///
-/// Broken at a space where there is one, mid-word where there is not, and never mid-span:
-/// a span carries its colour, and half a span carries half of it.
+/// Broken at a space where there is one, mid-word where there is not.
+/// Never broken mid-span, because a span carries its colour.
 pub fn wrap(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
     if width == 0 {
         return lines;
@@ -447,16 +442,15 @@ pub fn wrap(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
 
 /// Where to break `text` so that at most `room` columns are used.
 ///
-/// At the last space that fits, so a word is not cut when it does not have to be; at
-/// `room` when there is no space, because a line has to end somewhere.
+/// At the last space that fits, so a word is not cut when it does not have to be.
+/// At `room` when there is no space.
 fn break_at(text: &str, room: usize) -> usize {
     let hard = text
         .char_indices()
         .nth(room)
         .map(|(i, _)| i)
         .unwrap_or(text.len());
-    // A space exactly where the room runs out means the whole of what fits is a word
-    // boundary already.
+    // A space exactly where the room runs out makes the whole of what fits a word boundary.
     if text[hard..].starts_with(' ') {
         return hard;
     }
@@ -478,9 +472,7 @@ pub fn line_text(line: &Line<'static>) -> String {
 
 /// Whether a remark is about something that went wrong.
 ///
-/// Read off the wording rather than carried alongside it, because every one of these
-/// reaches the pane as the same kind of message. The words are the ones the loop itself
-/// uses when it reports a failure.
+/// Read off the wording, which is the one the loop itself uses when it reports a failure.
 fn says_something_went_wrong(s: &str) -> bool {
     const BAD: [&str; 6] = [
         "backend error",
@@ -496,9 +488,8 @@ fn says_something_went_wrong(s: &str) -> bool {
 
 /// What a call is about, in the words a person would use.
 ///
-/// One argument carries the meaning of a call and the rest is machinery: which file, which
-/// pattern, which command. Printing the arguments in full turned every step into a wall of
-/// JSON, and the one that matters is the same one every time for a given tool.
+/// One argument carries the meaning of a call: which file, which pattern, which command.
+/// It is the same argument every time for a given tool.
 fn call_subject(name: &str, args: &str) -> String {
     let parsed: serde_json::Value = serde_json::from_str(args).unwrap_or(serde_json::Value::Null);
     let field = |k: &str| parsed.get(k).and_then(|v| v.as_str()).map(str::to_string);
@@ -533,9 +524,10 @@ fn call_subject(name: &str, args: &str) -> String {
 /// A step as rows: the call on one line with what it came to at the right edge, and the
 /// evidence under it on the rail.
 ///
-/// The first line of a tool's own result is its answer and goes on the call's line. What
-/// follows is evidence: up to a few lines, the rest counted. An error is shown whole. While
-/// the call runs, the end of what it is printing stands in for the evidence.
+/// The first line of a tool's own result is its answer and goes on the call's line.
+/// What follows is evidence: up to `BODY_LINES` lines, the rest counted.
+/// An error is shown whole.
+/// While the call runs, the end of what it is printing stands in for the evidence.
 /// A step's row: its mark, its call and what it came to, against the edge of `width`.
 fn step_header(step: &Step, width: usize) -> Line<'static> {
     let t = theme();
@@ -565,8 +557,8 @@ fn step_header(step: &Step, width: usize) -> Line<'static> {
     let mut right: Vec<Span<'static>> = Vec::new();
     if let Some(o) = &step.outcome {
         let head = o.body.lines().next().unwrap_or("");
-        // What is left of the row once the call and the duration are on it, so the row
-        // stays one line.
+        // What is left of the row once the call and the duration are on it.
+        // The row stays one line.
         let used: usize = left
             .iter()
             .map(|s| s.content.chars().count())
@@ -637,8 +629,9 @@ fn step_lines(step: &Step, open: bool, width: usize, joined: bool) -> Vec<Line<'
         spans.extend(line.spans);
         Line::from(spans)
     };
-    // The steps of a session the call ran: while it runs, the latest of them, and once it is
-    // over, a count that unfolds into all of them.
+    // The steps of a session the call ran.
+    // While it runs, the latest of them.
+    // Once it is over, a count that unfolds into all of them.
     if !step.children.is_empty() {
         let n = step.children.len();
         let running = step.outcome.is_none();
@@ -715,9 +708,10 @@ fn step_lines(step: &Step, open: bool, width: usize, joined: bool) -> Vec<Line<'
     out
 }
 
-/// The person's own words, opening a turn: on a band of the accent where the terminal can
-/// show one, so each turn starts where the eye can find it, and marked with the prompt's
-/// sign otherwise.
+/// The person's own words, opening a turn.
+///
+/// On a band of the accent where the terminal can show one.
+/// Marked with the prompt's sign otherwise.
 fn user_lines(s: &str, width: usize) -> Vec<Line<'static>> {
     let t = theme();
     let mut out = Vec::new();
@@ -771,8 +765,10 @@ fn pad_to(mut spans: Vec<Span<'static>>, width: usize, style: Style) -> Line<'st
     Line::from(spans)
 }
 
-/// The line that closes a turn: how long, how many steps, what was read and written, and
-/// what changed, with the commands that look at a change at the right edge when there is one.
+/// The line that closes a turn.
+///
+/// It says how long, how many steps, what was read and written, and what changed.
+/// The commands that look at a change sit at the right edge when there is one.
 fn receipt_lines(r: &Receipt, width: usize, here: bool) -> Vec<Line<'static>> {
     let t = theme();
     let mut said = vec![how_long(r.took)];
@@ -799,8 +795,8 @@ fn receipt_lines(r: &Receipt, width: usize, here: bool) -> Vec<Line<'static>> {
         Span::styled("✓", Style::default().fg(t.good)),
         Span::styled(format!(" {}", said.join(" · ")), t.dim),
     ];
-    // Pointed at, the receipt is acted on by a key: put the turn back, or see what it
-    // changed. Otherwise it names the commands that do the same.
+    // Pointed at, the receipt is acted on by a key: put the turn back, or see what it changed.
+    // Otherwise it names the commands that do the same.
     let right = match (r.files.is_empty(), here) {
         (true, _) => Vec::new(),
         (false, true) => vec![
@@ -816,7 +812,7 @@ fn receipt_lines(r: &Receipt, width: usize, here: bool) -> Vec<Line<'static>> {
             Span::styled(" see it", t.dim),
         ],
     };
-    // The commands are a convenience: they go when the row has no room for them.
+    // The commands go when the row has no room for them.
     let wide = |spans: &[Span<'static>]| -> usize {
         spans.iter().map(|s| s.content.chars().count()).sum()
     };
@@ -836,8 +832,10 @@ pub(crate) fn tokens(n: u64) -> String {
     }
 }
 
-/// `left` and `right` on one row, `right` against the edge of `width` when both fit,
-/// 2 spaces after `left` when they do not or when there is no width to align to.
+/// `left` and `right` on one row.
+///
+/// `right` sits against the edge of `width` when both fit.
+/// Otherwise 2 spaces follow `left`, and the same when there is no width to align to.
 fn beside(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) -> Line<'static> {
     let wide = |spans: &[Span<'static>]| -> usize {
         spans.iter().map(|s| s.content.chars().count()).sum()
@@ -898,9 +896,7 @@ const BODY_LINES: usize = 8;
 
 /// How much of a diff is shown beside the question about it.
 ///
-/// More than a result, because this is the one a person has to judge rather than read, and
-/// less than the pane, because the conversation it is judged against has to stay visible
-/// behind it.
+/// More than a result and less than the pane.
 /// How much of a tool's output is shown while it is still running.
 const RUNNING_LINES: usize = 6;
 
@@ -911,8 +907,7 @@ const DIFF_LINES: usize = 16;
 
 /// Whether a body is a unified diff.
 ///
-/// Judged on the header a diff has and prose does not, rather than on leading `+` and `-`,
-/// which a bulleted list also has.
+/// Judged on the header a diff has and prose does not.
 pub(crate) fn looks_like_diff(s: &str) -> bool {
     s.lines()
         .any(|l| l.starts_with("@@ ") || l.starts_with("--- ") || l.starts_with("diff --git "))
@@ -922,8 +917,7 @@ pub(crate) fn looks_like_diff(s: &str) -> bool {
 mod tests {
     use ratatui::style::Color;
 
-    /// Pointing at the entry a word is in leaves the word itself to be found by eye,
-    /// which on a screenful of output is the part that takes the time.
+    /// Every occurrence of the word is picked out.
     #[test]
     fn what_was_searched_for_is_picked_out_where_it_is() {
         let line = Line::from("the session compacts the session");
@@ -937,7 +931,7 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect();
         assert_eq!(lit, vec!["session", "session"]);
-        // Case is not what a person searching means.
+        // The search ignores case.
         assert_eq!(
             mark_found(&Line::from("Session"), "session")
                 .spans
@@ -951,9 +945,8 @@ mod tests {
     }
     /// What is taken is what the pane shows between the 2 ends.
     ///
-    /// Both orders, because dragging upward is as ordinary as dragging down, and the
-    /// partial first and last rows are where an off-by-one would go unnoticed: the text
-    /// still looks like the right text, with a character missing at each end.
+    /// Both orders of the 2 ends are taken.
+    /// The partial first and last rows lose no character.
     #[test]
     fn a_selection_is_the_text_between_its_ends() {
         let lines = vec![
@@ -976,9 +969,8 @@ mod tests {
 
     /// Marking a selection must not lose or reorder what the line says.
     ///
-    /// The spans are split at the edges of the selection so the colour already on the text
-    /// survives under it; a split that dropped a character would show as text that reads
-    /// correctly on screen and comes out of the clipboard wrong.
+    /// The spans are split at the edges of the selection.
+    /// The colour already on the text survives under it.
     #[test]
     fn marking_a_selection_keeps_every_character() {
         let line = Line::from(vec![
@@ -1014,7 +1006,7 @@ mod tests {
         assert!(rows.iter().all(|r| line_width(r) <= 7));
     }
 
-    /// A word longer than the pane has to be cut: a line has to end somewhere.
+    /// A word longer than the pane is cut at the pane's width.
     #[test]
     fn a_word_wider_than_the_pane_is_cut() {
         let rows = wrap(vec![Line::from(Span::raw("abcdefghij"))], 4);
@@ -1022,8 +1014,7 @@ mod tests {
         assert_eq!(text, vec!["abcd", "efgh", "ij"]);
     }
 
-    /// A break never falls inside a span, because a span carries its colour and half a
-    /// span carries half of it.
+    /// A break never falls inside a span.
     #[test]
     fn colour_survives_a_break() {
         let line = Line::from(vec![
@@ -1055,7 +1046,7 @@ mod tests {
         assert_eq!(line_text(&rows[0]), "short");
     }
 
-    /// An error in the same grey as a footnote is an error nobody reads.
+    /// An error is not drawn in the grey of an ordinary remark.
     #[test]
     fn a_remark_about_a_failure_is_not_a_footnote() {
         assert!(says_something_went_wrong(
@@ -1070,7 +1061,7 @@ mod tests {
         assert!(!says_something_went_wrong("backend http://127.0.0.1:11435"));
     }
 
-    /// Judged on a diff's header, because a bulleted list also starts lines with `-`.
+    /// A diff is judged on its header, so a bulleted list is not one.
     #[test]
     fn a_diff_is_recognised_and_a_list_is_not() {
         assert!(looks_like_diff("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-one\n+two"));
@@ -1144,7 +1135,7 @@ mod tests {
         assert_eq!(line_text(&rows[1]), " ▏   1 use std;");
     }
 
-    /// A quick step does not say how long it took, and a guessed one says it was guessed.
+    /// A quick step does not say how long it took.
     #[test]
     fn a_guessed_step_says_so_and_a_quick_one_keeps_quiet() {
         let rows = step_lines(
@@ -1182,8 +1173,8 @@ mod tests {
         assert_eq!(line_text(&rows[2]), " ▏   tried src/mcp");
     }
 
-    /// A receipt says how long, how much and what changed on one row, and offers the
-    /// commands that look at a change only when there is one.
+    /// A receipt says how long, how much and what changed on one row.
+    /// It offers the commands that look at a change only when there is one.
     #[test]
     fn a_receipt_closes_a_turn_on_one_row() {
         let mut r = Receipt {
@@ -1210,9 +1201,8 @@ mod tests {
 
 /// One end of a selection: which line, and how many columns into it.
 ///
-/// Counted in lines of the wrapped pane rather than in entries, because that is what the
-/// mouse points at: a row on screen is a line here, which is the whole reason the wrapping
-/// is done in this file rather than left to the widget.
+/// Counted in lines of the wrapped pane, not in entries.
+/// A row on screen is a line here.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub struct Spot {
     pub line: usize,
@@ -1221,8 +1211,7 @@ pub struct Spot {
 
 /// The text between 2 spots, as the pane shows it.
 ///
-/// Ends given in either order: what the mouse reports is where it was pressed and where it
-/// is now, and dragging upward is as ordinary as dragging down.
+/// The ends may be given in either order.
 pub fn selected_text(lines: &[Line<'static>], a: Spot, b: Spot) -> String {
     let (from, to) = if a <= b { (a, b) } else { (b, a) };
     let mut out = Vec::new();
@@ -1241,8 +1230,8 @@ pub fn selected_text(lines: &[Line<'static>], a: Spot, b: Spot) -> String {
             out.push(String::new());
         }
     }
-    // A trailing run of blank rows is the empty part of the pane under the conversation,
-    // not something the person meant to take.
+    // A trailing run of blank rows is the empty part of the pane under the conversation.
+    // It is not taken.
     while out.last().is_some_and(|l| l.trim().is_empty()) && out.len() > 1 {
         out.pop();
     }
@@ -1256,8 +1245,7 @@ pub fn mark_selected(line: &Line<'static>, from: usize, to: usize) -> Line<'stat
 
 /// `line` with every occurrence of `needle` picked out.
 ///
-/// Pointing at the entry a word is in leaves the word itself to be found by eye, which on
-/// a screenful of output is the part that takes the time.
+/// Every occurrence of the word is picked out.
 pub fn mark_found(line: &Line<'static>, needle: &str) -> Line<'static> {
     if needle.is_empty() {
         return line.clone();
@@ -1283,8 +1271,8 @@ pub fn mark_found(line: &Line<'static>, needle: &str) -> Line<'static> {
 
 /// `line` with the columns between `from` and `to` shown in `marked`.
 ///
-/// Spans are split where the range starts and ends: a span carries its colour, and what is
-/// put on top has to sit over whatever colour is already there rather than replace it.
+/// Spans are split where the range starts and ends.
+/// What is put on top sits over whatever colour is already there.
 pub(crate) fn mark_range(
     line: &Line<'static>,
     from: usize,

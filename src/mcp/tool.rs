@@ -1,11 +1,10 @@
 //! An MCP server's tool, made to look like any other.
 //!
-//! The registry does not know the difference, which is the point: the grammar, the manifest,
-//! the approval flow and the checkpoint all work on it unchanged. What is different is where
-//! the schema came from. Every other tool's schema is written here and can be trusted to
-//! build a grammar out of; this one arrives from a program somebody else wrote, and a schema
-//! the grammar builder cannot handle would not break one tool - it would break the whole
-//! turn, for every tool.
+//! The registry does not know the difference.
+//! The grammar, the manifest, the approval flow and the checkpoint all work on it unchanged.
+//!
+//! The schema comes from a program somebody else wrote, so it is checked before use.
+//! A schema the grammar builder cannot handle breaks the whole turn, for every tool.
 
 use std::sync::Arc;
 
@@ -53,10 +52,9 @@ impl McpTool {
 
 /// Check a supplied schema, and normalise what is merely missing.
 ///
-/// The refusals are the ones that would poison the grammar rather than merely produce a bad
-/// call: a reference this code cannot resolve, or a structure deep enough to suggest it was
-/// not written for this. Anything else is left as the server wrote it - being strict about
-/// style here would reject working servers for no gain.
+/// The refusals are the schemas that would poison the grammar.
+/// They are a reference this code cannot resolve and a structure nested too deep.
+/// Anything else is left as the server wrote it.
 fn usable_schema(raw: &Value) -> Result<Value, String> {
     // A tool that takes nothing may say so by saying nothing.
     if raw.is_null() {
@@ -76,8 +74,7 @@ fn usable_schema(raw: &Value) -> Result<Value, String> {
     }
 
     let mut schema = raw.clone();
-    // The grammar is built from this, and a schema with no `type` produces one that
-    // constrains nothing.
+    // A schema with no `type` gets `object`, so the grammar built from it constrains the call.
     if let Some(map) = schema.as_object_mut() {
         map.entry("type").or_insert_with(|| json!("object"));
         map.entry("properties").or_insert_with(|| json!({}));
@@ -130,17 +127,15 @@ impl Tool for McpTool {
 
     /// Assumed unless the server says the tool changes nothing, with `readOnlyHint`.
     ///
-    /// Treating a tool as mutating costs a checkpoint that may turn out to record nothing;
-    /// treating it as pure would mean a change nobody can undo. A server the user set up
-    /// is taken at its word when it says a tool only reads.
+    /// A tool taken as mutating gets a checkpoint.
+    /// A server the user set up is taken at its word when it says a tool only reads.
     fn mutates(&self) -> bool {
         !self.read_only
     }
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
-        // Gated unless the server says the tool only reads. A built-in tool is trusted
-        // because its behaviour is in this repository; this one is a program the user
-        // configured, and the root does not confine it any more than it confines a shell.
+        // Gated unless the server says the tool only reads.
+        // The root does not confine the server, as it does not confine a shell.
         let approval = match self.read_only {
             true => Approval::Proceed,
             false => {
@@ -153,8 +148,7 @@ impl Tool for McpTool {
                         serde_json::to_string_pretty(&args).unwrap_or_default()
                     ),
                     diff_preview: None,
-                    // Per tool rather than per server: agreeing to one of a server's tools
-                    // is not agreeing to the rest of them.
+                    // The approval covers one tool, not the rest of the server's tools.
                     scope: ApprovalScope::Tool(self.name.clone()),
                 })
                 .await
@@ -191,14 +185,15 @@ impl Tool for McpTool {
 
 /// One server's resources, as a tool that reads them.
 ///
-/// A resource is a document a server offers by name. Reaching it through a tool rather
-/// than through a surface of its own is what keeps the approval flow, the checkpoints and
-/// the transcript working on it unchanged: everything already built for a tool applies.
+/// A resource is a document a server offers by name.
+/// It is reached through a tool, so the approval flow, the checkpoints and the transcript
+/// work on it unchanged.
 pub struct McpResources {
     client: std::sync::Arc<crate::mcp::client::McpClient>,
     name: String,
-    /// What the server said it had, at startup: the list goes in the description so the
-    /// model can name one without a round trip to discover it.
+    /// What the server said it had, at startup.
+    ///
+    /// The list goes in the description, so the model can name a resource directly.
     description: String,
 }
 
@@ -303,8 +298,9 @@ mod tests {
         assert_eq!(usable_schema(&raw).unwrap(), raw);
     }
 
-    /// The refusal that matters: the grammar is built from every tool's schema at once, so
-    /// one this code cannot compile does not break one tool - it breaks the turn.
+    /// A schema this code cannot compile is refused.
+    ///
+    /// The grammar is built from every tool's schema at once, so one such schema breaks the turn.
     #[test]
     fn a_schema_with_a_reference_is_refused() {
         let err = usable_schema(&json!({

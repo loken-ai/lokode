@@ -9,22 +9,21 @@ use lokode::{app, config};
 mod default {
     pub const BACKEND_URL: &str = "http://127.0.0.1:11435";
     pub const MAX_STEPS: usize = 16;
-    /// Delegated turns at once. A local server answers them one after another, so more
-    /// than this only holds windows open while they wait.
+    /// Delegated turns at once.
+    ///
+    /// A local server answers them one after another.
+    /// More than this only holds windows open while they wait.
     pub const DELEGATES: usize = 2;
     /// The window to ask a local backend for.
     ///
-    /// Large, and for a reason that is not the obvious one. A conversation that outgrows
-    /// its window is compacted, compaction rewrites the history from near its start, and
-    /// the server's hold on the prompt it had already read is a prefix - so every
-    /// compaction makes the next turn re-read the whole conversation. A window the work
-    /// fits in is therefore faster than a smaller one, not merely roomier: measured on one
-    /// question against a 30-billion-parameter model, 24 seconds here against
-    /// 3 100 at a quarter of it, with the turns after the first answering in a
-    /// quarter of a second instead of a minute.
+    /// A conversation that outgrows its window is compacted.
+    /// Compaction rewrites the history from near its start.
+    /// The server only reuses the prompt it already read as a prefix.
+    /// So every compaction makes the next turn re-read the whole conversation.
+    /// A window the work fits in avoids that cost.
     ///
-    /// A ceiling, not an assumption: a backend whose model list states a smaller widest
-    /// window for the model is believed.
+    /// This is a ceiling.
+    /// A backend whose model list states a smaller widest window for the model wins.
     pub const CONTEXT_TOKENS: usize = 131_072;
 
     /// What to reserve for one answer, capped at half the window in force.
@@ -33,9 +32,9 @@ mod default {
 
 // Flags carry no defaults of their own.
 //
-// A flag with a `default_value` cannot be told apart from one the user did not pass, and
-// a setting that is always "specified" can never be overridden by a config file. The
-// defaults live above and are applied last, once everything else has had its say.
+// A flag with a `default_value` cannot be told apart from one the user did not pass.
+// A setting that is always "specified" can never be overridden by a config file.
+// The defaults live above and are applied last, once everything else has had its say.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "lokode", version, about = "Local-first code agent TUI")]
 struct Cli {
@@ -291,7 +290,7 @@ fn main() -> Result<()> {
         .build()?;
 
     match cfg.prompt {
-        // A headless run answers with an exit code, because the caller is a script.
+        // A headless run answers with an exit code.
         Some(prompt) => {
             let code = runtime.block_on(lokode::headless::run(
                 cfg.app,
@@ -328,8 +327,8 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
         sources.push(project.display().to_string());
     }
 
-    // A provider named on the command line takes the place of the configured backend, so
-    // nothing written for another provider, its key included, is sent to this one.
+    // A provider named on the command line takes the place of the configured backend.
+    // Nothing written for another provider, its key included, is sent to this one.
     let mut file = file;
     if let Some(provider) = &cli.provider {
         file.backend = config::BackendSection {
@@ -368,8 +367,8 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
         },
     };
 
-    // Settled before the URL is moved into the config, and settled once: `auto` reads the
-    // kind off the URL, so a later reader sees a decision rather than a question.
+    // Settled once, before the URL is moved into the config.
+    // `auto` reads the kind off the URL, so a later reader sees a decision.
     let backend_kind = cli
         .backend_kind
         .or(file.backend.kind)
@@ -382,17 +381,17 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
         _ => None,
     };
 
-    // A flag that was not passed is silence, not a "no": only `--no-transcript` and
-    // `--no-grammar` being present count as an opinion, so a file can still turn either
-    // off without the flag having to be repeated.
+    // A flag that was not passed is silence, not a "no".
+    // Only `--no-transcript` and `--no-grammar` being present count as an opinion.
+    // So a file can still turn either off without the flag having to be repeated.
     let transcripts = if cli.no_transcript {
         false
     } else {
         file.session.transcripts.unwrap_or(true)
     };
 
-    // Resolved before the rest so that asking for a confinement this machine cannot give
-    // is news at startup, rather than the first command of the session failing.
+    // Resolved before the rest.
+    // Asking for a confinement this machine cannot give is reported at startup.
     use lokode::sandbox::confine::Level;
     let asked = cli
         .sandbox
@@ -476,8 +475,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             roles: file.roles.clone(),
             preload: file.preload.unwrap_or(true),
             speculate: file.speculate.unwrap_or(true),
-            // Off unless asked for: it spends the machine's time on its own, and that is
-            // a thing to opt into rather than to discover.
+            // Off unless asked for: it spends the machine's time on its own.
             discover: cli.discover || file.discover.unwrap_or(false),
             headless: cli.prompt.is_some(),
             mode: if cli.plan || (starting_mode == "plan" && !cli.accept_edits) {
@@ -495,11 +493,10 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
     })
 }
 
-/// Ask on the terminal whether to trust the project's guarded settings. No when there is
-/// no terminal to ask on.
-/// Serve an editor, or with `port` the pages of a browser: each session is configured for
-/// its project as the terminal would be. A project's guarded settings wait for trust,
-/// since nobody can be asked here.
+/// Serve an editor, or with `port` the pages of a browser.
+///
+/// Each session is configured for its project as the terminal would be.
+/// A project's guarded settings wait for trust, since nobody can be asked here.
 fn acp_command(cli: Cli, port: Option<u16>) -> Result<()> {
     let root = cli.root.canonicalize().map_err(|e| {
         anyhow::anyhow!(
@@ -549,7 +546,8 @@ fn plugin_command(action: PluginAction) -> Result<()> {
     match action {
         PluginAction::Install { source, name, yes } => {
             let agree = |p: &plugins::Plugin| agree_plugin(p, yes, "Install it?");
-            // A url or a path is cloned; anything else is a name a marketplace lists.
+            // A url or a path is cloned.
+            // Anything else is a name a marketplace lists.
             let cloned = source.contains("://")
                 || source.starts_with("git@")
                 || source.contains('/')
@@ -890,8 +888,7 @@ fn print_config(cfg: &Resolved) {
     );
     let hosts: Vec<_> = a.allow_hosts.iter().cloned().collect();
     println!("  allow-hosts        {}", hosts.join(", "));
-    // Names only. The whole point of the file-permission check is that these do not get
-    // shown to whoever is looking over your shoulder either.
+    // Names only: the values are never shown.
     let names: Vec<_> = a.headers.iter().map(|(k, _)| k.as_str()).collect();
     println!("  headers            {} (values hidden)", names.join(", "));
     let servers: Vec<_> = a
@@ -908,9 +905,7 @@ fn print_config(cfg: &Resolved) {
 
 /// Send the log to a file, and return the guard that keeps the writer alive.
 ///
-/// The subscriber used to be pointed at stderr, which is the one place it must never go:
-/// ratatui owns that screen. Between that and the fact that nothing in the codebase ever
-/// emitted an event, `RUST_LOG` had no observable effect at all.
+/// The subscriber never writes to stderr, because ratatui owns that screen.
 fn init_logging(
     explicit: Option<PathBuf>,
 ) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
@@ -920,7 +915,7 @@ fn init_logging(
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn,lokode=info"));
 
     let Some(path) = explicit.or_else(lokode::paths::log_file) else {
-        // No home directory to write into. Running without a log beats refusing to run.
+        // No home directory to write into: run without a log.
         return Ok(None);
     };
     if let Some(parent) = path.parent() {

@@ -1,9 +1,10 @@
 //! A list to choose from, drawn the same way wherever one opens.
 //!
-//! A raised card: a head naming what is chosen, how many there are and the keys, then the
-//! values in a column with what each one is beside it. The highlighted row runs across the
-//! whole card, the letters typed are picked out in each value, and what is in force now is
-//! marked wherever it sits.
+//! A raised card: a head naming what is chosen, how many there are and the keys.
+//! Then the values in a column, with what each one is beside it.
+//! The highlighted row runs across the whole card.
+//! The letters typed are picked out in each value.
+//! What is in force now is marked wherever it sits.
 
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -89,8 +90,9 @@ impl Listing<'_> {
         out
     }
 
-    /// The head: what is chosen and what was typed on the left, how many there are and the
-    /// keys on the right.
+    /// The head.
+    /// On the left it holds what is chosen and what was typed.
+    /// On the right it holds how many there are and the keys.
     fn head(&self, width: usize, surface: Style) -> Line<'static> {
         let t = theme();
         let mut left = vec![Span::styled(
@@ -121,8 +123,9 @@ impl Listing<'_> {
         Line::from(spans)
     }
 
-    /// A value padded to its column: the letters typed picked out, and a path's directory
-    /// receding behind its name.
+    /// A value padded to its column.
+    /// The letters typed are picked out.
+    /// A path's directory recedes behind its name.
     fn value_spans(&self, value: &str, width: usize, row: Style, here: bool) -> Vec<Span<'static>> {
         let t = theme();
         let shown = clip(value, width);
@@ -225,8 +228,9 @@ mod tests {
         ]
     }
 
-    /// The head says what is chosen, where the highlight is and the keys; the values sit
-    /// in one column, and a long description is cut to the card.
+    /// The head says what is chosen, where the highlight is and the keys.
+    /// The values sit in one column.
+    /// A long description is cut to the card.
     #[test]
     fn a_list_is_a_head_and_a_column() {
         let all = choices();

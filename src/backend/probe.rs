@@ -1,12 +1,15 @@
 //! Finding out whether a backend really does native tool calls.
 //!
 //! A server that will not take the `tools` field says so, and the session drops to the
-//! envelope protocol on the spot. A server that takes the field and drops it says nothing
-//! at all: the model is never told it has tools, and every turn ends with it describing
-//! the call it could not make. Nothing errors, and the session is useless.
+//! envelope protocol on the spot.
+//! A server that takes the field and drops it says nothing at all.
+//! The model is never told it has tools, and every turn ends with it describing the call it
+//! could not make.
+//! Nothing errors, and the session is useless.
 //!
-//! One request settles it. A tool the model is required to call comes back as a call from
-//! a backend that honours the field, and as prose from one that does not.
+//! One request settles it.
+//! A tool the model is required to call comes back as a call from a backend that honours the
+//! field, and as prose from one that does not.
 
 use std::sync::Arc;
 
@@ -18,14 +21,17 @@ use crate::backend::client::StreamEvent;
 use crate::backend::provider::{Provider, TurnRequest};
 use crate::backend::wire::{Message, ToolSpec};
 
-/// What the probe asks for. Named so it cannot be mistaken for a real tool in a log.
+/// What the probe asks for.
+///
+/// Named so it cannot be mistaken for a real tool in a log.
 const PROBE_TOOL: &str = "lokode_probe_ping";
 
 /// Whether the backend took the tool definitions and dropped them.
 ///
-/// Only a definite answer counts. A request that failed proves nothing about the field -
-/// it may be the model, the network or the load - and leaves the session on what it was
-/// told, where the error-driven fallback is still waiting.
+/// Only a definite answer counts.
+/// A request that failed proves nothing about the field: it may be the model, the network or
+/// the load.
+/// It leaves the session on what it was told.
 pub async fn ignores_native_tools(
     backend: Arc<dyn Provider>,
     model: &str,
@@ -51,7 +57,8 @@ pub async fn ignores_native_tools(
         max_tokens: 32,
         temperature: 0.0,
         user: None,
-        // A readiness check answers in a few tokens; a reasoning model would spend them thinking.
+        // A readiness check answers in a few tokens.
+        // A reasoning model would spend them thinking.
         reason: false,
         purpose: crate::backend::meter::Purpose::Probe,
     };

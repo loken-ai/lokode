@@ -1,21 +1,21 @@
 //! What has been learned about a project, kept between sessions.
 //!
 //! An agent rediscovers the same things every session: where the code lives, what the
-//! test command is, which module owns what. Each rediscovery is a handful of searches and
-//! file reads, and those are what fill the window - so the session that has learned the
-//! most about a project is also the one with the least room left to use it.
+//! test command is, which module owns what.
+//! Each rediscovery is a handful of searches and file reads, and those fill the window.
 //!
-//! What is written here is the opposite: a small number of short statements, each with
-//! where it came from, that can be put in front of a model for the price of a paragraph.
-//! It is a cache of conclusions, not of files.
+//! What is written here is a small number of short statements.
+//! Each carries where it came from.
+//! They can be put in front of a model for the price of a paragraph.
+//! It holds conclusions, not files.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// What kind of thing was learned. The kinds are few on purpose: a taxonomy nobody can
-/// keep in their head produces items nobody can find.
+/// What kind of thing was learned.
+/// The kinds are few, so items stay findable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
@@ -44,11 +44,11 @@ impl Kind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item {
     pub kind: Kind,
-    /// One sentence. Anything longer is a document, and a document belongs in the
-    /// repository where a person can edit it.
+    /// One sentence.
+    /// Anything longer belongs in the repository where a person can edit it.
     pub text: String,
-    /// Where it came from: a path, a command, a session id. What makes an item
-    /// checkable rather than folklore.
+    /// Where it came from: a path, a command, a session id.
+    /// It makes an item checkable.
     #[serde(default)]
     pub source: String,
     /// Seconds since the epoch, so an item can be aged out or shown by recency.
@@ -59,12 +59,12 @@ pub struct Item {
 /// Everything known about one project.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Digest {
-    /// Keyed by a short slug so the same fact learned twice replaces itself rather than
-    /// accumulating. The slug is derived from the text, which is crude and enough.
+    /// Keyed by a short slug, so the same fact learned twice replaces itself.
+    /// The slug is derived from the text.
     #[serde(default)]
     pub items: BTreeMap<String, Item>,
-    /// Questions still worth answering, oldest first. The work is persistent: a session
-    /// that ends mid-discovery leaves the rest for the next one.
+    /// Questions still worth answering, oldest first.
+    /// A session that ends mid-discovery leaves the rest for the next one.
     #[serde(default)]
     pub questions: Vec<String>,
     /// Things worth telling the user, not yet told.
@@ -74,15 +74,16 @@ pub struct Digest {
     path: Option<PathBuf>,
 }
 
-/// How many items are kept. Past this the oldest go: the point is a paragraph a model can
-/// read, not an archive.
+/// How many items are kept.
+/// Past this the oldest go.
 const MAX_ITEMS: usize = 40;
 
 /// How many characters of digest may reach a preamble.
 ///
-/// It sits in the system message beside the standing instructions, so it is paid on every
-/// request of the session. Half of what the instructions may take: what a person wrote
-/// deliberately outranks what a background task inferred.
+/// The digest sits in the system message beside the standing instructions.
+/// It is paid on every request of the session.
+/// It gets half of what the instructions may take.
+/// What a person wrote deliberately outranks what a background task inferred.
 pub const MAX_PREAMBLE_CHARS: usize = 1200;
 
 impl Digest {
@@ -111,15 +112,14 @@ impl Digest {
             source: source.trim().to_string(),
             learned_at: now_secs(),
         };
-        // Keyed by kind and subject, so a later wording of the same fact replaces the
-        // earlier one and a statement about the layout never displaces one about the
-        // build. 2 facts that share 6 words and a kind are the same fact stated
-        // twice often enough that merging them is the better error.
+        // Keyed by kind and subject.
+        // A later wording of the same fact replaces the earlier one.
+        // A statement about one kind never displaces one about another.
+        // 2 facts that share 6 words and a kind count as the same fact.
         self.items
             .insert(format!("{}:{}", kind.label(), slug(text)), item);
         while self.items.len() > MAX_ITEMS {
-            // The oldest goes. A project that has changed enough to make 40 statements
-            // stale has changed enough that the oldest of them is the wrong one.
+            // The oldest goes.
             if let Some(oldest) = self
                 .items
                 .iter()
@@ -137,8 +137,7 @@ impl Digest {
         if question.is_empty() || self.questions.iter().any(|q| q == &question) {
             return;
         }
-        // Bounded, and the oldest goes: a queue that grows without limit is one nobody
-        // ever reaches the end of.
+        // Bounded: the oldest question goes first.
         self.questions.push(question);
         while self.questions.len() > 20 {
             self.questions.remove(0);
@@ -175,8 +174,8 @@ impl Digest {
 
     /// What goes in front of the model: the statements, by kind, bounded.
     ///
-    /// Bounded by cutting whole items rather than characters: half a statement about a
-    /// project is worse than one fewer statement.
+    /// Bounded by cutting whole items, not characters.
+    /// Half a statement about a project is worse than one fewer statement.
     pub fn preamble(&self, max_chars: usize) -> Option<String> {
         if self.items.is_empty() {
             return None;
@@ -187,8 +186,7 @@ impl Digest {
         }
         let mut out = String::new();
         for (kind, mut items) in by_kind {
-            // Most recently learned first: what was found today is likelier to be true
-            // than what was found before the last 3 commits.
+            // Most recently learned first.
             items.sort_by_key(|i| std::cmp::Reverse(i.learned_at));
             for item in items {
                 let line = format!("- {}: {}\n", kind.label(), item.text);
@@ -277,9 +275,8 @@ fn key(root: &Path) -> String {
 mod tests {
     use super::*;
 
-    /// A fact stated again, in whatever words, replaces the earlier statement rather
-    /// than sitting beside it: a digest with 3 wordings of the test command is one
-    /// nobody trusts.
+    /// A fact stated again, in whatever words, replaces the earlier statement.
+    /// It does not sit beside it.
     #[test]
     fn restating_a_fact_replaces_it_and_a_different_subject_does_not() {
         let mut d = Digest::default();

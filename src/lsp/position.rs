@@ -1,8 +1,11 @@
 //! Columns as a person counts them, and as a language server counts them.
 //!
-//! The tools speak in characters, 1-indexed. A server counts code units of the encoding it
-//! agreed to at startup: UTF-16 unless it says otherwise. On a line with an accent or an
-//! emoji the 2 differ, and a column passed through unconverted points at the wrong place.
+//! The tools speak in characters, 1-indexed.
+//! A server counts code units of the encoding it agreed to at startup.
+//! The encoding is UTF-16 unless the server says otherwise.
+//!
+//! On a line with an accent or an emoji the 2 counts differ.
+//! A column passed through unconverted points at the wrong place.
 
 /// The unit a server counts columns in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -32,8 +35,8 @@ impl Encoding {
     }
 }
 
-/// The units `enc` counts for the first `chars` characters of `line`. A count past the end
-/// of the line stops at its end.
+/// The units `enc` counts for the first `chars` characters of `line`.
+/// A count past the end of the line stops at its end.
 pub fn units(line: &str, chars: usize, enc: Encoding) -> u32 {
     line.chars()
         .take(chars)
@@ -41,8 +44,8 @@ pub fn units(line: &str, chars: usize, enc: Encoding) -> u32 {
         .sum::<usize>() as u32
 }
 
-/// How many characters of `line` the first `units` units of `enc` cover. A unit count that
-/// falls inside a character counts that character.
+/// How many characters of `line` the first `units` units of `enc` cover.
+/// A unit count that falls inside a character counts that character.
 pub fn chars(line: &str, units: u32, enc: Encoding) -> usize {
     let mut seen = 0usize;
     let mut out = 0usize;
@@ -60,7 +63,8 @@ pub fn chars(line: &str, units: u32, enc: Encoding) -> usize {
 mod tests {
     use super::*;
 
-    /// An accent takes 2 bytes and one UTF-16 unit, an emoji 4 bytes and 2 units.
+    /// An accent takes 2 bytes and one UTF-16 unit.
+    /// An emoji takes 4 bytes and 2 units.
     #[test]
     fn a_column_is_counted_in_the_server_s_units() {
         let line = "é🙂x";

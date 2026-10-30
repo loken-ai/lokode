@@ -16,9 +16,9 @@ use crate::tools::registry::Registry;
 /// }
 /// ```
 ///
-/// Per-tool argument schemas are unioned via `oneOf` keyed on `name`. The
-/// `additionalProperties: false` + `required` constraints make the
-/// grammar fail closed if the model invents a tool.
+/// Per-tool argument schemas are unioned via `oneOf` keyed on `name`.
+/// The `additionalProperties: false` and `required` constraints make the grammar fail closed
+/// if the model invents a tool.
 pub fn build_turn_schema(reg: &Registry) -> Value {
     let mut variants = Vec::with_capacity(reg.len());
     for (_, tool) in reg.iter() {
@@ -33,7 +33,7 @@ pub fn build_turn_schema(reg: &Registry) -> Value {
         }));
     }
 
-    // Empty registry → at least allow text-only responses.
+    // An empty registry still allows text-only responses.
     let tool_call_schema = if variants.is_empty() {
         json!({ "type": "object" })
     } else {
@@ -57,9 +57,9 @@ pub fn build_turn_schema(reg: &Registry) -> Value {
 
 /// The registry as the native protocol wants to see it.
 ///
-/// The same per-tool schemas the envelope grammar is built from, carried in the field the
-/// server understands instead of described in the preamble. Sorted, because a stable
-/// order is a stable prompt prefix, and the server reuses its KV cache on one.
+/// The same per-tool schemas the envelope grammar is built from.
+/// They are carried in the field the server understands, not described in the preamble.
+/// Entries are sorted, so the order is stable and so is the prompt prefix.
 pub fn tool_specs(reg: &Registry) -> Vec<ToolSpec> {
     let mut tools: Vec<_> = reg.iter().collect();
     tools.sort_by(|a, b| a.0.cmp(b.0));
@@ -76,9 +76,10 @@ pub fn tool_specs(reg: &Registry) -> Vec<ToolSpec> {
         .collect()
 }
 
-/// Description block prepended to the system prompt so the model knows
-/// which tools exist and what each does. The schema is the source of
-/// truth for structure; this is for semantic guidance only.
+/// Description block prepended to the system prompt, listing which tools exist and what each does.
+///
+/// The schema is the source of truth for structure.
+/// This block is semantic guidance only.
 pub fn tool_manifest(reg: &Registry) -> String {
     let mut out = String::from("Tools available:\n");
     let mut entries: Vec<_> = reg.iter().collect();

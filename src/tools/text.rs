@@ -1,16 +1,15 @@
 //! Reading files as text, with the 2 refusals that keep a conversation usable.
 //!
-//! Both happen before the bytes are in memory, which is the point: a ceiling applied to
-//! the string after the whole file has been loaded has already lost the argument.
+//! Both refusals happen before the bytes are in memory.
+//! A ceiling applied after the whole file is loaded is too late.
 
 use std::path::Path;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 /// Bytes a single file may contribute before it is refused outright.
-///
-/// Generous next to any source file and small next to the things that get read by
-/// accident - a database, a core dump, a video the repository happens to carry.
+/// Generous next to any source file.
+/// Small next to a database, a core dump or a video the repository carries.
 pub const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// How much of a file to inspect before deciding it is not text.
@@ -18,9 +17,9 @@ const SNIFF_BYTES: usize = 8 * 1024;
 
 /// Whether a leading chunk looks like something other than text.
 ///
-/// A null byte is the cheap and near-certain signal. Without this check a PNG read into
-/// the conversation arrives as a wall of replacement characters that costs the whole
-/// context window and tells the model nothing.
+/// A null byte is the cheap and near-certain signal.
+/// Without this check a PNG read into the conversation arrives as a wall of replacement
+/// characters that costs the whole context window.
 fn looks_binary(chunk: &[u8]) -> bool {
     chunk.contains(&0)
 }
@@ -57,8 +56,9 @@ pub async fn read_text(path: &Path) -> Result<String, String> {
 
 /// Read a file's contents if it exists, or `None` if it does not.
 ///
-/// The refusals still apply: a file being overwritten is one that could have been read,
-/// and its previous contents go into a diff the user is asked to read.
+/// The refusals still apply.
+/// A file being overwritten is one that could have been read.
+/// Its previous contents go into a diff the user is asked to read.
 pub async fn read_text_if_exists(path: &Path) -> Result<Option<String>, String> {
     match tokio::fs::metadata(path).await {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -69,15 +69,15 @@ pub async fn read_text_if_exists(path: &Path) -> Result<Option<String>, String> 
 
 /// Read a 1-indexed inclusive window of lines, numbered.
 ///
-/// Streamed a line at a time so that a window stays readable in a file too large to read
-/// whole - which is the case where asking for a window is the sensible thing to do.
+/// Streamed a line at a time, so that a window stays readable in a file too large to read
+/// whole.
 pub async fn read_numbered(
     path: &Path,
     start: Option<usize>,
     end: Option<usize>,
 ) -> Result<String, String> {
-    // A whole-file read is bounded by the ceiling; a window is not, because the point of
-    // asking for one is that the file is bigger than you want.
+    // A whole-file read is bounded by the ceiling.
+    // A window is not, because the file may be bigger than the window.
     if start.is_none() && end.is_none() {
         let text = read_text(path).await?;
         return Ok(number_from(&text, 1));
@@ -97,8 +97,8 @@ pub async fn read_numbered(
         return Err(not_text(path));
     }
 
-    // Start over now that the file is known to be text; the sniff consumed bytes the
-    // line reader needs.
+    // Start over now that the file is known to be text.
+    // The sniff consumed bytes the line reader needs.
     let file = tokio::fs::File::open(path)
         .await
         .map_err(|e| format!("read failed: {e}"))?;
@@ -220,8 +220,8 @@ mod tests {
         assert_eq!(read_numbered(&p, Some(9), Some(9)).await.unwrap(), "");
     }
 
-    /// A window is the way to read a file too big to read whole, so the ceiling must not
-    /// refuse it.
+    /// A window is the way to read a file too big to read whole.
+    /// The ceiling must not refuse it.
     #[tokio::test]
     async fn a_window_still_works_past_the_whole_file_ceiling() {
         let dir = tempdir().unwrap();

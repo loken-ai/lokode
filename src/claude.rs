@@ -1,8 +1,8 @@
 //! What lokode reads of the plugins other tools write, Claude Code's first.
 //!
-//! Such a plugin is a directory with the components in the places that tool gives them, and
-//! a manifest in `.claude-plugin/plugin.json` that it may do without. lokode reads what it
-//! has a place for and says what it leaves out.
+//! Such a plugin is a directory with the components in the places that tool gives them.
+//! It has a manifest in `.claude-plugin/plugin.json`, which it may do without.
+//! lokode reads what it has a place for and says what it leaves out.
 //!
 //! | In the plugin | lokode |
 //! |---|---|
@@ -12,8 +12,8 @@
 //! | `.claude-plugin/marketplace.json` | a marketplace, its sources a path, `github`, `url` or `git-subdir` |
 //! | `${CLAUDE_PLUGIN_ROOT}` | the plugin's directory |
 //!
-//! A hook of such a plugin is given the fields that tool gives, beside lokode's own, so the
-//! script it brings reads what it expects.
+//! A hook of such a plugin is given the fields that tool gives, beside lokode's own.
+//! The script it brings reads what it expects.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -25,7 +25,9 @@ use crate::config::{Hook, HooksSection, LspServer, McpServer};
 /// The directory a Claude Code plugin keeps its manifest and its marketplace in.
 pub const DIR: &str = ".claude-plugin";
 
-/// The model names that tool uses for its own models. They name nothing lokode can run.
+/// The model names that tool uses for its own models.
+///
+/// They name nothing lokode can run.
 pub const MODEL_ALIASES: &[&str] = &["sonnet", "opus", "haiku", "fable", "inherit", "default"];
 
 /// The tools of lokode a tool of Claude Code's name stands for.
@@ -87,8 +89,8 @@ pub fn input_of(tool: &str, args: &Value) -> Value {
     Value::Object(out)
 }
 
-/// The tools a list of names stands for, each in lokode's name or Claude Code's. A name that
-/// stands for nothing is left out.
+/// The tools a list of names stands for, each in lokode's name or Claude Code's.
+/// A name that stands for nothing is left out.
 pub fn tools_named(list: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
@@ -359,8 +361,10 @@ fn with_options(text: &str, values: &BTreeMap<String, String>) -> String {
     out
 }
 
-/// The values of the options a manifest asks for: what the user gave in `given`, or in the
-/// variable `CLAUDE_PLUGIN_OPTION_<KEY>`, or the option's default. Says what is missing.
+/// The values of the options a manifest asks for.
+/// Each is what the user gave in `given`, or the variable `CLAUDE_PLUGIN_OPTION_<KEY>`, or the
+/// option's default.
+/// Says what is missing.
 fn option_values(
     manifest: &Value,
     plugin: &str,
@@ -625,8 +629,8 @@ pub fn hook_fields(event: &str, facts: &Value) -> Value {
 mod tests {
     use super::*;
 
-    /// Hooks come over with lokode's tools in the matcher, the plugin's root in the
-    /// command, and what lokode has no event for said.
+    /// Hooks come over with lokode's tools in the matcher and the plugin's root in the command.
+    /// What lokode has no event for is said.
     #[test]
     fn hooks_are_read_in_lokodes_names() {
         let (hooks, warnings) = hooks_from(
@@ -667,8 +671,8 @@ mod tests {
         assert_eq!(name_of("lookup__word"), "mcp__lookup__word");
     }
 
-    /// Servers come in both shapes, with the root in what runs, and tool names of both
-    /// tools are read.
+    /// Servers come in both shapes, with the root in what runs.
+    /// Tool names of both tools are read.
     #[test]
     fn servers_and_tools_are_read() {
         let (servers, _) = servers_from(
@@ -720,8 +724,8 @@ mod tests {
         assert!(read.hooks.post_tool.is_empty());
     }
 
-    /// An option the user gave, or the manifest defaults, goes in what runs, and one that
-    /// is required and missing is said.
+    /// An option the user gave, or the manifest defaults, goes in what runs.
+    /// One that is required and missing is said.
     #[test]
     fn options_go_in_what_runs() {
         let dir = tempfile::tempdir().unwrap();

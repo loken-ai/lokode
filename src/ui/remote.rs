@@ -1,7 +1,7 @@
 //! The terminal on a session of a `lokode serve` already running: `lokode attach <url>`.
 //!
-//! The screen is the one a local session draws. What it reads from the engine comes from
-//! the server instead:
+//! The screen is the one a local session draws.
+//! What it reads from the engine comes from the server instead:
 //!
 //! | The server sends | The screen gets |
 //! |---|---|
@@ -10,8 +10,9 @@
 //! | a permission request | an approval, answered back |
 //! | a tool server's form | its questions, answered back |
 //!
-//! What is typed goes to the server as a prompt, a `/command` included, so a command runs
-//! where the session lives. Typing during a turn queues a prompt there.
+//! What is typed goes to the server as a prompt, a `/command` included.
+//! A command runs where the session lives.
+//! Typing during a turn queues a prompt there.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -166,8 +167,9 @@ pub(crate) struct Feeds {
     pub(crate) tasks: Arc<crate::tools::plan::TaskList>,
 }
 
-/// Follow the session `wanted`, the latest one open, or a new one: what it said so far is
-/// replayed, then what it says from now on is fed to the screen until the stream ends.
+/// Follow the session `wanted`, the latest one open, or a new one.
+/// What it said so far is replayed.
+/// Then what it says from now on is fed to the screen until the stream ends.
 pub(crate) async fn follow(
     remote: Arc<Remote>,
     hello: &Hello,
@@ -633,8 +635,9 @@ pub(crate) async fn send_turns(
     }
 }
 
-/// Answer what the screen asks of the engine: a mode switched on the server, the status
-/// as far as it is known here, and nothing else, which is asked with a command.
+/// Answer what the screen asks of the engine.
+/// A mode is switched on the server, and the status is given as far as it is known here.
+/// Nothing else is answered, since the rest is asked with a command.
 pub(crate) async fn answer_controls(
     remote: Arc<Remote>,
     mut controls: mpsc::Receiver<Control>,
@@ -668,8 +671,8 @@ pub(crate) async fn answer_controls(
                     }
                 });
             }
-            // A request with a reply nobody gets here is answered by dropping it, which the
-            // screen reads as nothing said.
+            // A request with a reply nobody gets here is answered by dropping it.
+            // The screen reads that as nothing said.
             _ => {}
         }
     }

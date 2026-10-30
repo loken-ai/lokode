@@ -12,9 +12,8 @@ use crate::ui::thread::{Drawings, Pane, Thread};
 
 /// A conversation as entries, for putting an earlier session back on screen.
 ///
-/// What a person said and what the model answered. The traffic between them - a tool
-/// called, what it printed - is in the record and reaches the model, but a screen of it
-/// on the way back into a session is a screen of what was already dealt with.
+/// What a person said and what the model answered.
+/// Tool calls and what they printed are left out.
 pub(crate) fn what_was_said(messages: &[crate::backend::wire::Message]) -> Vec<Entry> {
     messages
         .iter()
@@ -30,13 +29,11 @@ pub(crate) fn what_was_said(messages: &[crate::backend::wire::Message]) -> Vec<E
 
 /// Put what a command said where it belongs.
 ///
-/// A sentence belongs in the thread, where it reads as what just happened. A page of it
-/// does not: it is read once, it is not part of the conversation, and left there it sits
-/// between 2 questions for the rest of the session.
+/// A sentence belongs in the thread, where it reads as what just happened.
+/// A page of it goes on a sheet: it is read once and is not part of the conversation.
 pub(crate) fn show(state: &mut UiState, verb: &str, reply: String) {
     use crate::ui::sheet::{Body, Sheet};
-    // The window is drawn as the map the interface already holds, rather than as the
-    // agent's description of it.
+    // The window is drawn as the map the interface already holds.
     if verb == "context" && state.window.budget > 0 {
         state.sheet = Some(Sheet::with(verb, Body::Window(state.window.clone())));
         return;
@@ -202,26 +199,29 @@ pub(crate) struct UiState {
     pub(crate) drawings: Drawings,
     pub(crate) scroll: u16,
     pub(crate) pending_approval: Option<ApprovalPrompt>,
-    /// Where a drag with the mouse began and where it is now, in lines of the wrapped
-    /// pane. Both ends are kept because the person may drag in either direction.
+    /// Where a drag with the mouse began and where it is now, in lines of the wrapped pane.
+    ///
+    /// Both ends are kept: a drag goes in either direction.
     pub(crate) selecting: Option<(crate::ui::chat::Spot, crate::ui::chat::Spot)>,
-    /// When quitting was last asked for and not confirmed. A session holds work nobody
-    /// else has - what was said, what was changed, what can still be put back - so leaving
-    /// it is asked for twice.
+    /// When quitting was last asked for and not confirmed.
+    ///
+    /// A session holds work nobody else has: what was said, what was changed, what can be put back.
+    /// Leaving it is asked for twice.
     pub(crate) quit_asked: Option<(Instant, &'static str)>,
     /// Whether writes go ahead unasked, for this stretch of work.
     pub(crate) accepting_writes: bool,
     /// What is being looked for in the conversation, and which match is shown.
     ///
-    /// A long session holds what a tool answered an hour ago, and the only way back to it
-    /// was the wheel. The match is pointed at rather than extracted, so what is found is
-    /// read in the place it happened.
+    /// The match is pointed at, so what is found is read in the place it happened.
     pub(crate) finding: Option<(String, usize)>,
-    /// When Esc was last pressed with nothing for it to do. Pressed twice it takes the
-    /// last question back, which is the shortcut for the commonest correction there is.
+    /// When Esc was last pressed with nothing for it to do.
+    ///
+    /// Pressed twice, it takes the last question back.
     pub(crate) esc_at: Option<Instant>,
-    /// Which edge a drag is being held past, if any: the pane scrolls that way for as
-    /// long as it is, because a terminal reports a moving pointer and not a still one.
+    /// Which edge a drag is being held past, if any.
+    ///
+    /// The pane scrolls that way while it is held.
+    /// A terminal reports a pointer that moves, not one held still.
     pub(crate) drag_edge: Option<i8>,
     /// What was just done and when, for the status line to say while it is still news.
     pub(crate) said: Option<(String, Instant)>,
@@ -253,21 +253,22 @@ pub(crate) struct UiState {
     pub(crate) rail_hit: Option<(ratatui::layout::Rect, Vec<Option<usize>>)>,
     /// Whether the mouse belongs to this program or to the terminal.
     ///
-    /// Taking it buys the wheel and a selection that can scroll past the edge of the
-    /// pane. It costs the terminal's own selection, and with it the terminal's own copy
-    /// key - which is the one everybody's hands already know.
+    /// Taking it gives the wheel and a selection that can scroll past the edge of the pane.
+    /// It takes away the terminal's own selection and its copy key.
     pub(crate) mouse_ours: bool,
     /// Whether the 2 ways of copying have been said this session.
     pub(crate) said_how_to_copy: bool,
-    /// What the backend serves, for finishing the name of one that is being typed. Asked
-    /// for once and after a switch, since a backend's catalogue does not move under a
-    /// session.
+    /// What the backend serves, for finishing the name of one that is being typed.
+    ///
+    /// Asked for once and after a switch.
     pub(crate) models: Vec<String>,
-    /// Whether the button is still down: a drag that has been let go stays on screen,
-    /// so it can be seen and so a second look does not have to be a second drag.
+    /// Whether the button is still down.
+    ///
+    /// A drag that has been let go stays on screen.
     pub(crate) dragging: bool,
-    /// The pane as it was last drawn, wrapped to its width. What the mouse points at is a
-    /// row of this, and nothing else can say which line a row holds.
+    /// The pane as it was last drawn, wrapped to its width.
+    ///
+    /// What the mouse points at is a row of this.
     pub(crate) wrapped: Pane,
     /// Where the pane sat on screen when it was last drawn.
     pub(crate) pane: ratatui::layout::Rect,
@@ -279,8 +280,9 @@ pub(crate) struct UiState {
     pub(crate) phase_since: Option<Instant>,
     /// Advances on every repaint while busy, which is what moves the spinner.
     pub(crate) tick: usize,
-    /// Whether the agent is planning. Held here because the mode lives with the agent,
-    /// and the interface only learns of a change by having asked for it.
+    /// Whether the agent is planning.
+    ///
+    /// The mode lives with the agent, and the interface learns of a change only by asking.
     pub(crate) planning: bool,
     /// How full the window is and with what, as the agent last measured it.
     pub(crate) window: crate::agent::session::Occupancy,
@@ -320,8 +322,9 @@ pub(crate) struct UiState {
     pub(crate) shown_progress: Option<crate::ui::term::Progress>,
     /// Whether the rail was on screen in the last frame, for the key that flips it.
     pub(crate) rail_now: bool,
-    /// How tool calls travel, as the agent has it: settled by asking the backend, so the
-    /// interface can only know it by asking.
+    /// How tool calls travel, as the agent has it.
+    ///
+    /// Settled by asking the backend, so the interface knows it only by asking.
     pub(crate) protocol: crate::agent::protocol::ToolProtocol,
     /// When the approval now on screen was asked for. `None` when nothing is waiting.
     pub(crate) waiting_since: Option<Instant>,
@@ -331,22 +334,21 @@ pub(crate) struct UiState {
     pub(crate) sheet: Option<crate::ui::sheet::Sheet>,
     /// The entry the keys are pointing at, when the user has moved off the newest.
     ///
-    /// `None` means the bottom of the conversation, where a session spends its time; a
-    /// mark is only worth drawing once somebody has gone looking for something.
+    /// `None` means the bottom of the conversation.
     pub(crate) at_entry: Option<usize>,
     /// Entries shown whole rather than counted.
     pub(crate) unfolded: std::collections::HashSet<usize>,
     /// The task list as it was last drawn.
     pub(crate) tasks: Vec<crate::tools::plan::Task>,
-    /// The model answering now. It changes under the interface - by a command, by the
-    /// mode, by a check that failed - so it is asked for rather than assumed.
+    /// The model answering now.
+    ///
+    /// It can change under the interface (command, mode, failed check), so it is asked for.
     pub(crate) model: String,
     /// Abandons the turn in flight. `None` between turns.
     pub(crate) turn_cancel: Option<CancellationToken>,
     /// What the chat pane last drew, so scrolling can be bounded by what exists.
     ///
-    /// Known only after a draw, which is why it is remembered rather than computed: the
-    /// height comes from the terminal and the wrapping from its width.
+    /// Known only after a draw: the height comes from the terminal and the wrapping from its width.
     pub(crate) content_lines: usize,
     pub(crate) view_height: usize,
     /// What has been sent this session, oldest first, for the up arrow.
@@ -358,9 +360,9 @@ pub(crate) struct UiState {
 impl UiState {
     /// When the screen next changes with nothing happening, or `None` when it does not.
     ///
-    /// A turn or background work moves the spinner and the clocks beside it; a drag held
-    /// past an edge keeps scrolling, since the terminal reports a pointer that moves and
-    /// not one held still; a remark on the status line goes when its time is up.
+    /// A turn or background work moves the spinner and the clocks beside it.
+    /// A drag held past an edge keeps scrolling.
+    /// A remark on the status line goes when its time is up.
     pub(crate) fn next_wake(&self) -> Option<Duration> {
         let mut wake = None::<Duration>;
         let mut sooner = |after: Duration| {
@@ -382,8 +384,7 @@ impl UiState {
 
     /// Scroll so that an entry is on screen, when it is not already.
     ///
-    /// Put at the top rather than centred: what a person wants to read starts there and
-    /// runs downward, and centring hides the half of it they were looking for.
+    /// It is put at the top: what a person wants to read starts there and runs downward.
     pub(crate) fn show_entry(&mut self, at: usize) {
         let Some(line) = self.wrapped.start_of(at) else {
             return;
@@ -401,10 +402,6 @@ impl UiState {
     }
 
     /// Point at the match being looked for, counting from the most recent.
-    ///
-    /// From the most recent because that is where a person is: what was said a moment ago
-    /// is what they are usually trying to find again, and walking forward from the start
-    /// of a long session would make them press the key 100 times to get there.
     pub(crate) fn point_at_match(&mut self) {
         let Some((needle, nth)) = self.finding.clone() else {
             return;
@@ -427,8 +424,7 @@ impl UiState {
             self.at_entry = None;
             return;
         }
-        // Round rather than stop: walking past the last match comes back to the first,
-        // which is what every search in a terminal does.
+        // Walking past the last match comes back to the first.
         let at = found[nth % found.len()];
         self.at_entry = Some(at);
         self.show_entry(at);
@@ -437,8 +433,8 @@ impl UiState {
     /// Which line and column a point on screen holds, or nothing when it is not in the
     /// conversation.
     ///
-    /// The pane scrolls, so a row on screen is a row of what is visible rather than of
-    /// what there is; the first visible line is what turns one into the other.
+    /// The pane scrolls, so a row on screen is a row of what is visible.
+    /// The first visible line turns it into a line of the whole conversation.
     pub(crate) fn spot_at(&self, column: u16, row: u16) -> Option<crate::ui::chat::Spot> {
         let pane = self.pane;
         if row < pane.y || row >= pane.y + pane.height || column < pane.x {
@@ -455,8 +451,8 @@ impl UiState {
 
     /// Where a drag has reached, pinned inside the conversation.
     ///
-    /// A drag that leaves the pane is still a drag: letting go outside it must take what
-    /// was crossed rather than nothing, which is what a strict answer here would give.
+    /// A drag that leaves the pane is still a drag.
+    /// Letting go outside it takes what was crossed.
     pub(crate) fn spot_at_clamped(&self, column: u16, row: u16) -> crate::ui::chat::Spot {
         if let Some(spot) = self.spot_at(column, row) {
             return spot;
@@ -487,9 +483,8 @@ impl UiState {
 
     /// Keep scrolling while a drag is held past an edge, and take the selection with it.
     ///
-    /// A terminal reports a pointer that moves. Held still outside the pane it says
-    /// nothing more, so without this a selection stopped growing the moment the person
-    /// stopped moving - which is exactly when they were waiting for it to catch up.
+    /// A terminal reports a pointer that moves and says nothing once it is held still.
+    /// This keeps the selection growing while the pointer is still.
     pub(crate) fn follow_the_drag(&mut self) {
         let Some(edge) = self.drag_edge else { return };
         let Some((from, _)) = self.selecting else {
@@ -499,8 +494,8 @@ impl UiState {
             -1 => self.scroll_back(1),
             _ => self.scroll_forward(1),
         }
-        // The far end goes to the line now at that edge, so what is highlighted is what
-        // has been dragged over.
+        // The far end goes to the line now at that edge.
+        // What is highlighted is what has been dragged over.
         let first = self.first_visible();
         let line = match edge {
             -1 => first,
@@ -544,15 +539,13 @@ impl UiState {
 
     /// Point at the entry before the one being pointed at, or at the newest.
     ///
-    /// Only the entries worth stopping on: pointing at every blank remark between 2
-    /// steps makes the key useless for finding the step.
+    /// Only the entries worth stopping on count: blank remarks between 2 steps are skipped.
     pub(crate) fn point_back(&mut self) {
         let before = self.at_entry.unwrap_or(self.entries.len());
         self.at_entry = (0..before)
             .rev()
             .find(|i| worth_pointing_at(&self.entries[*i]));
-        // Brought into view, since pointing at something off the top of the pane is
-        // pointing at nothing.
+        // Brought into view: an entry off the top of the pane cannot be pointed at.
         if let Some(at) = self.at_entry {
             self.show_entry(at);
         }
@@ -569,9 +562,9 @@ impl UiState {
 
     /// Where the answer now being written sits, if one is.
     ///
-    /// Searched for rather than assumed to be last. What arrives while a model writes is
-    /// not only its own words: a notice, a line from a tool still running, a budget that
-    /// moved. An answer with one of those under it is still the answer being written.
+    /// Searched for, not assumed to be last.
+    /// A notice, a tool line or a budget change can arrive while a model writes.
+    /// An answer with one of those under it is still the answer being written.
     pub(crate) fn answer_being_written(&self) -> Option<usize> {
         self.entries
             .iter()
@@ -593,8 +586,10 @@ impl UiState {
         }
     }
 
-    /// What is running now, oldest first: every step without an outcome, a delegated
-    /// session with the call it is on, then the background work.
+    /// What is running now, oldest first.
+    ///
+    /// Every step without an outcome, a delegated session with the call it is on, then the
+    /// background work.
     pub(crate) fn jobs(&self) -> Vec<Job> {
         let mut out: Vec<Job> = self
             .entries
@@ -648,8 +643,9 @@ impl UiState {
         out
     }
 
-    /// Open the list of running things, the highlight on the `at`th. False when nothing
-    /// runs.
+    /// Open the list of running things, the highlight on the `at`th.
+    ///
+    /// False when nothing runs.
     pub(crate) fn open_jobs(&mut self, at: Option<usize>) -> bool {
         let jobs = self.jobs();
         if jobs.is_empty() {
@@ -782,8 +778,9 @@ impl UiState {
         }
     }
 
-    /// Stop the work aside of `kind`. Looking into the project stays stopped for the
-    /// session.
+    /// Stop the work aside of `kind`.
+    ///
+    /// Looking into the project stays stopped for the session.
     pub(crate) fn stop_aside(&mut self, kind: AsideKind) {
         if let Some(at) = self.aside.iter().position(|a| a.kind == kind) {
             let aside = self.aside.remove(at);
@@ -802,8 +799,10 @@ impl UiState {
         }
     }
 
-    /// What a click without a drag at `spot` does: a badge of the question waiting is its
-    /// key, and a row of an entry with more to show unfolds or folds it.
+    /// What a click without a drag at `spot` does.
+    ///
+    /// A badge of the question waiting is its key.
+    /// A row of an entry with more to show unfolds or folds it.
     pub(crate) fn clicked(&self, spot: crate::ui::chat::Spot) -> Option<Click> {
         let row = self.wrapped.get(spot.line)?;
         if self.pending_approval.is_some() {
@@ -838,8 +837,8 @@ impl UiState {
 
     /// Settle the step a result answers, found by the id the call and the result share.
     ///
-    /// What it printed while it ran goes: the result holds the whole of it. A result whose
-    /// call is not on screen gets a step of its own.
+    /// The result holds the whole output, so what the tool printed while it ran is dropped.
+    /// A result whose call is not on screen gets a step of its own.
     pub(crate) fn settle_step(&mut self, id: &str, name: String, outcome: Outcome) {
         self.stops.remove(id);
         let at = self
@@ -875,9 +874,7 @@ impl UiState {
 
     /// Settle the answer in the place it was written, rather than at the end.
     ///
-    /// The finished text used to be appended whenever anything had arrived under the
-    /// stream, leaving the half that had streamed above it and the whole of it again
-    /// below: the same answer twice, on every turn the session had something to say.
+    /// The finished text replaces the streamed text in its entry.
     pub(crate) fn finish_answer(&mut self, text: String) {
         match (self.answer_being_written(), text.trim().is_empty()) {
             (Some(at), false) => self.entries[at] = Entry::Assistant(text),
@@ -930,11 +927,12 @@ impl UiState {
 
     /// Show the end of what a tool has printed under the step that is running it.
     ///
-    /// A line from a tool with no step running is dropped: the result carries it anyway.
+    /// A line from a tool with no step running is dropped.
+    /// The result carries it.
     pub(crate) fn show_tail(&mut self, call: Option<&str>, tool: &str, tail: String) {
-        // By the call when it says which, so calls to one tool side by side keep their
-        // output apart. A call that is not a step here, one made inside a delegated
-        // session, shows nothing.
+        // By the call when it says which, so calls to one tool side by side keep their output
+        // apart.
+        // A call that is not a step here, one made inside a delegated session, shows nothing.
         let at = match call {
             Some(id) => self.step_of_call(id),
             None => self.step_running(tool),
@@ -982,10 +980,6 @@ impl UiState {
     }
 
     /// Put a resumed session on screen: what was said, where it was said.
-    ///
-    /// The count alone used to be reported as "back in view", which they were not: the
-    /// model could see a conversation the person could not, and the first question of the
-    /// new turn read as the first question of the session.
     pub(crate) fn show_resumed(&mut self, resumed: crate::agent::agent_loop::Resumed) {
         self.start_again();
         self.planning = resumed.planning;
@@ -1049,8 +1043,8 @@ impl UiState {
 
 /// Whether an entry is one somebody would go looking for.
 ///
-/// A question, an answer, and a step: the things a session is made of. Not the remarks
-/// between them, which are read as they go by and never sought out.
+/// A question, an answer or a step.
+/// The remarks between them are never sought out.
 pub(crate) fn worth_pointing_at(e: &Entry) -> bool {
     matches!(
         e,
@@ -1061,8 +1055,7 @@ pub(crate) fn worth_pointing_at(e: &Entry) -> bool {
 /// How long an answer may be before it goes on a page of its own rather than into the
 /// conversation.
 ///
-/// 3 lines is a sentence and its detail, which reads as something that just happened.
-/// More than that is a document, and a document in the thread is in the way of everything
+/// A longer answer is a document, and a document in the thread is in the way of everything
 /// after it.
 pub(crate) const SHEET_LINES: usize = 3;
 
@@ -1072,9 +1065,8 @@ mod tests {
 
     /// An answer settles where it was written, however much arrived under it.
     ///
-    /// The reported defect: the session said "context budget now 440055 chars" between
-    /// the last piece of an answer and the finished text, and the whole answer was shown
-    /// twice - once as it had streamed, once again below the notice.
+    /// A notice between the last piece of an answer and the finished text must not show the answer
+    /// twice.
     #[test]
     fn an_answer_interrupted_by_a_notice_is_still_shown_once() {
         let mut state = UiState::default();
@@ -1211,7 +1203,8 @@ mod tests {
         assert!(!stop.is_cancelled());
     }
 
-    /// An idle screen sets no timer; work, a held drag and a fresh remark each set one.
+    /// An idle screen sets no timer.
+    /// Work, a held drag and a fresh remark each set one.
     #[test]
     fn nothing_wakes_an_idle_screen() {
         let mut s = UiState::default();
@@ -1231,9 +1224,7 @@ mod tests {
 
     /// A long run keeps its tail, and no more than that.
     ///
-    /// Held rather than shown: the end of it is what says a run is going wrong, and the
-    /// lines before it used to be dropped as they arrived, so the only way to see them
-    /// was to wait for the run to finish.
+    /// The end of a run is held, since it is what says the run is going wrong.
     #[test]
     fn a_tool_that_prints_for_minutes_keeps_its_tail() {
         let mut state = UiState::default();
@@ -1257,7 +1248,8 @@ mod tests {
             tail.push("more".into()),
             "a line after a read tells the screen again"
         );
-        // Folded, only the end of it is on screen; unfolded, all of it is.
+        // Folded, only the end of it is on screen.
+        // Unfolded, all of it is.
         assert!(state.entries[0].render(false, false).len() < kept);
         assert!(state.entries[0].render(true, false).len() > kept);
     }
@@ -1265,10 +1257,8 @@ mod tests {
     /// A row on screen is a line of the conversation, and which line depends on where the
     /// pane has been scrolled to.
     ///
-    /// This is where a selection goes wrong without looking wrong: the highlight follows
-    /// the mouse, the text taken comes from somewhere else, and only reading the clipboard
-    /// afterwards shows it. So the mapping is pinned at the top of the pane, at its bottom,
-    /// scrolled back, and outside it.
+    /// A selection goes wrong without looking wrong when the highlight and the text taken disagree.
+    /// The mapping is pinned at the top of the pane, at its bottom, scrolled back, and outside it.
     #[test]
     fn a_row_on_screen_is_the_line_the_pane_shows_there() {
         let mut state = UiState {
@@ -1302,8 +1292,8 @@ mod tests {
         assert_eq!(state.spot_at_clamped(0, 0).line, 85);
     }
 
-    /// An empty drag is not a selection: pressing without moving must not replace the
-    /// clipboard with nothing.
+    /// An empty drag is not a selection.
+    /// Pressing without moving must not replace the clipboard with nothing.
     #[test]
     fn a_press_that_selected_nothing_takes_nothing() {
         let mut state = UiState {
@@ -1319,8 +1309,8 @@ mod tests {
         assert_eq!(state.selection_text().as_deref(), Some("some"));
     }
 
-    /// Quit is consulted before the approval branch, so these must be recognised as quit
-    /// even though the modal would otherwise read them as "not a decision".
+    /// Quit is consulted before the approval branch, so these are recognised as quit.
+    /// The modal would otherwise read them as "not a decision".
     fn scrollable(content: usize, view: usize) -> UiState {
         UiState {
             content_lines: content,
@@ -1329,8 +1319,8 @@ mod tests {
         }
     }
 
-    /// Scrolling past the top used to leave the pane blank: the window slid off the end of
-    /// the content instead of stopping at its oldest line.
+    /// Scrolling past the top stops at the oldest line.
+    /// The window must not slide off the end of the content.
     #[test]
     fn scrolling_back_stops_at_the_oldest_line() {
         let mut s = scrollable(100, 20);
@@ -1356,8 +1346,8 @@ mod tests {
         assert_eq!(s.scroll, 0);
     }
 
-    /// The up arrow walks back through what was sent; the down arrow returns to an empty
-    /// input rather than sticking on the last entry.
+    /// The up arrow walks back through what was sent.
+    /// The down arrow returns to an empty input rather than sticking on the last entry.
     #[test]
     fn the_arrows_walk_what_was_sent() {
         let mut s = UiState::default();

@@ -77,7 +77,9 @@ impl Languages {
     }
 
     /// The built-in servers as the configuration changes them, then as the environment
-    /// does. Says what it could not take from the configuration.
+    /// does.
+    ///
+    /// Says what it could not take from the configuration.
     pub fn from_config(section: &crate::config::LspSection) -> (Self, Vec<String>) {
         if section.enabled == Some(false) {
             return (Self::default(), Vec::new());
@@ -239,7 +241,9 @@ pub fn installed(command: &str) -> bool {
 const LOOKED_AT: usize = 5000;
 
 /// The languages of `languages` that have files under `root`, by how many files each has,
-/// most first. Reads at most [`LOOKED_AT`] entries and honours ignore files.
+/// most first.
+/// Reads at most `LOOKED_AT` entries.
+/// Honours ignore files.
 pub fn present(root: &Path, languages: &Languages) -> Vec<String> {
     let mut counts: std::collections::HashMap<&str, usize> = Default::default();
     for entry in ignore::WalkBuilder::new(root)
@@ -261,8 +265,8 @@ mod tests {
     use super::*;
     use crate::config::{LspSection, LspServer};
 
-    /// The configuration changes a built-in server, removes one, adds one, and an
-    /// incomplete new one is refused with a word.
+    /// The configuration changes a built-in server, removes one, or adds one.
+    /// An incomplete new one is refused with a word.
     #[test]
     fn the_configuration_changes_the_servers() {
         let mut section = LspSection::default();
@@ -310,8 +314,8 @@ mod tests {
         assert!(Languages::from_config(&off).0.specs.is_empty());
     }
 
-    /// The languages of a project are those its files are written in, most first, and a
-    /// program is installed when it can be run.
+    /// The languages of a project are those its files are written in, most first.
+    /// A program is installed when it can be run.
     #[test]
     fn the_project_says_which_languages_it_uses() {
         let dir = tempfile::tempdir().unwrap();

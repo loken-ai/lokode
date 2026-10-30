@@ -53,8 +53,8 @@ impl Tool for ReadFile {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
-        // What the editor holds comes first: a buffer not saved yet is what the person
-        // is looking at.
+        // What the editor holds comes first.
+        // A buffer not saved yet is what the person is looking at.
         let held = ctx.editor_text(&resolved).await;
         let body = match &held {
             Some(t) => text::number_window(t, a.start_line, a.end_line),
@@ -63,8 +63,9 @@ impl Tool for ReadFile {
                 Err(e) => return Ok(ToolOutput::err(e)),
             },
         };
-        // What the file held when it was read, so a later whole-file write can tell
-        // whether it is replacing what the model saw or somebody else's work.
+        // What the file held when it was read.
+        // A later whole-file write can tell whether it is replacing what the model saw or somebody
+        // else's work.
         match held {
             Some(t) => ctx.note_content(&resolved, t.as_bytes()),
             None => {
@@ -133,9 +134,8 @@ impl Tool for ListDir {
             entries.push(format!("{kind}  {size:>10}  {name}"));
         }
         entries.sort();
-        // Clamped like every other result. A directory of 10 1000 files is rarer than
-        // a large file, but the ceiling exists because one result must not be able to
-        // displace the conversation, and that is true here too.
+        // Clamped like every other result.
+        // One result must not be able to displace the conversation.
         Ok(ToolOutput::ok(ctx.clamp(entries.join("\n"))))
     }
 }
@@ -206,7 +206,7 @@ impl Tool for Glob {
 mod tests {
     use super::*;
     /// A path that is wrong about where a file sits, but right about the file, is answered
-    /// with where it is. The alternative is a round trip that finds the same thing.
+    /// with where it is.
     #[tokio::test]
     async fn a_path_that_is_not_there_says_where_the_file_is() {
         let h = Harness::new(Answer::Yes);
@@ -220,8 +220,8 @@ mod tests {
         assert!(out.content.contains("there is one at"), "{}", out.content);
     }
 
-    /// A name nothing in the project has gets the refusal alone: a suggestion that names
-    /// nothing is noise in a window that has to hold the work.
+    /// A name nothing in the project has gets the refusal alone.
+    /// A suggestion that names nothing is noise.
     #[tokio::test]
     async fn a_name_the_project_does_not_have_gets_no_suggestion() {
         let h = Harness::new(Answer::Yes);
@@ -262,8 +262,8 @@ mod tests {
         assert_eq!(out.content, "    2 | two\n    3 | three");
     }
 
-    /// Reading is not gated on approval, so the root is the only thing standing between
-    /// the model and the rest of the filesystem.
+    /// Reading is not gated on approval.
+    /// The root is the only thing standing between the model and the rest of the filesystem.
     #[tokio::test]
     async fn read_file_refuses_to_leave_the_root() {
         let h = Harness::new(Answer::No);
@@ -329,8 +329,8 @@ mod tests {
         assert!(!out.content.contains("notes.md"), "{}", out.content);
     }
 
-    /// The walk is gitignore-aware, which is the difference between listing a project and
-    /// listing its build directory.
+    /// The walk is gitignore-aware.
+    /// That is the difference between listing a project and listing its build directory.
     #[tokio::test]
     async fn glob_skips_what_the_project_ignores() {
         let h = Harness::new(Answer::No);
@@ -349,9 +349,9 @@ mod tests {
         );
     }
 
-    /// Outside a repository a `.gitignore` carries no authority, and the walk says so by
-    /// returning the files anyway. Worth pinning down: the tool describes itself as
-    /// gitignore-aware, and this is the edge of what that means.
+    /// Outside a repository a `.gitignore` carries no authority.
+    /// The walk returns the files anyway.
+    /// The tool describes itself as gitignore-aware, and this is the edge of what that means.
     #[tokio::test]
     async fn glob_ignores_a_gitignore_with_no_repository_around_it() {
         let h = Harness::new(Answer::No);

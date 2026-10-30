@@ -1,10 +1,9 @@
 //! Standing decisions about what may go ahead without asking.
 //!
-//! An agreement given at the modal lasts as long as the session and no longer, so a user
-//! who works the same way every day answers the same questions every day. A policy in the
-//! configuration states them once, in a file that can be read in review, and a refusal
-//! stated there always wins over an agreement: the point of writing down what must never
-//! happen is that nothing later can widen it.
+//! An agreement given at the modal lasts as long as the session.
+//! A policy in the configuration states the same decisions once, in a file that review can read.
+//! A refusal stated there always wins over an agreement.
+//! Nothing later can widen a refusal.
 
 use std::path::Path;
 
@@ -17,9 +16,11 @@ use crate::sandbox::approval::ApprovalScope;
 pub enum Verdict {
     /// Stated as allowed, and within the cap on how much may go unasked.
     Allowed,
-    /// Stated as refused. The reason names the rule so it can be found and changed.
+    /// Stated as refused.
+    /// The reason names the rule so it can be found and changed.
     Refused(String),
-    /// Stated as needing a person, whatever else agrees to it. The reason names the rule.
+    /// Stated as needing a person, whatever else agrees to it.
+    /// The reason names the rule.
     Insist(String),
     /// Nothing is stated: put it to the user.
     Ask,
@@ -54,12 +55,12 @@ pub struct Policy {
     /// What is always put to the user, even when an agreement or a mode would let it go.
     #[serde(default)]
     pub ask: Rules,
-    /// How many requests one turn may have granted for it before every later request is
-    /// put to the user again.
+    /// How many requests one turn may have granted before every later request is put to the
+    /// user again.
     ///
-    /// A standing agreement is given for the work a person expects, and a loop that calls
-    /// a tool 1000 times is not that work. The cap is what keeps a policy from
-    /// turning into an unattended session nobody asked for.
+    /// A standing agreement covers the work a person expects.
+    /// A loop that calls a tool without end is not that work.
+    /// The cap keeps a policy from becoming an unattended session.
     #[serde(default = "default_max_auto")]
     pub max_auto: usize,
 }
@@ -80,7 +81,7 @@ impl Default for Policy {
 }
 
 impl Policy {
-    /// Whether anything is stated at all, which is what decides if it is worth showing.
+    /// Whether anything is stated at all, which decides if it is worth showing.
     pub fn is_empty(&self) -> bool {
         self.allow == Rules::default()
             && self.deny == Rules::default()
@@ -89,9 +90,11 @@ impl Policy {
 
     /// What this policy says about one request, with `used` already granted this turn.
     ///
-    /// Deny is read first and answers on its own, then ask, then allow. A command line is
-    /// refused or asked about when the whole line or any one of its commands matches. It
-    /// is allowed when every one of its commands matches and the line does nothing its
+    /// Deny is read first and answers on its own, then ask, then allow.
+    ///
+    /// A command line is refused or asked about when the whole line or any one of its
+    /// commands matches.
+    /// It is allowed when every one of its commands matches and the line does nothing its
     /// commands do not show.
     pub fn verdict(&self, scope: &ApprovalScope, root: &Path, used: usize) -> Verdict {
         if let Some(rule) = matching(&self.deny, scope, root, Need::Any) {
@@ -152,8 +155,8 @@ fn matching(rules: &Rules, scope: &ApprovalScope, root: &Path, need: Need) -> Op
             .map(|p| format!("\"{p}\""))
     };
     let (patterns, subject) = match scope {
-        // Outside the sandbox only the person agrees: refusals and questions apply, an
-        // allow rule does not.
+        // Outside the sandbox only the person agrees.
+        // Refusals and questions apply, an allow rule does not.
         ApprovalScope::Unconfined(cmd) => {
             return match need {
                 Need::Any => matching(rules, &ApprovalScope::Command(cmd.clone()), root, need),
@@ -185,8 +188,8 @@ fn matching(rules: &Rules, scope: &ApprovalScope, root: &Path, need: Need) -> Op
             if rules.tools.iter().any(|t| t == tool) {
                 return Some(format!("tools = {tool}"));
             }
-            // Stated relative to the project when it is inside it, which is how a shared
-            // rule stays true on another machine.
+            // Stated relative to the project when it is inside it.
+            // A shared rule then stays true on another machine.
             let shown = prefix
                 .strip_prefix(root)
                 .unwrap_or(prefix)
@@ -203,9 +206,8 @@ fn matching(rules: &Rules, scope: &ApprovalScope, root: &Path, need: Need) -> Op
 
 /// Whether `pattern` covers `subject`.
 ///
-/// One wildcard, `*`, standing for any run of characters, separators included. A rule
-/// language with more in it invites a rule nobody can read, and this is a file whose whole
-/// value is that somebody can read it in review and see what it permits.
+/// One wildcard, `*`, stands for any run of characters, separators included.
+/// The rule language stays small so that review can read what a rule permits.
 pub fn glob_matches(pattern: &str, subject: &str) -> bool {
     let pieces: Vec<&str> = pattern.split('*').collect();
     let [first, middle @ .., last] = pieces.as_slice() else {
@@ -260,8 +262,8 @@ mod tests {
         assert!(!glob_matches("ab*ba", "aba"));
     }
 
-    /// Every command of a line has to be allowed for the line to be, and one refused
-    /// command refuses the line.
+    /// Every command of a line has to be allowed for the line to be.
+    /// One refused command refuses the line.
     #[test]
     fn a_rule_is_matched_against_each_command() {
         let p = Policy {
@@ -343,8 +345,7 @@ mod tests {
         ));
     }
 
-    /// The rule the whole file exists for: what must never happen cannot be outvoted by
-    /// what may.
+    /// What must never happen cannot be outvoted by what may.
     #[test]
     fn a_refusal_wins_over_an_agreement() {
         let p = policy(
@@ -387,8 +388,8 @@ mod tests {
         assert_eq!(p.verdict(&bash("ls"), root, 2), Verdict::Ask);
     }
 
-    /// A write rule is written against the project, so the same file works on another
-    /// machine with the project checked out somewhere else.
+    /// A write rule is written against the project.
+    /// The same file works on another machine with the project checked out elsewhere.
     #[test]
     fn a_write_rule_is_read_relative_to_the_project() {
         let p = policy(
@@ -429,8 +430,8 @@ mod through_the_context {
         }
     }
 
-    /// A run without a terminal never runs a command outside the sandbox, whatever its
-    /// policy says.
+    /// A run without a terminal never runs a command outside the sandbox, whatever its policy
+    /// says.
     #[tokio::test]
     async fn a_script_cannot_leave_the_sandbox() {
         let h = Harness::new(Answer::Yes);
@@ -445,10 +446,9 @@ mod through_the_context {
         assert_eq!(h.asked().len(), 0);
     }
 
-    /// A run driven by a script does not take the configuration's word for what may go
-    /// ahead: the policy stated on its command line is the narrower statement, and the
-    /// one its author made for that run. A refusal still holds, because nothing may
-    /// widen one.
+    /// A run driven by a script does not take the configuration's word for what may go ahead.
+    /// The policy stated on its command line is the narrower statement, made for that run.
+    /// A refusal still holds, because nothing may widen one.
     #[tokio::test]
     async fn a_script_does_not_inherit_the_configuration_s_agreements() {
         let h = Harness::new(Answer::No);
@@ -465,8 +465,8 @@ mod through_the_context {
             },
             ..Default::default()
         });
-        // The allow list does not apply, so the question is put to the run's own policy,
-        // which here says no.
+        // The allow list does not apply.
+        // The question is put to the run's own policy, which here says no.
         assert_eq!(
             ctx.approve(request("cargo test")).await,
             Approval::Denied(Denial::User(None))
@@ -482,9 +482,9 @@ mod through_the_context {
         assert_eq!(h.asked().len(), 1);
     }
 
-    /// What the policy settles never reaches the modal, and what it refuses never reaches
-    /// the tool. The harness answers yes to everything, so a denial here can only have
-    /// come from the policy.
+    /// What the policy settles never reaches the modal.
+    /// What it refuses never reaches the tool.
+    /// The harness answers yes to everything, so a denial here can only come from the policy.
     #[tokio::test]
     async fn the_policy_answers_before_anyone_is_asked() {
         let h = Harness::new(Answer::Yes);

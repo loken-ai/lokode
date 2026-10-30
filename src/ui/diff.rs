@@ -1,10 +1,14 @@
-//! A unified diff as rows: each line under its number, added and removed lines on a
-//! surface of their own, the words that changed picked out, and the code coloured by
-//! its language when the file names one.
+//! A unified diff as rows.
 //!
-//! The file headers give way to the path, once per file. A pair of lines that changed
-//! only in part has the changed words marked. A pair that changed throughout is shown
-//! as a removal and an addition, with nothing marked.
+//! Each line sits under its number.
+//! Added and removed lines have a surface of their own.
+//! The words that changed are picked out.
+//! The code is coloured by its language when the file names one.
+//!
+//! The file headers give way to the path, once per file.
+//! A pair of lines that changed only in part has the changed words marked.
+//! A pair that changed throughout is shown as a removal and an addition.
+//! Nothing is marked in it.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -13,8 +17,8 @@ use similar::{ChangeTag, TextDiff};
 use crate::ui::chat::mark_range;
 use crate::ui::theme::theme;
 
-/// How alike a removed and an added line have to be for the words between them to be
-/// marked, as the share of their words they keep.
+/// How alike a removed and an added line have to be for the words between them to be marked.
+/// It is the share of their words they keep.
 const ALIKE: f32 = 0.5;
 
 /// Runs of columns, each from its first column up to but not including its last.
@@ -45,8 +49,8 @@ enum Row<'a> {
     Other(&'a str),
 }
 
-/// The rows of the unified diff `text` for a pane `width` columns wide. Zero leaves the
-/// rows unpadded.
+/// The rows of the unified diff `text` for a pane `width` columns wide.
+/// Zero leaves the rows unpadded.
 pub fn rows(text: &str, width: usize) -> Vec<Line<'static>> {
     let parsed = parse(text);
     let widest = parsed
@@ -100,8 +104,7 @@ pub fn changes(text: &str) -> Vec<crate::ui::rail::FileChange> {
     out
 }
 
-/// A hunk's header as where it is: the line it starts at and the code it sits in, rather
-/// than the counts a patch tool needs.
+/// A hunk's header as where it is: the line it starts at and the code it sits in.
 fn hunk_row(header: &str) -> Line<'static> {
     let t = theme();
     let start = hunk_start(header).map(|(_, new)| new).unwrap_or(0);
@@ -128,8 +131,8 @@ fn change_row(c: &Change<'_>, digits: usize, lang: Option<&str>, width: usize) -
         Kind::Added => line.fg(t.good),
         Kind::Removed => line.fg(t.bad),
     };
-    // On a tinted surface the code keeps its colours. Without one, the colour of an added
-    // or removed line is all that says which it is, so it stays.
+    // On a tinted surface the code keeps its colours.
+    // Without one, the colour of an added or removed line says which it is, so it stays.
     let coloured = match (c.kind, t.diff.tinted) {
         (Kind::Context, _) | (_, true) => {
             lang.and_then(|l| crate::ui::highlight::rows(l, c.text, line))
@@ -298,8 +301,8 @@ fn join_across_spaces(marks: Marks, text: &str) -> Marks {
     out
 }
 
-/// Add a marked run, joined to the one before when they touch, and never over spaces
-/// alone.
+/// Add a marked run, joined to the one before when they touch.
+/// A run over spaces alone is never added.
 fn push_mark(marks: &mut Marks, from: usize, to: usize, value: &str) {
     if value.trim().is_empty() {
         return;
@@ -321,8 +324,8 @@ mod tests {
         rows(diff, 0).iter().map(line_text).collect()
     }
 
-    /// Each line sits under the number it has on its side, and the file headers give way
-    /// to the path.
+    /// Each line sits under the number it has on its side.
+    /// The file headers give way to the path.
     #[test]
     fn lines_are_numbered_on_their_own_side() {
         assert_eq!(
@@ -357,7 +360,8 @@ mod tests {
         );
     }
 
-    /// 2 lines with nothing in common are a removal and an addition, nothing marked.
+    /// 2 lines with nothing in common are a removal and an addition.
+    /// Nothing is marked.
     #[test]
     fn unrelated_lines_mark_nothing() {
         let (old, new) = changed_words("alpha beta gamma", "one two three four");

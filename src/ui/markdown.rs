@@ -1,8 +1,8 @@
 //! The markdown a model writes, as rows for a pane of a given width.
 //!
 //! Paragraphs, headings, lists, quotes, code blocks, tables, emphasis, links and rules.
-//! Each block is wrapped here, so a list item or a quote keeps its indent on every row
-//! it takes. A width of zero leaves lines unwrapped.
+//! Each block is wrapped here, so a list item or a quote keeps its indent on every row it takes.
+//! A width of zero leaves lines unwrapped.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
@@ -80,8 +80,8 @@ impl Renderer {
             .fold(Style::default(), |acc, s| acc.patch(*s))
     }
 
-    /// What every row of the current block starts with: the quote bars and the indent of
-    /// the lists it is in.
+    /// What every row of the current block starts with.
+    /// It holds the quote bars and the indent of the lists the block is in.
     fn gutter(&self) -> Vec<Span<'static>> {
         let mut g = Vec::new();
         for _ in 0..self.quotes {
@@ -302,8 +302,8 @@ impl Renderer {
         match tag {
             TagEnd::Paragraph => {
                 self.flush();
-                // Items of a tight list sit on consecutive rows, so only a paragraph that
-                // is not in a list is followed by a blank row.
+                // Items of a tight list sit on consecutive rows.
+                // Only a paragraph that is not in a list is followed by a blank row.
                 if self.lists.is_empty() {
                     self.blank();
                 }
@@ -359,8 +359,8 @@ impl Renderer {
         }
     }
 
-    /// A code block: its language on a row of its own, then its lines on the code surface,
-    /// each padded to the width so the surface reads as one block.
+    /// A code block: its language on a row of its own, then its lines on the code surface.
+    /// Each line is padded to the width so the surface reads as one block.
     fn draw_code(&mut self, lang: &str, code: &str) {
         let gutter = self.gutter();
         let lead: usize = gutter
@@ -411,15 +411,15 @@ impl Renderer {
         self.spaced = false;
     }
 
-    /// A table: columns as wide as their widest cell, the header bold and underlined, 2
-    /// spaces between columns, and no rules.
+    /// A table: columns as wide as their widest cell, the header bold and underlined.
+    /// Columns are separated by 2 spaces, and no rules are drawn.
     fn draw_table(&mut self, table: Table) {
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
         let wide = |cell: &Vec<Span<'static>>| -> usize {
             cell.iter().map(|s| s.content.chars().count()).sum()
         };
-        // A row with only its first cell filled heads the rows under it, and takes no part
-        // in how wide the first column is.
+        // A row with only its first cell filled heads the rows under it.
+        // It takes no part in how wide the first column is.
         let heads = |row: &Vec<Vec<Span<'static>>>| {
             row.len() > 1 && row.iter().skip(1).all(|c| wide(c) == 0)
         };
@@ -438,8 +438,8 @@ impl Renderer {
             .map(|s| s.content.chars().count())
             .sum::<usize>()
             + 2;
-        // A table wider than the pane gives its last column what is left, and that column
-        // wraps under itself rather than running off the edge.
+        // A table wider than the pane gives its last column what is left.
+        // That column wraps under itself rather than running off the edge.
         if let (Some(last), true) = (columns.checked_sub(1), self.width > 0) {
             let others: usize = widths[..last].iter().map(|w| w + 2).sum();
             let room = self.width.saturating_sub(lead + others).max(NARROWEST);
@@ -555,8 +555,8 @@ mod tests {
             .any(|s| s.content == "now" && s.style.add_modifier.contains(Modifier::BOLD)));
     }
 
-    /// Inside a fence the text is code: a `**` in a shell glob is not emphasis, and the
-    /// fence itself gives way to the language on a row of its own.
+    /// Inside a fence the text is code: a `**` in a shell glob is not emphasis.
+    /// The fence itself gives way to the language on a row of its own.
     #[test]
     fn a_fenced_block_is_left_alone() {
         let rows = text("before\n\n```sh\nls **/*.rs\n```\n\nafter", 0);
@@ -597,8 +597,8 @@ mod tests {
         assert_eq!(rows, vec!["  a    bb", "  ccc  d"]);
     }
 
-    /// A table wider than the pane wraps its last column under itself, and a word in angle
-    /// brackets in a cell is kept.
+    /// A table wider than the pane wraps its last column under itself.
+    /// A word in angle brackets in a cell is kept.
     #[test]
     fn a_wide_table_wraps_its_last_column() {
         let rows = text(
@@ -637,7 +637,7 @@ mod tests {
         assert_eq!(text("<https://x.org>", 0), vec!["https://x.org"]);
     }
 
-    /// An answer still being written, with a fence not yet closed, is drawn as code.
+    /// An answer still being written, with a fence left open, is drawn as code.
     #[test]
     fn an_open_fence_is_code_while_it_streams() {
         let rows = text("look:\n\n```rust\nfn main() {", 0);

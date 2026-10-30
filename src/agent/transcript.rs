@@ -1,13 +1,14 @@
 //! A durable record of a session, one JSON object per line.
 //!
-//! 2 jobs, and the first is the one that matters more often: when a session goes wrong
-//! there is currently nothing left to look at afterwards. The history lives in memory,
-//! compaction discards the parts that fell out of the window, and the process takes the
-//! rest with it. A transcript is what makes a bad run answerable a day later.
+//! It has 2 jobs.
 //!
-//! The second is resuming. What is written is the whole conversation, including the steps
-//! compaction later elided - the file is a log of what happened, not a snapshot of what
-//! the model could still see.
+//! The first is inspection.
+//! The history lives in memory and compaction discards the parts that fell out of the window.
+//! The transcript keeps what happened, so a bad run can be examined afterwards.
+//!
+//! The second is resuming.
+//! What is written is the whole conversation, including the steps compaction later elided.
+//! The file is a log of what happened, not a snapshot of what the model could still see.
 
 use std::path::{Path, PathBuf};
 
@@ -31,8 +32,8 @@ pub enum Record {
         started_at: u64,
     },
     Message(Message),
-    /// The model changed mid-session. Recorded so a resume comes back on the model the
-    /// session was last using rather than the one it opened with.
+    /// The model changed mid-session.
+    /// A resume comes back on the model the session was last using.
     Model {
         name: String,
     },
@@ -46,8 +47,7 @@ pub enum Record {
     },
     /// One step of a turn, with what was knowable before it and what it cost.
     ///
-    /// Kept in the same file as the conversation so a session can be read back and
-    /// measured, which is what any later claim about routing will have to rest on.
+    /// Kept in the same file as the conversation, so a session can be read back and measured.
     Step(crate::agent::steps::StepRecord),
     /// Something the user was told that is not part of the conversation.
     Notice {
@@ -57,17 +57,14 @@ pub enum Record {
     Energy(Vec<(crate::backend::meter::Purpose, crate::backend::meter::Spent)>),
     /// The conversation was started again from nothing.
     ///
-    /// Recorded rather than erased: what was said was said, and a session is a record of
-    /// it. What it does is stop a resume from bringing back the messages the person had
-    /// just decided to be rid of.
+    /// The record stays in the file.
+    /// A resume does not bring back the messages before it.
     Cleared,
 }
 
 /// Appends records to a session file without holding up the turn.
 ///
-/// Writing happens on its own task: a transcript that made every `push` wait on the disk
-/// would put filesystem latency inside the agent loop, and losing the last line of a log
-/// is a smaller problem than that.
+/// Writing happens on its own task, so no `push` waits on the disk.
 #[derive(Clone)]
 pub struct Transcript {
     tx: mpsc::UnboundedSender<Record>,
@@ -77,10 +74,8 @@ pub struct Transcript {
 impl Transcript {
     /// Open a transcript, returning it and the task that does the writing.
     ///
-    /// The handle comes back rather than being hidden inside, because the caller has to
-    /// be able to wait for it: the process exits as soon as the UI returns, and anything
-    /// still sitting in the channel at that moment would never reach the disk. The last
-    /// thing a session records is usually the most interesting part of it.
+    /// The caller has to wait for the task before the process exits.
+    /// Anything still sitting in the channel at that moment would never reach the disk.
     pub fn create(path: PathBuf) -> Result<(Self, tokio::task::JoinHandle<()>)> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -101,12 +96,11 @@ impl Transcript {
                 };
                 line.push(b'\n');
                 if file.write_all(&line).await.is_err() {
-                    // Nowhere left to report this: the transcript is the reporting
-                    // channel. Stop rather than spin on a broken file.
+                    // Nowhere left to report this: the transcript is the reporting channel.
+                    // Stop rather than spin on a broken file.
                     return;
                 }
-                // Flushed per record rather than at the end: a session that is killed is
-                // exactly the session someone will want to read afterwards.
+                // Flushed per record, so a killed session leaves its records on disk.
                 let _ = file.flush().await;
             }
             let _ = file.flush().await;
@@ -119,8 +113,8 @@ impl Transcript {
         &self.path
     }
 
-    /// Record something. Failure is deliberately silent: a session must not end because
-    /// its log could not be written.
+    /// Record something.
+    /// Failure is silent: a session does not end because its log could not be written.
     pub fn append(&self, rec: Record) {
         let _ = self.tx.send(rec);
     }
@@ -137,18 +131,16 @@ pub struct Replay {
     pub tasks: Vec<crate::tools::plan::Task>,
     /// Every message recorded, in order, excluding the system message.
     ///
-    /// The preamble is rebuilt from the current tool registry rather than replayed: the
-    /// tools available now are the ones the model must be told about, and they are not
-    /// necessarily the ones it was told about then.
+    /// The preamble is rebuilt from the current tool registry rather than replayed.
+    /// The tools available now are the ones the model must be told about.
     pub messages: Vec<Message>,
 }
 
 /// Read a transcript back.
 ///
-/// A line that will not parse is skipped rather than fatal. The file is appended to by a
-/// process that can be killed mid-write, so a truncated last line is an ordinary thing to
-/// find, and refusing to resume because of it would throw away the whole session over its
-/// final fragment.
+/// A line that will not parse is skipped rather than fatal.
+/// The file is appended to by a process that can be killed mid-write.
+/// So a truncated last line is expected, and it does not stop the resume.
 pub fn replay(path: &Path) -> Result<Replay> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -179,7 +171,7 @@ pub fn replay(path: &Path) -> Result<Replay> {
             Record::Model { name } => model = Some(name),
             Record::Mode { planning: p } => planning = p,
             Record::Tasks { tasks: t } => tasks = t,
-            // Everything before it was deliberately dropped, so it does not come back.
+            // Everything before it was dropped, so it does not come back.
             Record::Cleared => {
                 messages.clear();
                 tasks.clear();
@@ -209,8 +201,7 @@ pub struct Recorded {
     pub path: PathBuf,
     /// Seconds since the epoch, from when the file last changed.
     pub when: u64,
-    /// The first thing asked in it, on one line. An id says nothing about which session
-    /// it is; the question it opened with says it in a glance.
+    /// The first thing asked in it, on one line.
     pub opening: String,
     /// How much was said in it.
     pub messages: usize,
@@ -218,8 +209,8 @@ pub struct Recorded {
 
 /// Every session recorded against `root`, most recent first.
 ///
-/// Matched on the root rather than on time alone, because a session belonging to another
-/// project is not one of this project's to come back to.
+/// Matched on the root, because a session belonging to another project is not one to
+/// come back to.
 pub fn recorded_for_root(dir: &Path, root: &Path) -> Vec<Recorded> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -230,8 +221,7 @@ pub fn recorded_for_root(dir: &Path, root: &Path) -> Vec<Recorded> {
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
         }
-        // The whole file is read, which these are small enough for; being clever about it
-        // would cost more in complexity than it saves.
+        // The whole file is read.
         let Ok(replayed) = replay(&path) else {
             continue;
         };
@@ -298,8 +288,8 @@ mod tests {
         for m in msgs {
             t.append(Record::Message(m.clone()));
         }
-        // Dropping the last sender is what tells the writer there is nothing more coming;
-        // joining it is what guarantees the bytes are there to be read back.
+        // Dropping the last sender tells the writer there is nothing more coming.
+        // Joining it guarantees the bytes are there to be read back.
         drop(t);
         let _ = writer.await;
         path
@@ -349,8 +339,8 @@ mod tests {
         assert!(replay(&path).unwrap().tasks.is_empty());
     }
 
-    /// The preamble describes the tools available now, which are not necessarily the ones
-    /// available when the session was recorded.
+    /// The preamble describes the tools available now, not the ones available when the
+    /// session was recorded.
     #[tokio::test]
     async fn the_system_message_is_not_replayed() {
         let dir = tempdir().unwrap();

@@ -14,11 +14,11 @@ pub struct Status {
     pub pointing: bool,
     /// How much of the history budget the conversation occupies, as a percentage.
     ///
-    /// Against the budget rather than the model's whole window: the budget is what
-    /// compaction defends, so 100 here is where the oldest steps start being dropped
-    /// rather than where the model would refuse the request. Coloured as it approaches,
-    /// because the first elision is the moment a session starts forgetting what it was
-    /// told.
+    /// Measured against the history budget, not the model's whole window.
+    /// The budget is what compaction defends.
+    /// 100 here is where the oldest steps start being dropped.
+    /// It is not where the model would refuse the request.
+    /// Coloured as it approaches 100, since the first elision is where a session starts forgetting.
     pub context_percent: u8,
     /// Whether the entry pointed at is a receipt whose turn changed files.
     pub on_receipt: bool,
@@ -34,8 +34,8 @@ pub struct Status {
     pub attaching: Option<(usize, u64)>,
     /// The plan's tasks done and in all, said here when the rail is not on screen.
     pub plan: Option<(usize, usize)>,
-    /// Whether the screen is too narrow for the rail to be there unasked, which puts the
-    /// key that opens it on the line of keys.
+    /// Whether the screen is too narrow for the rail to be there unasked.
+    /// That puts the key that opens it on the line of keys.
     pub rail_offered: bool,
     pub step: usize,
     pub max_steps: usize,
@@ -44,8 +44,8 @@ pub struct Status {
     pub typing: bool,
     /// Whether something is selected in the pane, which puts taking it on the line.
     pub selected: bool,
-    /// Whether this program holds the mouse. Never invisible: a wheel that has stopped
-    /// scrolling the conversation is otherwise a program that has broken.
+    /// Whether this program holds the mouse.
+    /// Never invisible.
     pub mouse_ours: bool,
     /// How many messages are waiting for this turn to end.
     pub queued: usize,
@@ -53,22 +53,22 @@ pub struct Status {
     pub finding: Option<String>,
     /// How fast the last step came back, in tokens a second.
     pub rate: Option<f64>,
-    /// What is being done outside any turn, and for how long. Work that belongs to no
-    /// turn still takes time, and a screen that says nothing about it looks broken.
+    /// What is being done outside any turn, and for how long.
+    /// Work that belongs to no turn still takes time, so the screen says something about it.
     pub background: Option<(String, Duration)>,
-    /// Whether writes are going through unasked. A third setting beside planning and
-    /// acting, and the one a person most needs reminding they are in.
+    /// Whether writes are going through unasked.
+    /// A third setting beside planning and acting.
     pub accepting_writes: bool,
     /// What the turn is doing, when it is doing something that prints nothing.
     pub phase: Option<String>,
-    /// What just happened, for a few seconds, when it happened somewhere the person is
-    /// not looking. A conversation scrolled back does not show what was appended to its
-    /// foot, so an answer to a key that was just pressed goes here instead.
+    /// What just happened, while it is fresh, when it happened somewhere the person is not looking.
+    /// A conversation scrolled back does not show what was appended to its foot.
+    /// An answer to a key just pressed goes here instead.
     pub said: Option<String>,
     /// How long it has been in that phase.
     pub in_phase: Duration,
-    /// Advances while the turn is busy, so a screen with nothing else moving still says
-    /// the program is alive rather than wedged.
+    /// Advances while the turn is busy.
+    /// A screen with nothing else moving still says the program is alive.
     pub tick: usize,
 }
 
@@ -95,11 +95,11 @@ impl Status {
     /// The line under the input: what is in force on the left, what is happening on the
     /// right.
     ///
-    /// Everything here answers a question somebody actually asks mid-turn - which model,
-    /// how full, what is it doing, how long has it been doing it. What was in it and is
-    /// not: the session id, which nobody types; the absolute path of the project, whose
-    /// last component is the part that identifies it; and the protocol, which is settled
-    /// once and said when it changes.
+    /// Everything here answers a question asked mid-turn: which model, how full, what is it
+    /// doing, how long.
+    /// The session id is not shown.
+    /// Only the last component of the project path is shown.
+    /// The protocol is said when it changes.
     pub fn to_line(&self) -> Line<'static> {
         let mut spans = Vec::new();
         spans.push(Span::styled(
@@ -115,8 +115,8 @@ impl Status {
         ));
         let (badge, colour) = match (self.planning, self.accepting_writes) {
             (true, _) => (" PLAN ", theme().accent),
-            // Loudest of the 3, because it is the one where things happen without
-            // being shown first.
+            // Loudest of the 3.
+            // It is the one where things happen without being shown first.
             (false, true) => (" WRITE", theme().warn),
             (false, false) => (" ACT  ", theme().good),
         };
@@ -127,9 +127,8 @@ impl Status {
                 .bg(colour)
                 .add_modifier(Modifier::BOLD),
         ));
-        // What the turn is doing comes first, beside the mode: it is what the eye looks for
-        // when the screen has stopped changing. The model and the project are on the band
-        // at the top.
+        // What the turn is doing comes first, beside the mode.
+        // The model and the project are on the band at the top.
         if let Some(phase) = self.phase.as_deref().filter(|_| self.busy) {
             spans.push(Span::styled(
                 format!("  {phase} {}", how_long(self.in_phase)),
@@ -138,9 +137,8 @@ impl Status {
                     .add_modifier(Modifier::BOLD),
             ));
         }
-        // Named, because a bare percentage on a status bar is a number nobody can act
-        // on: this one says how close the conversation is to the point where its oldest
-        // steps start being dropped to make room.
+        // Named, since a bare percentage cannot be acted on.
+        // It says how close the conversation is to the point where its oldest steps are dropped.
         spans.push(Span::styled(
             format!("  ctx {}%", self.context_percent),
             Style::default().fg(match self.context_percent {
@@ -149,8 +147,7 @@ impl Status {
                 _ => theme().bad,
             }),
         ));
-        // What the files named on the line will cost before it is sent: on a local model
-        // a long attachment is minutes of prompt reading.
+        // What the files named on the line will cost before it is sent.
         if let Some((files, chars)) = self.attaching {
             spans.push(Span::styled(
                 format!(
@@ -175,17 +172,15 @@ impl Status {
                 Style::default().fg(theme().accent),
             ));
         }
-        // A turn that takes a minute with nothing on screen looks the same as a turn that
-        // has stalled. This is the number that tells them apart, and it is only shown
-        // while there is a turn for it to be about.
+        // This number tells a long turn from a stalled one.
+        // It is only shown while there is a turn for it to be about.
         if let Some(rate) = self.rate.filter(|_| self.busy) {
             spans.push(Span::styled(format!("  {rate:.0} tok/s"), theme().dim));
         }
-        // The phase is what a user is looking for when the screen has stopped changing, so
-        // it goes last, where the eye lands, with the time it has been there beside it.
-        // A search owns the keyboard while it is open, so the line says so and says what
-        // the keys mean there: without it the only sign a search was on was that typing
-        // did not reach the input.
+        // The phase goes last, with the time it has been there beside it.
+        //
+        // A search owns the keyboard while it is open.
+        // The line says so and says what the keys mean there.
         if let Some(finding) = self.finding.as_deref() {
             spans.push(Span::styled(
                 format!("  {finding}"),
@@ -210,30 +205,28 @@ impl Status {
         Line::from(spans)
     }
 
-    /// The keys, on their own line, because a shortcut nobody can see is a shortcut nobody
-    /// uses. Only the ones that change what happens next.
-    ///
-    /// `pointing` is true once the user has gone looking through the conversation, where
-    /// a different set of keys is in force and the ones for typing are not.
     /// The keys in force, in the width there is for them.
     ///
-    /// Dropped from the least useful end rather than cut by the terminal: a line that runs
-    /// off the edge loses whichever key happens to be last, silently, and this project's
-    /// own reason for having the line at all is that a shortcut nobody can see is a
-    /// shortcut nobody uses. What is left ends in a mark, so a reader knows the list goes
-    /// on and that `/help` has the rest.
+    /// The keys sit on their own line.
+    /// Only the ones that change what happens next are shown.
+    /// While `self.pointing` is set, the user is looking through the conversation.
+    /// A different set of keys is in force then, and the ones for typing are not.
+    ///
+    /// Keys are dropped from the least useful end rather than cut by the terminal.
+    /// What is left ends in a mark.
+    /// The mark tells a reader that the list goes on and that `/help` has the rest.
     pub fn keys_within(&self, width: usize) -> Line<'static> {
         let full = self.keys();
         let shown: usize = full.spans.iter().map(|s| s.content.chars().count()).sum();
         if width == 0 || shown <= width {
             return full;
         }
-        // Pairs, because a key without what it does is worse than no key.
+        // Each key comes with what it does.
         let mut spans: Vec<Span<'static>> = Vec::new();
         let mut used = 0usize;
         for pair in full.spans.chunks(2) {
             let cost: usize = pair.iter().map(|s| s.content.chars().count()).sum();
-            // 2 columns kept back for the mark that says there is more.
+            // `MARK_WIDTH` columns are kept back for the mark that says there is more.
             if used + cost + MARK_WIDTH > width {
                 break;
             }
@@ -282,8 +275,7 @@ impl Status {
             }
             None => {}
         }
-        // First while it is there: what to do with a selection is the question the person
-        // has just now, and the keys behind it are the ones they always have.
+        // A selection puts its keys first while it is there.
         if !self.mouse_ours {
             spans.extend(key("ctrl-t", "mouse back"));
         }
@@ -329,9 +321,10 @@ impl Status {
             }
             spans.extend(key("/help", "more"));
         }
-        // What the key does here: a turn in flight is stopped, a line being typed is
-        // cleared, a command of the person's own is stopped, and only then is the way out
-        // offered.
+        // A turn in flight is stopped.
+        // A line being typed is cleared.
+        // A command of the person's own is stopped.
+        // Only then is the way out offered.
         spans.extend(key(
             "ctrl-c",
             match (
@@ -355,9 +348,7 @@ impl Status {
 mod tests {
     /// A narrow window drops keys deliberately and says it did.
     ///
-    /// The terminal cutting the line loses whichever key is last, without a mark, which is
-    /// the same as not having written it - and the whole reason this line exists is that a
-    /// shortcut nobody can see is one nobody uses.
+    /// The terminal cutting the line would lose whichever key is last, without a mark.
     #[test]
     fn the_keys_fit_the_width_they_are_given() {
         let s = status(false, None, Duration::from_secs(0));

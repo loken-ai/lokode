@@ -7,20 +7,18 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 /// What an `Always` answer covers for the rest of the session.
 ///
-/// Granted against what the user was shown, not against the tool that showed it. Keyed on
-/// the tool's name it would mean that agreeing to one `ls` hands over a free shell, and
-/// agreeing to one file being written hands over every file - which is not what the
-/// question on screen appeared to ask.
+/// Granted against what the user was shown, not against the tool that showed it.
+/// Agreeing to one `ls` does not hand over a free shell.
+/// Agreeing to one file being written does not hand over every file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApprovalScope {
     /// One shell command, matched in full.
     ///
-    /// The whole string, not the program at the front of it: `ls` and `ls; rm -rf ~`
-    /// share a first word, so keying on the program would let the second inherit an
-    /// agreement given to the first. Matching the whole command is narrow enough to be
-    /// honest and still spares the user the repeats an agent actually produces, which are
-    /// the same command run again.
+    /// The whole string is matched, not the program at the front of it.
+    /// `ls` and `ls; rm -rf ~` share a first word, so the second does not inherit an
+    /// agreement given to the first.
+    /// The same command run again is covered.
     Command(String),
     /// One shell command, matched in full, run outside the sandbox.
     Unconfined(String),
@@ -42,8 +40,8 @@ impl ApprovalScope {
 
     /// The same, with paths written as the project sees them.
     ///
-    /// A prompt is read in a pane a few 12 columns wide, and the part of a path that
-    /// says what is about to change is the part below the project root.
+    /// A prompt is read in a narrow pane.
+    /// The part of a path that says what is about to change is the part below the project root.
     pub fn describe_under(&self, root: &std::path::Path) -> String {
         match self {
             ApprovalScope::Command(cmd) => format!("this exact command ({cmd})"),
@@ -67,9 +65,9 @@ impl ApprovalScope {
 
     /// Whether an agreement already given covers this request.
     ///
-    /// Only `Path` is not an equality test: an agreement given while looking at a file in
-    /// a directory covers that directory's contents, which is the granularity the
-    /// question was asked at.
+    /// Only `Path` is not an equality test.
+    /// An agreement given while looking at a file in a directory covers that directory's
+    /// contents.
     fn covered_by(&self, granted: &ApprovalScope) -> bool {
         match (granted, self) {
             (
@@ -89,8 +87,7 @@ impl ApprovalScope {
 
 /// Directory an `Always` answer about `target` should cover.
 ///
-/// The file's parent: the user was shown one file, and the smallest honest reading of
-/// "always" is the place that file lives in.
+/// The file's parent.
 pub fn write_scope(tool: &str, target: &Path) -> ApprovalScope {
     ApprovalScope::Path {
         tool: tool.to_string(),
@@ -116,8 +113,7 @@ pub enum ApprovalDecision {
     Always,
     /// Refused, with what the person said about it when they said anything.
     ///
-    /// A bare refusal tells a model that the call failed, not that it was the wrong call,
-    /// so the next step is usually the same call again, and the person refuses it twice.
+    /// The words let the model know the call was the wrong call.
     Deny(Option<String>),
 }
 
@@ -126,8 +122,8 @@ pub enum ApprovalDecision {
 pub enum Approval {
     Proceed,
     Denied(Denial),
-    /// The turn was abandoned while the prompt was on screen. Not the same as `Denied`:
-    /// the user refused nothing, they stopped waiting.
+    /// The turn was abandoned while the prompt was on screen.
+    /// The user refused nothing, so it is not `Denied`.
     Interrupted,
 }
 
@@ -142,8 +138,7 @@ pub enum Denial {
 
 /// What a tool hands back when its call was refused.
 ///
-/// Carries who refused it and why, so the model has something to act on rather than a
-/// failure to work around.
+/// Carries who refused it and why, so the model has something to act on.
 pub fn denial(why: Denial) -> String {
     match why {
         Denial::User(None) => "user denied".to_string(),
@@ -178,9 +173,8 @@ pub struct SessionApprovals {
     kept: Option<PathBuf>,
     /// Whether writes go ahead without being asked about, for as long as it is set.
     ///
-    /// Writes and nothing else. A shell command and a request leaving the machine are the
-    /// 2 things a person most wants to see before they happen, and a mode meant to stop
-    /// the interruptions of a long editing run must not quietly cover them as well.
+    /// Writes and nothing else.
+    /// A shell command and a request leaving the machine are still asked about.
     writes: AtomicBool,
 }
 
@@ -325,8 +319,8 @@ mod tests {
         ApprovalScope::Command(s.into())
     }
 
-    /// The failure this type exists to prevent: agreeing to one harmless command must not
-    /// hand over the shell for the rest of the session.
+    /// Agreeing to one harmless command does not hand over the shell for the rest of the
+    /// session.
     #[tokio::test]
     async fn agreeing_to_one_command_does_not_cover_another() {
         let a = SessionApprovals::new();
@@ -335,8 +329,7 @@ mod tests {
         assert!(!a.is_always(&cmd("rm -rf /")).await);
     }
 
-    /// A command that merely starts with an approved one is a different command. Keying
-    /// on the program at the front would let this through.
+    /// A command that merely starts with an approved one is a different command.
     #[tokio::test]
     async fn a_prefix_is_not_the_command_that_was_approved() {
         let a = SessionApprovals::new();
@@ -345,8 +338,7 @@ mod tests {
         assert!(!a.is_always(&cmd("ls /etc")).await);
     }
 
-    /// Agreeing while looking at a file covers the directory it lives in - and stops
-    /// there.
+    /// Agreeing while looking at a file covers the directory it lives in, and nothing above.
     #[tokio::test]
     async fn a_write_agreement_covers_its_directory_and_no_further_up() {
         let a = SessionApprovals::new();

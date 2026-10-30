@@ -16,9 +16,9 @@ const MAX_HOPS: usize = 5;
 
 /// Bytes to pull off the wire before abandoning the response.
 ///
-/// The extracted text is clamped to the conversation's budget afterwards, but that
-/// happens once the whole body is in memory - so a ceiling that only applies to the text
-/// does nothing about a server that offers 100 gigabytes.
+/// The extracted text is clamped to the conversation's budget afterwards.
+/// That happens once the whole body is in memory, so a ceiling that only applies to the text
+/// does nothing about a server that offers a body of any size.
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 pub struct WebFetch;
@@ -60,9 +60,9 @@ impl Tool for WebFetch {
 
         loop {
             let host = url.host_str().unwrap_or_default().to_string();
-            // Asked once per host rather than once per request: a redirect that stays
-            // inside the site the user agreed to is the same agreement, and one that
-            // leaves it is a different question.
+            // Asked once per host rather than once per request.
+            // A redirect that stays inside the site the user agreed to is the same agreement.
+            // A redirect that leaves it is a different question.
             if approved.insert(host.clone()) {
                 match ctx
                     .approve(ApprovalRequest {
@@ -96,11 +96,11 @@ impl Tool for WebFetch {
 
             status = resp.status();
             if status.is_redirection() {
-                // Redirects are followed here rather than by the HTTP client, because the
-                // client would follow them without asking where they lead: an approved
-                // public URL that answers 302 to 169.254.169.254 or to a service on
-                // loopback is the whole shape of the attack, and the address guard has to
-                // run again on every hop for it to mean anything.
+                // Redirects are followed here rather than by the HTTP client.
+                // The client would follow them without asking where they lead.
+                // An approved public URL that answers 302 to 169.254.169.254 or to a service on
+                // loopback is the shape of the attack.
+                // The address guard runs again on every hop.
                 hop += 1;
                 if hop > MAX_HOPS {
                     return Ok(ToolOutput::err(format!("more than {MAX_HOPS} redirects")));
@@ -137,8 +137,8 @@ impl Tool for WebFetch {
 
 /// Read the body, giving up once it exceeds what any answer could use.
 ///
-/// Streamed rather than taken whole: `text()` materialises everything the server chooses
-/// to send before anyone gets to have an opinion about its size.
+/// Streamed rather than taken whole.
+/// `text()` materialises everything the server chooses to send before its size can be checked.
 async fn read_capped(
     resp: reqwest::Response,
     cancel: &tokio_util::sync::CancellationToken,
@@ -179,9 +179,9 @@ async fn parse_public(raw: &str, allow: &HashSet<String>) -> Result<Url, String>
 
 /// Refuse a URL that does not name a public http(s) endpoint.
 ///
-/// The host is resolved here rather than trusted as written, because a name is free to
-/// point at a loopback or metadata address and the prefix `https://` says nothing about
-/// where the packets go.
+/// The host is resolved here rather than trusted as written.
+/// A name may point at a loopback or metadata address.
+/// The prefix `https://` says nothing about where the packets go.
 async fn check_public(url: Url, allow: &HashSet<String>) -> Result<Url, String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!(
@@ -222,9 +222,9 @@ async fn check_public(url: Url, allow: &HashSet<String>) -> Result<Url, String> 
 
 /// Whether an address belongs to a range this tool must not reach.
 ///
-/// Loopback and the link-local block that carries cloud metadata are the ones that matter
-/// most, but every non-public range is refused: reaching a service inside the network the
-/// agent happens to be running in is the same class of mistake.
+/// Loopback and the link-local block that carries cloud metadata are the ones that matter most.
+/// Every non-public range is refused.
+/// Reaching a service inside the network the agent runs in is the same class of mistake.
 fn is_blocked(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_blocked_v4(v4),
@@ -264,10 +264,12 @@ fn is_blocked_v6(v6: Ipv6Addr) -> bool {
 
 /// Reduce a page to the text a model can read.
 ///
-/// Not a DOM parser, and not trying to be. What it does do is drop the contents of `script`
-/// and `style` rather than only their tags - a page's JavaScript is many times the size of
-/// its prose and none of it is what was asked for - and turn the handful of entities that
-/// otherwise arrive as `&amp;` in the middle of a sentence.
+/// Not a DOM parser.
+///
+/// It drops the contents of `script` and `style` rather than only their tags.
+/// A page's JavaScript is many times the size of its prose and none of it is what was asked for.
+///
+/// It turns the handful of entities that otherwise arrive as `&amp;` in the middle of a sentence.
 fn strip_html(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut in_tag = false;
@@ -283,8 +285,9 @@ fn strip_html(input: &str) -> String {
         let Some((_, c)) = chars.next() else { break };
         match c {
             '<' => in_tag = true,
-            // A tag is a boundary between words. Without this, `<h1>Title</h1><p>Some` came
-            // out as `TitleSome` - the collapse below turns the run of spaces back into one.
+            // A tag is a boundary between words.
+            // Otherwise `<h1>Title</h1><p>Some` would read `TitleSome`.
+            // The collapse below turns the run of spaces back into one.
             '>' => {
                 in_tag = false;
                 out.push(' ');
@@ -449,7 +452,8 @@ mod tests {
             .is_ok());
     }
 
-    /// Serve one response and hang up. Enough to be redirected by.
+    /// Serve one response and hang up.
+    /// Enough to be redirected by.
     async fn serve_once(response: &'static str) -> u16 {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -501,9 +505,10 @@ mod tests {
         }
     }
 
-    /// The attack this guard exists for: a host the user agreed to answers with a
-    /// redirect onto the cloud metadata address. Checking only the URL the user was shown
-    /// would let it through, so the check has to run again on the hop.
+    /// The attack this guard exists for.
+    /// A host the user agreed to answers with a redirect onto the cloud metadata address.
+    /// Checking only the URL the user was shown would let it through.
+    /// The check has to run again on the hop.
     #[tokio::test]
     async fn a_redirect_towards_metadata_is_refused_at_the_hop() {
         let port = serve_once(
@@ -513,8 +518,8 @@ mod tests {
         )
         .await;
 
-        // The entry point is allowed explicitly, so the only thing that can refuse the
-        // request is the guard running on the redirect target.
+        // The entry point is allowed explicitly.
+        // Only the guard running on the redirect target can refuse the request.
         let ctx = test_ctx(&["127.0.0.1"]);
         let out = WebFetch
             .run(&ctx, json!({ "url": format!("http://127.0.0.1:{port}/") }))
@@ -567,8 +572,8 @@ mod tests {
 mod html_tests {
     use super::*;
 
-    /// A page's JavaScript is many times the size of its prose and none of it is what was
-    /// asked for. Stripping only the tags left every line of it in the answer.
+    /// A page's JavaScript is many times the size of its prose.
+    /// Stripping only the tags would leave every line of it in the answer.
     #[test]
     fn a_script_body_is_dropped_not_just_its_tags() {
         let html = "<p>before</p><script>var x = 1; alert('noise');</script><p>after</p>";
@@ -592,8 +597,8 @@ mod html_tests {
         assert!(text.contains("kept"), "{text}");
     }
 
-    /// An unclosed script runs to the end of the document, and so must the skip - otherwise
-    /// the rest of the page is code presented as prose.
+    /// An unclosed script runs to the end of the document, and so must the skip.
+    /// Otherwise the rest of the page is code presented as prose.
     #[test]
     fn an_unclosed_script_swallows_the_rest() {
         let text = strip_html("<p>before</p><script>var x = 1;");
@@ -608,7 +613,8 @@ mod html_tests {
         assert_eq!(strip_html("it&#39;s"), "it's");
     }
 
-    /// `&amp;lt;` is an escaped `&lt;`, not a `<`. Turning `&amp;` first would make it one.
+    /// `&amp;lt;` is an escaped `&lt;`, not a `<`.
+    /// Turning `&amp;` first would make it one.
     #[test]
     fn a_doubly_escaped_entity_is_only_decoded_once() {
         assert_eq!(strip_html("&amp;lt;"), "&lt;");

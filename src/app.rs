@@ -83,8 +83,8 @@ pub enum ProtocolChoice {
     Auto,
     /// Insist on the server's tool-calling.
     Native,
-    /// A single JSON object per turn, constrained by a generated grammar. Needs nothing
-    /// from the server beyond a completion.
+    /// A single JSON object per turn, constrained by a generated grammar.
+    /// Needs nothing from the server beyond a completion.
     Envelope,
 }
 

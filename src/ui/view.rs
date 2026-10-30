@@ -21,13 +21,11 @@ pub(crate) fn draw(
     root: &Path,
     max_steps: usize,
 ) {
-    // No borders anywhere. They cost 4 columns and 2 lines, they land in
-    // every selection made with the mouse, and they separate nothing that a blank
-    // line and a prompt mark do not separate better.
+    // No borders anywhere.
+    // They cost 4 columns and 2 lines, and they land in every selection made with the mouse.
     //
-    // The input grows with what is being typed, up to a few lines, so a long
-    // instruction is visible while it is written instead of scrolling inside a box
-    // of fixed height.
+    // The input grows with what is being typed, up to a few lines.
+    // A long instruction is visible while it is written.
     let typed = input.lines().len().clamp(1, INPUT_MAX_LINES) as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -44,13 +42,11 @@ pub(crate) fn draw(
     let header = chunks[0];
     let chunks = &chunks[1..];
 
-    // Wrapped entry by entry, so where each one begins is known. Pointing at a
-    // step said nothing about where it is: the mark went on an entry that could be
-    // a screen and a half above the pane, and the only way to see it was to guess
-    // how far to scroll.
+    // Wrapped entry by entry, so where each one begins is known.
     // The last column is kept for the scrollbar, so it never sits over text.
-    // The rail takes a column of its own from a wide enough screen, and opens over the
-    // conversation on a narrow one when asked for.
+    //
+    // The rail takes a column of its own from a wide enough screen.
+    // On a narrow one it opens over the conversation when asked for.
     let wide = f.area().width >= crate::ui::rail::WIDE_FROM;
     let rail_shown = state.rail.unwrap_or(wide);
     state.rail_now = rail_shown;
@@ -76,8 +72,9 @@ pub(crate) fn draw(
         }
         (false, _) => (chunks[0], None),
     };
-    // At most a comfortable reading width: on a wide screen the conversation keeps its
-    // measure, and its surfaces do not run the width of the screen.
+    // At most a comfortable reading width.
+    // On a wide screen the conversation keeps its measure, and its surfaces do not run the width of
+    // the screen.
     let width = (pane_area.width.saturating_sub(1) as usize).min(READING_AT_MOST);
     let mut pane = crate::ui::thread::Pane::default();
     for i in 0..state.entries.len() {
@@ -97,18 +94,16 @@ pub(crate) fn draw(
         ));
     }
     state.drawings.forget_gone(&state.entries);
-    // Wrapped above rather than by the widget. The program counted logical lines
-    // while the terminal showed rows, so scrolling was off by however much had
-    // wrapped and nothing could say which line sits at a given row - which is what
-    // pointing at text with the mouse needs to know.
+    // Wrapped above rather than by the widget.
+    // The program counts rows, not logical lines, so scrolling and pointing at text with the mouse
+    // can say which line sits at a given row.
     state.pane = pane_area;
     let inner_h = pane_area.height as usize;
     let total = pane.len();
     // Remembered for the scroll keys, which cannot know either of these.
     state.content_lines = total;
     state.view_height = inner_h;
-    // Scrolling past the top used to blank the pane: the window slid off the end of
-    // the content instead of stopping at its oldest line.
+    // Scrolling past the top stops at the oldest line.
     let scroll = (state.scroll as usize).min(total.saturating_sub(inner_h));
     state.scroll = scroll as u16;
     let end = total.saturating_sub(scroll);
@@ -134,20 +129,15 @@ pub(crate) fn draw(
                 _ => line.clone(),
             }
         })
-        // What was searched for, picked out where it is. Pointing at the entry
-        // left the word itself to be found by eye, which on a screenful of
-        // output is the part that takes the time.
+        // What was searched for, picked out where it is.
         .map(|line| match state.finding.as_ref() {
             Some((needle, _)) => crate::ui::chat::mark_found(&line, needle),
             None => line,
         })
         .collect();
     f.render_widget(Paragraph::new(visible), pane_area);
-    // Nothing used to say the conversation had been scrolled back, or by how
-    // much: a pane showing an hour-old answer looks exactly like a pane showing
-    // the newest one.
-    // Shown once the conversation has been scrolled back, where it says how far: at the
-    // newest line there is nothing for it to say.
+    // Shown once the conversation has been scrolled back, where it says how far.
+    // At the newest line there is nothing for it to say.
     if total > inner_h && scroll > 0 {
         let mut bar = ratatui::widgets::ScrollbarState::new(total.saturating_sub(inner_h))
             .position(total.saturating_sub(inner_h).saturating_sub(scroll));
@@ -174,8 +164,9 @@ pub(crate) fn draw(
         );
     }
 
-    // The prompt mark, in its own column, so the text the user types starts where
-    // the answers do and a wrapped line does not sit under the mark.
+    // The prompt mark sits in its own column.
+    // The text the user types starts where the answers do.
+    // A wrapped line does not sit under the mark.
     let typing = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(2), Constraint::Min(1)])
@@ -214,8 +205,8 @@ pub(crate) fn draw(
         .render(f, area);
     }
 
-    // The completion list, as wide as the conversation it opens over and drawn after the
-    // rail, so the rail never cuts into it.
+    // The completion list is as wide as the conversation it opens over.
+    // It is drawn after the rail, so the rail never cuts into it.
     state.list_hit = None;
     if let Some(picker) = state.picker.as_ref() {
         state.list_hit = picker.render(
@@ -334,15 +325,15 @@ pub(crate) fn draw(
     if let Some(sheet) = state.sheet.as_mut() {
         sheet.render(f, chunks[0]);
     }
-    // Last, so it is over everything: a question being asked of the person is not
-    // something anything else may cover.
+    // Last, so it is over everything.
+    // A question being asked of the person is not something anything else may cover.
     if let Some(chooser) = state.choosing.as_ref() {
         state.list_hit = Some(chooser.render(f, chunks[0]));
     }
 }
 
-/// The band at the top: what this is, where, on which branch with how many files changed,
-/// and which model on which backend answers.
+/// The band at the top: what this is, where, on which branch with how many files changed, and which
+/// model on which backend answers.
 fn draw_header(f: &mut Frame, area: ratatui::layout::Rect, state: &UiState, root: &Path) {
     let t = theme();
     let surface = match t.tint {
@@ -414,8 +405,9 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    /// A session in the middle of a turn: a question, a step, an answer with code, a change
-    /// waiting to be agreed to, and an error.
+    /// A session in the middle of a turn.
+    /// It holds a question, a step, an answer with code, a change waiting to be agreed to, and an
+    /// error.
     fn a_session() -> UiState {
         let mut state = UiState {
             model: "qwen3-coder".into(),
@@ -620,8 +612,8 @@ mod tests {
         readme_shows_the_screen(&frame(&mut a_session(), 120, 32), bless);
     }
 
-    /// The README shows the 120-column screen as it is drawn, between its markers. Recording
-    /// the screens again writes it there too.
+    /// The README shows the 120-column screen as it is drawn, between its markers.
+    /// Recording the screens again writes it there too.
     fn readme_shows_the_screen(drawn: &str, bless: bool) {
         const OPEN: &str = "<!-- screen:120x32 -->\n```text\n";
         const CLOSE: &str = "```\n<!-- /screen -->";
@@ -647,8 +639,8 @@ mod tests {
         );
     }
 
-    /// A frame that follows one with nothing changed draws no entry again, however long
-    /// the session, and a new entry is the only one drawn.
+    /// A frame that follows one with nothing changed draws no entry again.
+    /// A new entry is the only one drawn.
     #[test]
     fn a_long_session_draws_only_what_changed() {
         let mut state = a_session();
@@ -683,8 +675,9 @@ mod tests {
         assert_eq!(state.drawings.drawn, all + 1);
     }
 
-    /// A delegated session's steps run under its step, stay there folded once it is over,
-    /// unfold whole, and its page holds each step and the answer.
+    /// A delegated session's steps run under its step.
+    /// They stay there folded once it is over, and unfold whole.
+    /// Its page holds each step and the answer.
     #[test]
     fn a_delegated_session_keeps_its_steps() {
         use crate::tools::registry::SubEvent;
@@ -755,9 +748,10 @@ mod tests {
         );
     }
 
-    /// A write step says what its check came to, a changed file the servers report errors
-    /// in says how many in the rail, a server at work is listed with what runs, and the
-    /// page of the servers says where each stands and why one is down.
+    /// A write step says what its check came to.
+    /// A changed file the servers report errors in says how many in the rail.
+    /// A server at work is listed with what runs.
+    /// The page of the servers says where each stands and why one is down.
     #[test]
     fn the_language_servers_show_on_the_screen() {
         use crate::lsp::{State, Status};
@@ -806,8 +800,8 @@ mod tests {
         );
     }
 
-    /// A click without a drag on a badge of the question waiting is that badge's key, and
-    /// a click on a step with more to show unfolds it.
+    /// A click without a drag on a badge of the question waiting is that badge's key.
+    /// A click on a step with more to show unfolds it.
     #[test]
     fn a_click_answers_a_badge_and_unfolds_a_step() {
         let mut state = a_session();
@@ -874,8 +868,9 @@ mod tests {
         typed: &'static str,
     }
 
-    /// The scenes a design pass looks at: a session at 3 widths, a turn at work, the
-    /// completion lists, a list a command opens, and 2 pages.
+    /// The scenes a design pass looks at.
+    /// A session at 3 widths, a turn at work, the completion lists, a list a command opens, and
+    /// 2 pages.
     fn scenes() -> Vec<Scene> {
         use crate::ui::picker::{Choice, Kind, Picker};
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1109,10 +1104,10 @@ mod tests {
         }
     }
 
-    /// Draw every scene and write its cells, with their colours and weights, as JSON in
-    /// the directory `LOKODE_SCREENS` names, under the theme `LOKODE_SCREEN_THEME` names.
-    /// Ignored unless asked for: `scripts/screens.sh` runs it and turns the cells into
-    /// pictures.
+    /// Draw every scene and write its cells, with their colours and weights, as JSON in the
+    /// directory `LOKODE_SCREENS` names, under the theme `LOKODE_SCREEN_THEME` names.
+    /// Ignored unless asked for.
+    /// `scripts/screens.sh` runs it and turns the cells into pictures.
     #[test]
     #[ignore]
     fn screens() {

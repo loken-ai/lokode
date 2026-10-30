@@ -1,9 +1,8 @@
 //! Terminal lifecycle.
 //!
-//! Entering raw mode and the alternate screen are changes to the user's shell, not to
-//! this process, so undoing them cannot depend on the happy path being taken. A panic in
-//! a draw call would otherwise hand back a terminal with no echo and no cursor, printing
-//! the message the user needs in a mode where it is unreadable.
+//! Entering raw mode and the alternate screen are changes to the user's shell.
+//! Undoing them does not depend on the normal exit path being taken.
+//! A panic in a draw call still hands back a usable terminal.
 
 use std::io;
 
@@ -25,10 +24,9 @@ use crossterm::terminal::{
 
 /// Undo everything [`TerminalGuard::new`] turned on.
 ///
-/// Every step is attempted and its failure discarded: this runs from a panic hook, where
-/// there is nobody left to report to, and a terminal restored in part beats one left in
-/// raw mode. Calling it twice is harmless, which is what lets the guard and the hook both
-/// own the job without coordinating.
+/// Every step is attempted and its failure discarded.
+/// This runs from a panic hook, where there is nobody left to report to.
+/// Calling it twice is harmless, so the guard and the hook can both own the job.
 pub fn restore() {
     progress(Progress::Off);
     let _ = execute!(
@@ -55,12 +53,11 @@ pub struct TerminalGuard {
 }
 
 impl TerminalGuard {
-    /// The wheel scrolls the pane, and the pane does its own selecting, which is what a
-    /// captured mouse buys and costs.
+    /// The wheel scrolls the pane, and the pane does its own selecting.
     ///
-    /// Paste is asked for as well. Without it a terminal hands pasted text over one
-    /// keystroke at a time, so every newline in it reads as the send key: pasting 10
-    /// lines of a stack trace asked 10 questions, each of them a fragment.
+    /// Paste is asked for as well.
+    /// Without it a terminal hands pasted text over one keystroke at a time.
+    /// Every newline in it would then read as the send key.
     pub fn new() -> Result<Self> {
         enable_raw_mode()?;
         execute!(
@@ -69,16 +66,14 @@ impl TerminalGuard {
             EnableMouseCapture,
             EnableBracketedPaste
         )?;
-        // Keys the legacy encoding confuses arrive told apart: Esc from the start of an
-        // Alt chord, Shift-Enter from Enter. A terminal that does not know the protocol
-        // ignores the request, and one that cannot be sent it refuses it, which changes
-        // nothing either.
+        // Keys the legacy encoding confuses arrive told apart.
+        // That covers Esc and the start of an Alt chord, and Shift-Enter and Enter.
+        // A terminal that does not know the protocol ignores the request.
         let _ = execute!(
             io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         );
-        // Told when the window gains and loses focus, so a question waiting on the person
-        // can reach them when they are elsewhere.
+        // Told when the window gains and loses focus.
         let _ = execute!(io::stdout(), EnableFocusChange);
         // The terminal's own title, saved on its stack to be given back on leaving.
         let _ = write!(io::stdout(), "\x1b[22;0t");
@@ -87,8 +82,9 @@ impl TerminalGuard {
     }
 }
 
-/// Hold what is drawn until the frame is complete, so a terminal that knows the request
-/// shows each frame whole. One that does not ignores it.
+/// Hold what is drawn until the frame is complete.
+/// A terminal that knows the request shows each frame whole.
+/// One that does not ignores it.
 pub fn begin_frame() {
     let _ = execute!(io::stdout(), BeginSynchronizedUpdate);
 }
@@ -128,8 +124,8 @@ impl Reach {
     /// Read from the variables a terminal sets about itself.
     ///
     /// Under tmux the sequences beyond the bell never reach the terminal, so only the bell
-    /// is used there. iTerm2 shows progress from 3.6 on: before it, the same sequence is a
-    /// notification.
+    /// is used there.
+    /// iTerm2 shows progress from 3.6 on, and before it the same sequence is a notification.
     pub fn from_env(var: impl Fn(&str) -> Option<String>) -> Self {
         let program = var("TERM_PROGRAM").unwrap_or_default();
         let term = var("TERM").unwrap_or_default();
@@ -235,8 +231,7 @@ impl Drop for TerminalGuard {
 
 /// Restore the terminal before the default hook prints the panic.
 ///
-/// Install this before taking the terminal, so that the window in which a panic could
-/// escape uncovered never opens.
+/// Install this before taking the terminal, so that no panic escapes uncovered.
 pub fn install_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -257,8 +252,8 @@ mod tests {
         })
     }
 
-    /// A terminal known to show progress gets it, and one that would read the sequence as
-    /// a notification does not.
+    /// A terminal known to show progress gets it.
+    /// One that would read the sequence as a notification does not.
     #[test]
     fn progress_goes_only_where_it_is_shown() {
         assert!(reach_of(&[("TERM_PROGRAM", "ghostty")]).progress);
@@ -280,8 +275,8 @@ mod tests {
         assert!(!reach_of(&[("TERM", "xterm-256color")]).progress);
     }
 
-    /// A notification takes the terminal's own sequence, and the bell under tmux or where
-    /// nothing better is known.
+    /// A notification takes the terminal's own sequence.
+    /// It takes the bell under tmux or where nothing better is known.
     #[test]
     fn a_notification_takes_the_terminals_own_way() {
         assert_eq!(

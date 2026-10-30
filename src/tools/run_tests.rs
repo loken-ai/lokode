@@ -75,12 +75,12 @@ impl Tool for RunTests {
                     )))
                 }
             };
-        // A test suite is the longest thing this agent starts; abandoning the turn has to
-        // take the suite with it rather than leave it running unattended.
+        // A test suite is the longest thing this agent starts.
+        // Abandoning the turn has to take the suite with it.
         cmd.kill_on_drop(true);
         cmd.current_dir(&ctx.root);
-        // The suite is the longest thing here and the line that names the failing test
-        // arrives long before the end of it. Read as it comes, like the shell.
+        // The line that names the failing test arrives long before the end of the suite.
+        // Read as it comes, like the shell.
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -180,9 +180,9 @@ mod tests {
         refused(&out, "user denied");
     }
 
-    /// The summary has to name the command, because running a project's tests runs the
-    /// project's code - build scripts, lifecycle hooks, conftest - and the user is
-    /// agreeing to that.
+    /// The summary names the command.
+    /// Running a project's tests runs the project's code: build scripts, lifecycle hooks, conftest.
+    /// The user is agreeing to that.
     #[tokio::test]
     async fn the_user_is_shown_what_will_be_run() {
         let h = Harness::new(Answer::No);

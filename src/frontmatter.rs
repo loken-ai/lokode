@@ -1,8 +1,9 @@
-//! The block of settings at the head of a Markdown file: `key: value` lines between 2
-//! `---` lines. Agents, commands and skills are written this way.
+//! The block of settings at the head of a Markdown file.
+//! It is `key: value` lines between 2 `---` lines.
+//! Agents, commands and skills are written this way.
 
-/// The settings of `text`, in order, and the rest of it. A file that does not open on
-/// `---` has no settings.
+/// The settings of `text`, in order, and the rest of it.
+/// A file that does not open on `---` has no settings.
 pub fn split(text: &str) -> Result<(Vec<(String, String)>, String), String> {
     let text = text.replace("\r\n", "\n");
     let (head, body) = match text.strip_prefix("---\n") {
@@ -30,8 +31,8 @@ pub fn split(text: &str) -> Result<(Vec<(String, String)>, String), String> {
     Ok((settings, body.trim().to_string()))
 }
 
-/// Whether `name` is made of letters, digits, `-` and `_` only, as a file named after a
-/// command, an agent or a skill must be.
+/// Whether `name` is made of letters, digits, `-` and `_` only.
+/// A file named after a command, an agent or a skill must be.
 pub fn is_name(name: &str) -> bool {
     !name.is_empty()
         && name

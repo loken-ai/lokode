@@ -1,8 +1,9 @@
 //! One language server process, spoken to over stdio.
 //!
-//! Requests carry an id the server answers with. The server sends requests of its own,
-//! which are answered here, and notifications: the diagnostics it publishes and the
-//! progress of its work, both kept for the tools to read.
+//! Requests carry an id the server answers with.
+//! The server sends requests of its own, which are answered here.
+//! It sends notifications: the diagnostics it publishes and the progress of its work.
+//! Both are kept for the tools to read.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -259,8 +260,8 @@ impl Server {
         self.progress.lock().await.values().cloned().collect()
     }
 
-    /// Whether the server has work in hand: reported progress, or a status saying it is
-    /// not yet through the project.
+    /// Whether the server has work in hand.
+    /// That is reported progress, or a status saying it is still working through the project.
     pub async fn busy(&self) -> bool {
         !self.quiescent.load(Ordering::Acquire) || !self.progress.lock().await.is_empty()
     }
@@ -334,8 +335,8 @@ impl Server {
         Ok(())
     }
 
-    /// Make the server's copy of `path` match the file on disk. Returns its URI, the
-    /// version sent, and whether anything was sent.
+    /// Make the server's copy of `path` match the file on disk.
+    /// Returns its URI, the version sent, and whether anything was sent.
     pub async fn sync(&self, path: &Path) -> Result<(Url, i32, bool)> {
         let uri = Url::from_file_path(path).map_err(|_| anyhow!("bad file url"))?;
         let text = tokio::fs::read_to_string(path).await?;
@@ -360,8 +361,7 @@ impl Server {
             Some(doc) if doc.text != text => {
                 doc.version += 1;
                 doc.text = text.clone();
-                // The whole text: the tools rewrite files, and ranges here would invent a
-                // precision the caller never had.
+                // The whole text is sent, not ranges.
                 self.notify(
                     "textDocument/didChange",
                     json!({
@@ -419,8 +419,8 @@ impl Server {
                 (None, None) => {}
             }
         }
-        // The server is gone: every request waiting on it fails now rather than at its
-        // timeout, and whoever waits on a change is told.
+        // The server is gone: every request waiting on it fails now rather than at its timeout.
+        // Whoever waits on a change is told.
         self.alive.store(false, Ordering::Release);
         self.pending.lock().await.clear();
         self.progress.lock().await.clear();
@@ -646,8 +646,9 @@ mod tests {
         assert_eq!(setting(Some(&settings), None), settings);
     }
 
-    /// A provider given as an object or as true counts, false or absent does not, and the
-    /// encoding is UTF-16 unless the server names another.
+    /// A provider given as an object or as true counts.
+    /// False or absent does not.
+    /// The encoding is UTF-16 unless the server names another.
     #[test]
     fn capabilities_are_read_from_the_server_s_answer() {
         let caps = Capabilities::read(&json!({

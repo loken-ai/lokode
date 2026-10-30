@@ -1,6 +1,4 @@
-//! OpenAI-compatible wire types — a focused subset that mirrors
-//! `crates/server/src/api/types.rs`. Copied (rather than path-depended)
-//! so the TUI evolves independently from the server crate.
+//! OpenAI-compatible wire types: a focused subset that mirrors `crates/server/src/api/types.rs`.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,9 +12,9 @@ pub struct Message {
     pub tool_call_id: Option<String>,
     /// Calls an assistant turn made, in the native protocol.
     ///
-    /// Sent back verbatim on the next request: a `role: "tool"` message is only meaningful
-    /// against the call it answers, and a server that checks will reject one whose
-    /// `tool_call_id` matches nothing it was shown.
+    /// Sent back verbatim on the next request.
+    /// A `role: "tool"` message is only meaningful against the call it answers.
+    /// A server that checks rejects one whose `tool_call_id` matches nothing it was shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
 }
@@ -35,8 +33,8 @@ pub struct FunctionCall {
     pub name: String,
     /// The arguments object, as a string of JSON.
     ///
-    /// A string, not an object - that is what the format says, and it is why a model can
-    /// get the JSON wrong here in exactly the ways the repair pass already knows about.
+    /// The format makes it a string, not an object.
+    /// A model can get the JSON wrong here, in the ways the repair pass handles.
     pub arguments: String,
 }
 
@@ -145,24 +143,25 @@ pub struct ChatCompletionRequest {
     pub seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
-    /// Server reuses prompt KV cache when this stays constant across turns.
+    /// The server reuses its prompt KV cache when this stays constant across turns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     /// Asks a streaming response to end with a usage report.
     ///
-    /// Dropped and the request retried without it if the server rejects the field, since
-    /// not every OpenAI-compatible implementation accepts it and the token counts are
-    /// worth having where they are on offer.
+    /// Dropped, and the request retried without it, if the server rejects the field.
+    /// Not every OpenAI-compatible implementation accepts it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<StreamOptions>,
-    /// Tools offered in the native protocol. Absent in the envelope protocol, where the
-    /// tools are described in the system prompt and constrained by `response_format`.
+    /// Tools offered in the native protocol.
+    /// Absent in the envelope protocol, where the tools are described in the system prompt
+    /// and constrained by `response_format`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<String>,
-    /// How much a reasoning model thinks before answering. Sent only to ask for as little as
-    /// it allows, and dropped for the session by a server that rejects the field.
+    /// How much a reasoning model thinks before answering.
+    /// Sent only to ask for as little as it allows.
+    /// Dropped for the session by a server that rejects the field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
 }
@@ -187,8 +186,9 @@ pub struct ChatChunk {
 pub struct ChatChunkChoice {
     #[serde(default)]
     pub delta: ChunkDelta,
-    /// Why generation stopped. `"length"` means the answer was cut off, which is
-    /// otherwise indistinguishable from a model that emits malformed JSON.
+    /// Why generation stopped.
+    /// `"length"` means the answer was cut off, which looks like a model that emits malformed
+    /// JSON.
     #[serde(default)]
     pub finish_reason: Option<String>,
 }
@@ -204,7 +204,8 @@ pub struct Usage {
     pub prompt_tokens_details: Option<PromptDetails>,
     #[serde(default)]
     pub completion_tokens_details: Option<CompletionDetails>,
-    /// What a loken server measured of the request. Absent from any other server.
+    /// What a loken server measured of the request.
+    /// Absent from any other server.
     #[serde(default)]
     pub loken: Option<LokenUsage>,
 }
@@ -225,7 +226,8 @@ pub struct CompletionDetails {
     pub rejected_prediction_tokens: u32,
 }
 
-/// What a loken server measured of one request. A field it could not measure is absent.
+/// What a loken server measured of one request.
+/// A field it could not measure is absent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct LokenUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -283,12 +285,13 @@ pub struct ChunkDelta {
     pub content: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<ToolCallDelta>>,
-    /// A reasoning model's scratchpad, where the server splits it out for us.
+    /// A reasoning model's scratchpad, where the server splits it out.
     ///
-    /// Not in the OpenAI specification, so the vendors disagree on the name: ollama and
-    /// OpenRouter say `reasoning`, DeepSeek says `reasoning_content`, and loken leaves it
-    /// inline in `content` behind `<think>` tags. Both names are read here; the inline
-    /// form is handled by the splitter.
+    /// Not in the OpenAI specification, so the vendors differ on the name.
+    /// ollama and OpenRouter say `reasoning`.
+    /// DeepSeek says `reasoning_content`.
+    /// loken leaves it inline in `content` behind `<think>` tags, which the splitter handles.
+    /// Both field names are read here.
     #[serde(default)]
     pub reasoning: Option<String>,
     #[serde(default)]
@@ -297,8 +300,8 @@ pub struct ChunkDelta {
 
 /// A fragment of a tool call.
 ///
-/// The name arrives once and the arguments arrive a few characters at a time, so the
-/// pieces have to be reassembled by `index` before any of it means anything.
+/// The name arrives once and the arguments arrive a few characters at a time.
+/// The pieces are reassembled by `index` before any of it means anything.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolCallDelta {
     #[serde(default)]

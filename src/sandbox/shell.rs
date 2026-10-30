@@ -1,16 +1,18 @@
 //! A shell command line, read for the commands it runs.
 //!
-//! A rule about commands is matched against each simple command of a line: the parts
-//! joined by `;`, `&&`, `||`, `|`, `&` or a new line, and the commands substituted with
-//! `$( )`, backquotes, `<( )` or `>( )`. A line that does something its parts do not
-//! show is marked opaque: a write to a file through a redirection, a here-document, or a
-//! command run from a string by `eval` or `sh -c`.
+//! A rule about commands is matched against each simple command of a line.
+//! The parts are joined by `;`, `&&`, `||`, `|`, `&` or a new line.
+//! The commands substituted with `$( )`, backquotes, `<( )` or `>( )` are parts too.
+//!
+//! A line that does something its parts do not show is marked opaque.
+//! That is a write to a file through a redirection, a here-document, or a command run from a
+//! string by `eval` or `sh -c`.
 
 /// A command line read as the simple commands it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Parts {
-    /// Each simple command, without its leading variable assignments, its words joined by
-    /// one space.
+    /// Each simple command, without its leading variable assignments.
+    /// Its words are joined by one space.
     pub commands: Vec<String>,
     /// Whether the line does something its commands do not show.
     pub opaque: bool,
@@ -166,8 +168,9 @@ impl Reader {
         }
     }
 
-    /// Read a redirection. One that writes to a file, and a here-document, make the line
-    /// opaque. Joining a stream to another, and writing to `/dev/null`, do not.
+    /// Read a redirection.
+    /// One that writes to a file, and a here-document, make the line opaque.
+    /// Joining a stream to another, and writing to `/dev/null`, do not.
     fn redirection(&mut self, word: &mut String, in_word: &mut bool, words: &mut Vec<String>) {
         // A stream number written before the operator belongs to it.
         if word.chars().all(|c| c.is_ascii_digit()) && !word.is_empty() {
@@ -272,7 +275,8 @@ mod tests {
         assert_eq!(commands("diff <(ls a) b"), ["ls a", "diff <() b"]);
     }
 
-    /// Quotes keep operators as text, and a variable set for a command is not the command.
+    /// Quotes keep operators as text.
+    /// A variable set for a command is not the command.
     #[test]
     fn quotes_and_assignments() {
         assert_eq!(commands("echo 'a; b' \"c | d\""), ["echo a; b c | d"]);
@@ -281,8 +285,9 @@ mod tests {
         assert_eq!(commands("ls # rm -rf /"), ["ls"]);
     }
 
-    /// A write to a file, a here-document and a command run from a string are not shown by
-    /// the parts. Joining streams and discarding output are.
+    /// A write to a file, a here-document and a command run from a string are not shown by the
+    /// parts.
+    /// Joining streams and discarding output are.
     #[test]
     fn what_the_parts_do_not_show() {
         assert!(parts("cargo test > out.txt").opaque);

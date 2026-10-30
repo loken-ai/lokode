@@ -1,14 +1,15 @@
 //! Tools from somewhere other than this repository.
 //!
 //! An MCP server is a program the user has configured, speaking a small protocol over its
-//! standard input and output. Whatever it offers is adapted into the same `Tool` the rest of
-//! the agent already knows, so the grammar, the manifest, the approval flow and the
-//! checkpoints apply to it unchanged.
+//! standard input and output.
+//! Whatever it offers is adapted into the same `Tool` the rest of the agent already knows.
+//! The grammar, the manifest, the approval flow and the checkpoints apply to it unchanged.
 //!
-//! What does not carry over is trust. A built-in tool is trusted because its behaviour is
-//! here to read; one of these is a third party, so every call is approved, every call is
-//! treated as able to change the project, and the schema it advertises is checked before it
-//! is allowed to shape the grammar the model is held to.
+//! Trust does not carry over.
+//! A built-in tool is trusted because its behaviour is here to read.
+//! A server is a third party, so every call is approved.
+//! Every call is treated as able to change the project.
+//! The schema a server advertises is checked before it may shape the grammar the model is held to.
 
 pub mod client;
 pub mod host;
@@ -27,8 +28,8 @@ pub struct Servers {
     host: host::SharedHost,
 }
 
-/// The servers, shared by the agent and the interface, so a server started again is the
-/// one both speak to.
+/// The servers, shared by the agent and the interface.
+/// A server started again is the one both speak to.
 pub type Clients = Arc<Servers>;
 
 impl Servers {
@@ -87,8 +88,9 @@ pub fn adopt(
     (adopted, notices)
 }
 
-/// Take the tools of `client` again, after it said they changed: those it no longer
-/// offers leave `registry`, and the new ones join it. Says how many it has now.
+/// Take the tools of `client` again, after it said they changed.
+/// Tools it no longer offers leave `registry`, and the new ones join it.
+/// Says how many it has now.
 pub async fn readopt(
     client: &Arc<client::McpClient>,
     registry: &mut Registry,
@@ -102,8 +104,9 @@ pub async fn readopt(
     Ok((adopted, notices))
 }
 
-/// Start the server of `old` again, as it was configured, and make it the one `clients`
-/// and `registry` hold: its tools and its documents are taken again. Says what it has.
+/// Start the server of `old` again, as it was configured.
+/// It becomes the one `clients` and `registry` hold, and its tools and documents are taken again.
+/// Says what it has.
 pub async fn restart(
     old: &Arc<client::McpClient>,
     clients: &Clients,
@@ -118,8 +121,9 @@ pub async fn restart(
     take_in(new, clients, registry).await
 }
 
-/// Start a server the session does not have yet, `name` configured as `spec`, and take
-/// its tools. Says what it has.
+/// Start a server the session does not have yet, `name` configured as `spec`.
+/// Its tools are taken.
+/// Says what it has.
 pub async fn add(
     name: &str,
     spec: &McpServer,
@@ -131,8 +135,8 @@ pub async fn add(
     take_in(new, clients, registry).await
 }
 
-/// Make `new` the server of its name that `clients` and `registry` hold, its tools and its
-/// documents taken again.
+/// Make `new` the server of its name that `clients` and `registry` hold.
+/// Its tools and documents are taken again.
 async fn take_in(
     new: Arc<client::McpClient>,
     clients: &Clients,
@@ -195,9 +199,8 @@ async fn start(
 
 /// Start each configured server and register what it offers.
 ///
-/// One server failing takes only that server with it. These are other people's programs and
-/// a missing one is an ordinary thing to find; refusing to start the agent over it would be
-/// a poor trade.
+/// One server failing takes only that server with it.
+/// A missing server is an ordinary thing to find, so it never stops the agent from starting.
 pub async fn load(
     servers: &std::collections::BTreeMap<String, McpServer>,
     registry: &mut Registry,
@@ -237,8 +240,8 @@ pub async fn load(
 
         let (mut adopted, notices) = adopt(&client, &offered, registry);
         out.notices.extend(notices);
-        // A server's documents become one tool that reads them, so the approval flow,
-        // the checkpoints and the transcript apply to them unchanged.
+        // A server's documents become one tool that reads them.
+        // The approval flow, the checkpoints and the transcript apply to it unchanged.
         let resources = client.list_resources().await;
         if !resources.is_empty() {
             let tool = tool::McpResources::new(client.clone(), &resources);

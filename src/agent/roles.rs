@@ -1,12 +1,11 @@
 //! Which model does which kind of work.
 //!
-//! One model for everything is one compromise for every step. A turn asks for very
-//! different things: a plan, a patch, a search through files, a small JSON object to
-//! repair a malformed reply. The work that needs reasoning wants the model that reasons
-//! best; the work that needs to be over quickly wants the one already resident.
+//! A turn asks for very different things: a plan, a patch, a search through files, a small
+//! JSON object to repair a malformed reply.
+//! The work that needs reasoning wants the model that reasons best.
+//! The work that needs to be over quickly wants a fast model.
 //!
-//! Stated as roles rather than as names at each call site, so a project says once what it
-//! wants and the loop never has a model name written into it.
+//! A project names a model per role, and the loop never has a model name written into it.
 
 use std::collections::BTreeMap;
 
@@ -23,15 +22,14 @@ pub enum Role {
     Edit,
     /// Finding out where something is. Answered by a delegated session.
     Search,
-    /// Turning a malformed reply into the shape that was asked for. A small, mechanical
-    /// job with nothing to reason about.
+    /// Turning a malformed reply into the shape that was asked for.
+    /// A small, mechanical job with nothing to reason about.
     Repair,
     /// Where to go when the cheap path has been shown to be wrong: the model asked to
     /// clean up after a step whose change did not compile.
     Escalate,
-    /// A second pair of eyes on a change, before it is written. Read-only work with one
-    /// question to answer, so a small model does it, and 2 models disagreeing is worth
-    /// more than either of them alone.
+    /// A second pair of eyes on a change, before it is written.
+    /// Read-only work with one question to answer, so a small model does it.
     Review,
 }
 
@@ -62,8 +60,9 @@ impl Role {
 /// What the configuration says each role should use.
 ///
 /// Every field is optional and falls back to the session's model, so a project can name
-/// one role and leave the rest alone. Nothing here changes behaviour on its own: it says
-/// what is available to whoever is choosing.
+/// one role and leave the rest alone.
+/// Nothing here changes behaviour on its own.
+/// It says what is available to whoever is choosing.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Roles {

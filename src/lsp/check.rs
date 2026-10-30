@@ -1,9 +1,11 @@
 //! What a write did to what the language servers report.
 //!
-//! The servers are told of the written files as changed and saved, which is what starts a
-//! server's own build where it has one. Once they have published about the new text and
-//! have no work left in hand, what they report is compared with what they reported before:
-//! only what the write introduced is news, in the written files and in any other.
+//! The servers are told of the written files as changed and saved.
+//! That starts a server's own build where it has one.
+//!
+//! Once the servers have published about the new text and have no work left in hand,
+//! what they report is compared with what they reported before.
+//! Only what the write introduced is news, in the written files and in any other.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,8 +19,11 @@ use crate::lsp::position;
 use crate::lsp::server::{Published, Server};
 use crate::lsp::LspPool;
 
-/// Opens what a check that found errors adds to a write's result. The model reads it, the
-/// step record reads it to know the check failed, and the screen marks the step.
+/// Opens what a check that found errors adds to a write's result.
+///
+/// The model reads it.
+/// The step record reads it to know the check failed.
+/// The screen marks the step.
 pub const CHECK_FAILED: &str = "the language server reports:";
 
 /// Opens what a check that found no new error adds to a write's result.
@@ -223,8 +228,10 @@ async fn check_one(server: &Server, root: &Path, files: &[PathBuf]) -> Verdict {
     }
 }
 
-/// Wait until `server` has published about each of `targets` as last sent, has no work in
-/// hand and has been silent for a moment. Says why when it does not within `at_most`.
+/// Wait until `server` has published about each of `targets` as last sent.
+///
+/// The server must also have no work in hand and have been silent for a moment.
+/// Says why when it does not within `at_most`.
 pub async fn settle(
     server: &Server,
     targets: &[(Url, i32, bool)],
@@ -291,7 +298,7 @@ fn is_current(published: Option<&Published>, version: i32, sent: bool, asked: In
     }
 }
 
-/// What a diagnostic is, regardless of where it sits: lines move when a file is edited.
+/// What a diagnostic is, regardless of where it sits.
 fn key(d: &Diagnostic) -> (Option<String>, Option<String>, String) {
     (
         d.severity.map(|s| format!("{s:?}")),
@@ -330,8 +337,10 @@ fn code(d: &Diagnostic) -> Option<String> {
     })
 }
 
-/// One diagnostic as a line a model can act on: where it is in characters, its severity
-/// and code, what it says, and the source line under it.
+/// One diagnostic as a line a model can act on.
+///
+/// The line holds where it is in characters, its severity and code, what it says,
+/// and the source line under it.
 pub async fn describe(server: &Server, root: &Path, uri: &Url, d: &Diagnostic) -> String {
     let path = uri.to_file_path().unwrap_or_default();
     let shown = path
@@ -363,10 +372,11 @@ mod tests {
     use super::*;
     use lsp_types::{Position, Range};
 
-    /// Against a real rust-analyzer: a type error is reported with its code, a signature
-    /// change is reported in the file that calls it, and the fix passes.
+    /// Against a real rust-analyzer, a type error is reported with its code.
+    /// A signature change is reported in the file that calls it.
+    /// The fix passes.
     ///
-    /// Ignored because it needs rust-analyzer and a toolchain, and takes seconds to index.
+    /// Ignored because it needs rust-analyzer and a toolchain.
     #[tokio::test]
     #[ignore]
     async fn rust_analyzer_reports_what_a_write_broke() {

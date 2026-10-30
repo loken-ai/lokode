@@ -1,11 +1,15 @@
 //! Skills: know-how the model loads when it needs it.
 //!
-//! A skill is a directory holding a `SKILL.md`, in `~/.config/lokode/skills/` or in the
-//! project's `.lokode/skills/`, named by its directory, the project's taking the place of
-//! the user's. Its file opens with a description between 2 `---` lines, and the rest is
-//! the know-how. The model sees each skill's name and description in the tool's
-//! description and loads one by name, or a file the skill keeps beside it. A window holds
-//! what is used, not everything that could be.
+//! A skill is a directory holding a `SKILL.md`.
+//! Skills are read from `~/.config/lokode/skills/` and from the project's `.lokode/skills/`.
+//! A skill is named by its directory.
+//! The project's skill takes the place of the user's.
+//!
+//! The file opens with a description between 2 `---` lines.
+//! The rest is the know-how.
+//!
+//! The model sees each skill's name and description in the tool's description.
+//! It loads one by name, or a file the skill keeps beside it.
 
 use std::path::{Path, PathBuf};
 
@@ -34,8 +38,8 @@ pub fn dirs(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The skills of `dirs`, a later directory's taking the place of an earlier one's. Says
-/// what it could not read.
+/// The skills of `dirs`, a later directory's taking the place of an earlier one's.
+/// Says what it could not read.
 pub fn load(dirs: &[PathBuf]) -> (Vec<Skill>, Vec<String>) {
     let mut out: Vec<Skill> = Vec::new();
     let mut warnings = Vec::new();
@@ -88,7 +92,7 @@ fn read(dir: &Path) -> Result<(String, String), String> {
     for (key, value) in settings {
         match key.as_str() {
             "description" => description = value,
-            // Written by other tools' skills, and harmless here.
+            // Fields written by other tools' skills are ignored.
             "name"
             | "license"
             | "metadata"
@@ -245,8 +249,8 @@ mod tests {
         std::fs::write(d.join("SKILL.md"), text).unwrap();
     }
 
-    /// The project's skill takes the place of the user's, and one without a description
-    /// is refused with a word.
+    /// The project's skill takes the place of the user's.
+    /// A skill without a description is refused with a word.
     #[test]
     fn skills_are_found_by_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -271,8 +275,9 @@ mod tests {
         assert_eq!(warnings.len(), 1, "{warnings:?}");
     }
 
-    /// Loading a skill gives its know-how and what it keeps, and a kept file loads; a file
-    /// outside it does not.
+    /// Loading a skill gives its know-how and what it keeps.
+    /// A kept file loads.
+    /// A file outside it does not.
     #[tokio::test]
     async fn a_skill_loads_with_its_files() {
         let dir = tempfile::tempdir().unwrap();

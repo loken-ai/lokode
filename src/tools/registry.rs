@@ -18,7 +18,8 @@ use crate::sandbox::approval::{
 pub trait Editor: Send + Sync {
     /// The text the editor holds for `path`, or `None` when it does not say.
     async fn read(&self, path: &Path) -> Option<String>;
-    /// Hand the editor `contents` for `path`. Says whether it took them.
+    /// Hand the editor `contents` for `path`.
+    /// Says whether it took them.
     async fn write(&self, path: &Path, contents: &str) -> bool;
 }
 
@@ -28,69 +29,60 @@ pub struct ToolCtx {
     pub editor: Option<Arc<dyn Editor>>,
     /// What the configuration settles in advance, and how much of it one turn may use.
     pub policy: Arc<crate::sandbox::policy::Policy>,
-    /// Requests the policy has granted this turn. Reset when a turn starts, because a cap
-    /// is about one piece of work rather than about a session.
+    /// Requests the policy has granted this turn.
+    /// Reset when a turn starts.
     pub auto_used: Arc<AtomicUsize>,
     /// Whether the session calling is planning, so that work it hands on changes nothing.
     pub planning: bool,
     /// Where a tool sends what it is printing, while it prints it.
     ///
-    /// A build takes minutes and says nothing until it is over, which is indistinguishable
-    /// from a build that has hung. `None` for a caller with no screen: a script reads the
-    /// result, and a line at a time would only be noise in its log.
+    /// `None` for a caller with no screen.
     pub live: Option<tokio::sync::mpsc::Sender<LiveOutput>>,
-    /// The id of the call being run, so what it prints reaches the step it belongs to
-    /// when calls to the same tool run side by side. `None` outside a call.
+    /// The id of the call being run, so what it prints reaches the step it belongs to.
+    /// `None` outside a call.
     pub call: Option<String>,
     /// Whether the configuration's allow list applies.
     ///
-    /// False for a run driven by a script, where the policy stated on the command line is
-    /// the narrower statement and the one its author made for that run. A refusal in the
-    /// configuration still applies either way: nothing may widen one.
+    /// False for a run driven by a script, where the policy stated on the command line applies.
+    /// A refusal in the configuration applies either way: nothing may widen one.
     pub honour_allow: bool,
     pub root: PathBuf,
     pub approval: ApprovalSender,
     pub session_approvals: Arc<SessionApprovals>,
     /// Characters a single tool result may contribute to the conversation.
     ///
-    /// Derived from the session's budget rather than chosen per tool: a result is only
-    /// ever large relative to the window it has to fit in, and a ceiling set without
-    /// reference to that window lets one file read exceed the entire conversation.
+    /// Derived from the session's budget, so a result fits the window.
     pub max_output_chars: usize,
     /// Cancelled when the user abandons the turn this tool call belongs to.
     ///
-    /// A tool that can wait - on a subprocess, on a socket - must race its work against
-    /// this, or `Esc` only takes effect once the thing the user wanted to stop has
-    /// finished on its own.
+    /// A tool that can wait, on a subprocess or on a socket, must race its work against this.
     pub cancel: CancellationToken,
     /// Shared HTTP client, so a connection pool survives between calls.
     pub http: reqwest::Client,
     /// Hosts the user has declared reachable despite resolving to a private address.
     ///
-    /// Without this the address guard would make a locally-served doc site unreachable,
-    /// which is a normal thing to want from a tool that runs on your own machine.
+    /// The address guard refuses them otherwise.
     pub allow_hosts: Arc<HashSet<String>>,
     /// What confines the commands the agent runs, or `None` to leave them unconfined.
     pub sandbox: Option<Arc<crate::sandbox::confine::Sandbox>>,
     /// What each file held the last time a tool read or wrote it.
     ///
-    /// A whole-file write is written against what the model believes the file says. If
-    /// someone changed it in their editor in between, that belief is out of date and the
-    /// write silently discards their work.
+    /// A whole-file write is written against what the model believes the file says.
+    /// A change made elsewhere in between makes that belief out of date.
     pub known: Arc<std::sync::Mutex<HashMap<PathBuf, u64>>>,
     /// The end of what the call has printed, which the screen reads when told it changed.
     pub tail: Arc<Tail>,
     /// The files agents working in the background are changing, shared by the session.
     pub claims: Arc<Claims>,
-    /// The agent working in the background this context belongs to, by number and name,
+    /// The agent working in the background this context belongs to, by number and name.
     /// `None` for the session and the agents it waits for.
     pub holder: Option<(u64, String)>,
     /// The work agents did in their own copies, waiting for the session to bring it in.
     pub works: crate::tools::worktree::Pending,
     /// The hooks told when the session waits for the person.
     pub notify: Arc<Vec<crate::config::Hook>>,
-    /// What the person asked this session, in order: the project's objectives when an
-    /// agent's work is reconciled with it.
+    /// What the person asked this session, in order.
+    /// These are the project's objectives when an agent's work is reconciled with it.
     pub asked: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
@@ -102,8 +94,8 @@ pub struct Claims {
 }
 
 impl Claims {
-    /// Take `path` for `holder`, the agent `agent`, or say who holds it. `None` stands for
-    /// the session, which takes nothing and may write what nobody holds.
+    /// Take `path` for `holder`, the agent `agent`, or say who holds it.
+    /// `None` stands for the session, which takes nothing and may write what nobody holds.
     pub fn take(&self, path: &Path, holder: Option<(u64, &str)>) -> Result<(), String> {
         let Ok(mut held) = self.held.lock() else {
             return Ok(());
@@ -150,8 +142,8 @@ pub const TAIL_LINES: usize = 400;
 
 /// The last lines a call printed, shared with the screen.
 ///
-/// The screen is told once that there is something new and reads all of it then, so a call
-/// that prints faster than the screen draws loses no line of its tail.
+/// The screen is told once that there is something new and reads all of it then.
+/// A call that prints faster than the screen draws loses no line of its tail.
 #[derive(Debug, Default)]
 pub struct Tail {
     lines: std::sync::Mutex<std::collections::VecDeque<String>>,
@@ -159,8 +151,8 @@ pub struct Tail {
 }
 
 impl Tail {
-    /// Keep `line`, and say whether the screen has to be told: it does when it has read
-    /// everything there was.
+    /// Keep `line`, and say whether the screen has to be told.
+    /// It has to be told when it has read everything there was.
     pub fn push(&self, line: String) -> bool {
         if let Ok(mut lines) = self.lines.lock() {
             lines.push_back(line);
@@ -176,8 +168,8 @@ impl Tail {
         self.told.store(false, std::sync::atomic::Ordering::Release);
     }
 
-    /// Everything kept, one line after another. A line kept after this tells the screen
-    /// again.
+    /// Everything kept, one line after another.
+    /// A line kept after this tells the screen again.
     pub fn read(&self) -> String {
         self.told.store(false, std::sync::atomic::Ordering::Release);
         match self.lines.lock() {
@@ -200,19 +192,17 @@ pub fn fingerprint(bytes: &[u8]) -> u64 {
 }
 
 impl ToolCtx {
-    /// A path as it is worth showing: relative to the project, which is how everyone
-    /// involved refers to it.
+    /// A path as it is worth showing: relative to the project.
     ///
-    /// The absolute path is what the tools work with and what the sandbox checks, but on
-    /// a narrow screen it is a line of scaffolding in front of the 3 words that
-    /// matter, and the model does not address files that way either.
+    /// The absolute path is what the tools work with and what the sandbox checks.
     pub fn short(&self, path: &Path) -> String {
         if let Ok(rel) = path.strip_prefix(&self.root) {
             return rel.display().to_string();
         }
-        // A resolved path is canonical and the configured root need not be, so a project
-        // reached through a symbolic link matches neither until the root is canonical
-        // too. Only on the miss: the common case costs nothing.
+        // A resolved path is canonical and the configured root need not be.
+        // A project reached through a symbolic link matches neither until the root is
+        // canonical too.
+        // The root is made canonical only on a miss.
         if let Ok(base) = self.root.canonicalize() {
             if let Ok(rel) = path.strip_prefix(&base) {
                 return rel.display().to_string();
@@ -246,15 +236,16 @@ impl ToolCtx {
         }
     }
 
-    /// Whether this context may write `path`, asked before the person is: a write that
-    /// would be refused is not worth a question.
+    /// Whether this context may write `path`, asked before the person is.
+    /// A write that would be refused is not worth a question.
     pub fn may_write(&self, path: &Path) -> Result<(), String> {
         self.claims
             .check(path, self.holder.as_ref().map(|(id, _)| *id))
     }
 
     /// Hand `contents` of `path` to the editor, when there is one, and make sure the disk
-    /// holds them: the shell, the tests and the change history read the disk.
+    /// holds them.
+    /// The shell, the tests and the change history read the disk.
     pub async fn write_text(&self, path: &Path, contents: &str) -> anyhow::Result<()> {
         self.claims
             .take(path, self.holder.as_ref().map(|(id, a)| (*id, a.as_str())))
@@ -277,8 +268,7 @@ impl ToolCtx {
 
     /// Whether `path` has changed since a tool last saw it.
     ///
-    /// False for a file no tool has read: nothing is known about it, and a guess either
-    /// way would be worse than the caller's own judgement.
+    /// False for a file no tool has read.
     pub fn changed_since_seen(&self, path: &Path, now: &[u8]) -> bool {
         let Ok(known) = self.known.lock() else {
             return false;
@@ -291,9 +281,8 @@ impl ToolCtx {
 
 /// The HTTP client the tools share.
 ///
-/// Redirects are turned off on purpose. `web_fetch` follows them itself so that the
-/// address guard runs again on every hop; leaving the client to follow them would let an
-/// approved public URL bounce to loopback with nobody looking.
+/// Redirects are turned off.
+/// `web_fetch` follows them itself, so the address guard runs again on every hop.
 pub fn tool_http_client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -305,15 +294,14 @@ pub fn tool_http_client() -> Result<reqwest::Client> {
 impl ToolCtx {
     /// Settle whether this action may go ahead.
     ///
-    /// Everything a gated tool has to do about approval: skip the question if its scope
-    /// was already agreed to, put it to the user otherwise, record an `Always`, and
-    /// notice if the turn is abandoned while the prompt is on screen. Tools that wrote
-    /// this out longhand each held their own copy of the rule about what `Always` means,
-    /// which is how it came to mean the whole tool.
+    /// Skips the question if its scope was already agreed to.
+    /// Puts it to the user otherwise.
+    /// Records an `Always`.
+    /// Notices if the turn is abandoned while the prompt is on screen.
     pub async fn approve(&self, req: ApprovalRequest) -> Approval {
-        // The configuration is read first, and its refusals answer on their own: a rule
-        // written down so that something never happens must not be reachable by an
-        // agreement given in a hurry at the modal.
+        // The configuration is read first, and its refusals answer on their own.
+        // A rule written down so that something never happens is not reachable by an
+        // agreement given at the modal.
         let mut insist = false;
         match self.policy.verdict(
             &req.scope,
@@ -351,9 +339,9 @@ impl ToolCtx {
             crate::sandbox::policy::Verdict::Allowed => {}
             crate::sandbox::policy::Verdict::Ask => {}
         }
-        // A standing decision for writes, taken deliberately for a stretch of work. It
-        // covers writes and nothing else: a command and a request leaving the machine stay
-        // asked about, because those are the 2 a person most wants to see coming.
+        // A standing decision for writes, taken for a stretch of work.
+        // It covers writes and nothing else.
+        // A command and a request leaving the machine stay asked about.
         if !insist && self.session_approvals.writes_accepted(&req.scope) {
             tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by accepting writes");
             return Approval::Proceed;
@@ -377,8 +365,7 @@ impl ToolCtx {
             }
             d = approval::ask_for(&self.approval, req, self.call.clone()) => d,
         };
-        // Worth recording at every session: what the user agreed to, and how widely, is
-        // the first question anyone asks about a run that did something unexpected.
+        // Recorded at every session: what the user agreed to, and how widely.
         tracing::info!(%tool, ?decision, ?scope, "approval decided");
         match decision {
             ApprovalDecision::Deny(why) => Approval::Denied(Denial::User(why)),
@@ -390,8 +377,8 @@ impl ToolCtx {
         }
     }
 
-    /// Report what a session this call runs is doing, a step at a time. Waited for: a step
-    /// that never reported its end would be shown running for ever.
+    /// Report what a session this call runs is doing, a step at a time.
+    /// Waited for, so a step that never reported its end is not shown running for ever.
     pub async fn report(&self, tool: &str, sub: SubEvent) {
         self.tell(tool, Live::Sub(sub)).await;
     }
@@ -425,7 +412,8 @@ impl ToolCtx {
     }
 
     /// Keep a line a tool has just printed in the call's tail, and tell the screen when it
-    /// has read the rest. Never waits: a build is not held up for the screen.
+    /// has read the rest.
+    /// Never waits.
     pub fn show(&self, tool: &str, line: &str) {
         if let Some(live) = &self.live {
             if self.tail.push(line.to_string()) {
@@ -444,10 +432,8 @@ impl ToolCtx {
     /// Cut `s` to what one result may contribute, saying so in the text so the model
     /// reads a deliberate elision rather than a file that ends mid-line.
     ///
-    /// The notice states the arithmetic. A result that ends in a bare "truncated" reads
-    /// like the end of the file, and a model that believes it has seen a whole file
-    /// answers about the part it was not shown; one that is told how much is left asks
-    /// for the rest, by range where the tool takes one.
+    /// The notice states how much is left, so the model can ask for the rest.
+    /// It asks by range where the tool takes one.
     pub fn clamp(&self, mut s: String) -> String {
         if s.len() > self.max_output_chars {
             let whole = s.len();
@@ -533,8 +519,8 @@ impl ToolOutput {
 
 #[async_trait]
 pub trait Tool: Send + Sync {
-    /// Borrowed rather than `&'static str`, because a tool can come from somewhere that
-    /// was not known at compile time - an MCP server names its own.
+    /// Borrowed, because a tool can come from somewhere unknown at compile time.
+    /// An MCP server names its own.
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     /// JSON Schema for the `arguments` object the model must emit.
@@ -542,17 +528,16 @@ pub trait Tool: Send + Sync {
 
     /// Whether running this can leave the project different from how it found it.
     ///
-    /// Declared here rather than inferred from the tool's name, so that the loop can take a
-    /// checkpoint around exactly the calls that need one. A tool that runs something is
-    /// mutating even when it usually changes nothing: `bash` and the test runner both
-    /// execute code that is free to write.
+    /// The loop takes a checkpoint around exactly the calls that need one.
+    /// A tool that runs something is mutating even when it usually changes nothing.
+    /// `bash` and the test runner both execute code that is free to write.
     fn mutates(&self) -> bool {
         false
     }
 
-    /// Whether a call can leave files changed without being gated as a change itself, as
-    /// one that hands work to a session whose own tools ask. Such a call is recorded for
-    /// `/undo` once it ends.
+    /// Whether a call can leave files changed without being gated as a change itself.
+    /// An example is a call that hands work to a session whose own tools ask.
+    /// Such a call is recorded for `/undo` once it ends.
     fn may_change(&self) -> bool {
         false
     }
@@ -578,8 +563,8 @@ impl Registry {
     /// Register something already behind a pointer, which is how a tool built at runtime
     /// arrives.
     ///
-    /// Returns false when the name is taken. A silent overwrite would let one server
-    /// shadow a built-in tool by naming itself after it.
+    /// Returns false when the name is taken.
+    /// A name is never overwritten, so no server shadows a built-in tool.
     pub fn add(&mut self, tool: Arc<dyn Tool>) -> bool {
         let name = tool.name().to_string();
         if self.tools.contains_key(&name) {
@@ -630,8 +615,9 @@ impl Default for Registry {
 mod tests {
     use super::*;
 
-    /// A file an agent in the background wrote is its own until it is released: the
-    /// session and the other agents are refused, the agent itself is not.
+    /// A file an agent in the background wrote is its own until it is released.
+    /// The session and the other agents are refused.
+    /// The agent itself is not.
     #[test]
     fn a_file_is_held_by_the_agent_writing_it() {
         let claims = Claims::default();
@@ -648,8 +634,8 @@ mod tests {
     }
     use crate::tools::harness::{Answer, Harness};
 
-    /// The harness is returned rather than dropped, because the context it hands out
-    /// points into a temporary directory it owns.
+    /// The harness is returned, because the context it hands out points into a temporary
+    /// directory it owns.
     fn with_ceiling(n: usize) -> Harness {
         let mut h = Harness::new(Answer::No);
         h.ctx.max_output_chars = n;
@@ -673,17 +659,17 @@ mod tests {
         );
     }
 
-    /// Truncating by byte count lands mid-character on anything but ASCII, and a `String`
-    /// cut there is not a `String` at all - it panics. Emoji are 4 bytes, so a ceiling
-    /// that is not a multiple of four falls inside one.
+    /// Truncating by byte count lands mid-character on anything but ASCII.
+    /// A cut inside a character panics.
+    /// Emoji are 4 bytes, so a ceiling that is not a multiple of 4 falls inside one.
     #[tokio::test]
     async fn cutting_never_lands_inside_a_character() {
         for ceiling in 1..24 {
             let h = with_ceiling(ceiling);
             let out = h.ctx.clamp("🙂🙂🙂🙂🙂🙂".into());
             assert!(out.contains("truncated"), "ceiling {ceiling} did not cut");
-            // Getting here at all means the cut was on a boundary; this pins down that
-            // no half-character was left behind.
+            // Getting here means the cut was on a boundary.
+            // No half-character was left behind.
             assert!(
                 !out.split("\n… (truncated")
                     .next()

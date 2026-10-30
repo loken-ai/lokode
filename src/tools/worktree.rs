@@ -1,9 +1,10 @@
 //! A copy of the project for an agent that changes files in the background.
 //!
-//! The agent works in a git worktree of its own, outside the project, made from the project
-//! as it stood, files not committed or not tracked included. Its shell may write only there.
-//! Nothing it does reaches the project until the session brings its work in with
-//! `take_work`, and the session is made to look first:
+//! The agent works in a git worktree of its own, outside the project.
+//! It is made from the project as it stood, files not committed or not tracked included.
+//! Its shell may write only there.
+//! Nothing it does reaches the project until the session brings its work in with `take_work`.
+//! The session is made to look first:
 //!
 //! | Since the agent started, the project | `take_work` |
 //! |---|---|
@@ -12,12 +13,14 @@
 //! | changed files, and the session wrote those both touched with `merged` | brings in the rest |
 //!
 //! The session thus reconciles what both sides meant itself, and the whole stays coherent.
-//! The worktree goes once its work is in, and stays, with its path said, when it cannot be.
+//! The worktree goes once its work is in.
+//! It stays, with its path said, when the work cannot come in.
 //!
-//! A project outside git is copied through a private repository kept in the same place, which
-//! holds where the agent started and goes with the copy. A project too large to copy, or one
-//! its repository does not track, has no copy: the agent writes in the project, holding what
-//! it writes until it answers.
+//! A project outside git is copied through a private repository kept in the same place.
+//! That repository holds where the agent started, and goes with the copy.
+//!
+//! A project too large to copy, or one its repository does not track, has no copy.
+//! The agent writes in the project, holding what it writes until it answers.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -43,28 +46,30 @@ pub struct Work {
     pub dir: PathBuf,
     /// The project's directory inside the copy, where the agent works.
     pub root: PathBuf,
-    /// The top of the project, where the work comes in: its repository's top, or the
-    /// project itself when it is not in git.
+    /// The top of the project, where the work comes in.
+    /// It is its repository's top, or the project itself when it is not in git.
     top: PathBuf,
-    /// The private repository kept for a project outside git, which holds where the agent
-    /// started. `None` when the project's own repository does.
+    /// The private repository kept for a project outside git.
+    /// It holds where the agent started.
+    /// `None` when the project's own repository does.
     git_dir: Option<PathBuf>,
     /// The commit the copy started from.
     base: String,
-    /// How many of the session's questions had been asked when the agent started: those
-    /// after are what the project changed for meanwhile.
+    /// How many of the session's questions had been asked when the agent started.
+    /// Those after are what the project changed for meanwhile.
     pub asked_from: usize,
     /// What the agent said it did.
     pub answer: String,
-    /// The project as the session was shown it, once it was: the side its proof answers.
+    /// The project as the session was shown it, once it was.
+    /// It is the side its proof answers.
     reviewed: Option<String>,
 }
 
 /// Opens what `take_work` says when the proofs do not account for the files.
 pub const REFUSED: &str = "Nothing was written: the proofs do not account for";
 
-/// Bytes of a project outside git a copy may hold. A larger project is worked in directly,
-/// its files held for the agent, rather than copied.
+/// Bytes of a project outside git a copy may hold.
+/// A larger project is worked in directly, its files held for the agent, rather than copied.
 const MAX_COPY_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Characters of an objective shown in a review: the agent's answer, a question asked.
@@ -126,9 +131,9 @@ fn changes(base: &str, side: &str) -> (Vec<String>, Vec<String>) {
     (added, removed)
 }
 
-/// What `result` fails to keep of what the agent and the project each changed from
-/// `base`, and that `dropped` does not account for: a line one side added that is missing,
-/// a line one side removed that is still there.
+/// What `result` fails to keep of what the agent and the project each changed from `base`.
+/// Only what `dropped` does not account for counts.
+/// That is a line one side added that is missing, and a line one side removed that is still there.
 pub fn unproven(
     base: &str,
     agent: &str,
@@ -185,8 +190,8 @@ async fn git_raw(dir: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Result<Ve
         .args(args)
         .envs(envs.iter().map(|(k, v)| (*k, *v)))
         .current_dir(dir)
-        // The commit that holds what is not committed is lokode's, and needs no identity of
-        // the user's.
+        // The commit that holds what is not committed is lokode's.
+        // It needs no identity of the user's.
         .env("GIT_AUTHOR_NAME", "lokode")
         .env("GIT_AUTHOR_EMAIL", "lokode@localhost")
         .env("GIT_COMMITTER_NAME", "lokode")
@@ -204,9 +209,10 @@ async fn git_raw(dir: &Path, args: &[&str], envs: &[(&str, &Path)]) -> Result<Ve
     Ok(out.stdout)
 }
 
-/// A commit of the project at `top` as it stands, files not committed and files git does
-/// not track included, its ignored files left out. Made with an index of its own in
-/// `home`, so the project's branch, index and stash are not touched.
+/// A commit of the project at `top` as it stands.
+/// It holds files not committed and files git does not track, and leaves its ignored files out.
+/// It is made with an index of its own in `home`.
+/// The project's branch, index and stash are not touched.
 async fn snapshot(top: &Path, home: &Path, id: u64, repo: &[(&str, &Path)]) -> Result<String> {
     let index = home.join(format!("index-{id}-{}", std::process::id()));
     let mut envs: Vec<(&str, &Path)> = repo.to_vec();
@@ -274,23 +280,27 @@ impl Sides {
 /// What `take_work` did.
 #[derive(Debug)]
 pub enum Taken {
-    /// The work is in the project: the files it changed, and what the coherence check is
-    /// given when the project changed meanwhile.
+    /// The work is in the project.
+    /// It holds the files it changed.
+    /// It holds what the coherence check is given when the project changed meanwhile.
     In {
         files: Vec<String>,
         evidence: Option<String>,
     },
-    /// Nothing was written: what the session has to look at first.
+    /// Nothing was written.
+    /// It holds what the session has to look at first.
     Review(String),
-    /// Nothing was written: what the proofs do not account for.
+    /// Nothing was written.
+    /// It holds what the proofs do not account for.
     Refused(Vec<String>),
 }
 
 impl Work {
-    /// A copy, made in `home`, of the project at `root` for the agent `agent`, numbered
-    /// `id`, as the project stands now. A project outside git has a private repository kept
-    /// for it in `home`, which holds where the agent started. `None` when the project is
-    /// too large to copy.
+    /// A copy, made in `home`, of the project at `root` for the agent `agent`, numbered `id`.
+    /// It is made from the project as it stands now.
+    /// A project outside git has a private repository kept for it in `home`.
+    /// That repository holds where the agent started.
+    /// `None` when the project is too large to copy.
     pub async fn make(
         home: &Path,
         root: &Path,
@@ -332,8 +342,9 @@ impl Work {
             return Ok(None);
         }
         let shown = work.dir.display().to_string();
-        // Only the repository's own directory: a work tree named here would make git take
-        // the project for the main checkout of a repository it is not.
+        // Only the repository's own directory.
+        // A work tree named here would make git take the project for the main checkout of a
+        // repository it is not.
         let envs: Vec<(&str, &Path)> = work
             .git_dir
             .iter()
@@ -347,8 +358,9 @@ impl Work {
         .await?;
         let inside = root.strip_prefix(&work.top).unwrap_or(Path::new(""));
         work.root = work.dir.join(inside);
-        // A project its repository does not track, an ignored directory of an enclosing one,
-        // is not in the copy: the agent then writes in the project, holding what it writes.
+        // A project its repository does not track, an ignored directory of an enclosing one, is not
+        // in the copy.
+        // The agent then writes in the project, holding what it writes.
         if !work.root.is_dir() {
             work.remove().await;
             return Ok(None);
@@ -367,8 +379,7 @@ impl Work {
         }
     }
 
-    /// Git in the project's side: its repository, or the private one for a project outside
-    /// git.
+    /// Git in the project's side: its repository, or the private one for a project outside git.
     async fn pg(&self, args: &[&str]) -> Result<String> {
         let out = git_raw(&self.top, args, &self.repo_env()).await?;
         Ok(String::from_utf8_lossy(&out).trim_end().to_string())
@@ -453,9 +464,10 @@ impl Work {
         .unwrap_or_default()
     }
 
-    /// Bring the work in, or say what the session must do first. `proofs` say how each
-    /// file both sides changed was reconciled; `None` until the session looked. `asked`
-    /// are the session's questions, for the project's objectives.
+    /// Bring the work in, or say what the session must do first.
+    /// `proofs` say how each file both sides changed was reconciled.
+    /// It is `None` until the session looked.
+    /// `asked` are the session's questions, for the project's objectives.
     pub async fn take(
         &mut self,
         proofs: Option<&[Proof]>,
@@ -516,8 +528,9 @@ impl Work {
         })
     }
 
-    /// Copy into the project the files of `agent` but those in `skip`, the session having
-    /// written those itself. Gives the files copied.
+    /// Copy into the project the files of `agent` but those in `skip`.
+    /// The session wrote those itself.
+    /// Gives the files copied.
     fn copy_in(&self, agent: &[String], skip: &[String]) -> Result<Vec<String>> {
         let mut brought = Vec::new();
         for path in agent.iter().filter(|f| !skip.contains(f)) {
@@ -538,8 +551,8 @@ impl Work {
         Ok(brought)
     }
 
-    /// Both objectives, the agent's task with what it said it did and the last questions
-    /// asked since, each cut short.
+    /// Both objectives, the agent's task with what it said it did and the last questions asked
+    /// since, each cut short.
     fn objectives(&self, asked: &[String]) -> String {
         let short = |t: &str| t.chars().take(SHOWN_GOAL).collect::<String>();
         let since: Vec<String> = asked
@@ -560,8 +573,9 @@ impl Work {
         )
     }
 
-    /// What the coherence check is given: both objectives and the 2 sides' changes since
-    /// the agent started, without their context lines and cut short.
+    /// What the coherence check is given.
+    /// It holds both objectives and the 2 sides' changes since the agent started, without their
+    /// context lines and cut short.
     async fn evidence(&self, sides: &Sides, asked: &[String]) -> String {
         // Without git's own headers, which say nothing the file names and hunks do not.
         let cut = |t: String| {
@@ -589,8 +603,9 @@ impl Work {
         )
     }
 
-    /// What the session reads before bringing the work in: both objectives, what the
-    /// project changed since the agent started, and both sides of every file both changed.
+    /// What the session reads before bringing the work in.
+    /// It holds both objectives, what the project changed since the agent started, and both sides
+    /// of every file both changed.
     /// The agent's own patch was in its answer, and is not repeated.
     async fn review(
         &self,
@@ -661,8 +676,8 @@ impl Work {
         }
     }
 
-    /// What the session is told once the agent answered: its answer, what it changed and
-    /// how to bring it in.
+    /// What the session is told once the agent answered.
+    /// It holds its answer, what it changed and how to bring it in.
     pub async fn report(&self, answer: &str, max_chars: usize) -> String {
         let patch = self.patch().await.unwrap_or_default();
         let files = self.sides().await.map(|s| s.agent).unwrap_or_default();
@@ -686,8 +701,8 @@ impl Work {
     }
 }
 
-/// Who checks that 2 changes made apart fit together once they are in one project: a
-/// model asked one question about the 2 changes, with nothing else of the session.
+/// Who checks that 2 changes made apart fit together once they are in one project.
+/// A model is asked one question about the 2 changes, with nothing else of the session.
 #[derive(Clone)]
 pub struct Reviewer {
     pub backend: Arc<dyn crate::backend::provider::Provider>,
@@ -697,8 +712,8 @@ pub struct Reviewer {
 }
 
 impl Reviewer {
-    /// What does not fit between the 2 changes in `evidence`, a line a problem, or `None`
-    /// when they fit or the check could not be made.
+    /// What does not fit between the 2 changes in `evidence`, a line a problem.
+    /// `None` when they fit or the check could not be made.
     pub async fn check(
         &self,
         evidence: &str,
@@ -846,8 +861,8 @@ impl Tool for TakeWork {
                 lacking.join("\n")
             ))),
             Ok(Taken::In { files, evidence }) => {
-                // Both changes are in the project: a model reads them together, once, when
-                // the project changed meanwhile.
+                // Both changes are in the project.
+                // A model reads them together, once, when the project changed meanwhile.
                 let objection = match (&self.reviewer, &evidence) {
                     (Some(reviewer), Some(evidence)) => reviewer.check(evidence, &ctx.cancel).await,
                     _ => None,
@@ -909,8 +924,9 @@ mod tests {
         tool.run(&h.ctx, args).await.unwrap()
     }
 
-    /// A project outside git is copied through a private repository, its ignored files left
-    /// out, its work reconciled as in git, and the private repository goes with the copy.
+    /// A project outside git is copied through a private repository, its ignored files left out.
+    /// Its work is reconciled as in git.
+    /// The private repository goes with the copy.
     #[tokio::test]
     async fn a_project_outside_git_is_copied_and_taken_back() {
         let state = tempfile::tempdir().unwrap();
@@ -979,8 +995,8 @@ mod tests {
         assert!(std::fs::read_dir(state.path()).unwrap().next().is_none());
     }
 
-    /// A copy starts from the project as it stands, files not committed or not tracked
-    /// included, and its work comes in at once when the project did not change since.
+    /// A copy starts from the project as it stands, files not committed or not tracked included.
+    /// Its work comes in at once when the project did not change since.
     #[tokio::test]
     async fn work_comes_in_when_nothing_changed_meanwhile() {
         let state = tempfile::tempdir().unwrap();
@@ -1037,8 +1053,8 @@ mod tests {
         assert!(!work.dir.exists(), "the copy stayed after its work came in");
     }
 
-    /// When the project changed meanwhile nothing is written until the session looked,
-    /// and a file both changed comes in only with a proof the file bears out.
+    /// When the project changed meanwhile, nothing is written until the session looked.
+    /// A file both changed comes in only with a proof the file bears out.
     #[tokio::test]
     async fn the_session_proves_what_it_reconciled() {
         let state = tempfile::tempdir().unwrap();
@@ -1133,8 +1149,9 @@ mod tests {
         assert!(!work.dir.exists());
     }
 
-    /// The coherence check is asked once, only when the project changed meanwhile, with the
-    /// 2 sides and the objectives and nothing else, and its objection is given back.
+    /// The coherence check is asked once, only when the project changed meanwhile.
+    /// It is given the 2 sides and the objectives and nothing else.
+    /// Its objection is given back.
     #[tokio::test]
     async fn the_coherence_check_reads_both_sides_once() {
         use crate::backend::wire::Message;
@@ -1193,7 +1210,8 @@ mod tests {
         let tool = TakeWork::new(pending, Some(reviewer));
         let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
         *h.ctx.asked.lock().unwrap() = vec!["rename parse to read".into()];
-        // The first call only reviews. The second, with no file both changed, lands.
+        // The first call only reviews.
+        // The second, with no file both changed, lands.
         let review = tool.run(&h.ctx, json!({"work": 5})).await.unwrap();
         assert!(
             review.content.starts_with("Nothing was written"),
@@ -1231,8 +1249,9 @@ mod tests {
         );
     }
 
-    /// A line one side added must be kept and a line one side removed must be gone, unless
-    /// the proof says why; lines that say nothing are not followed.
+    /// A line one side added must be kept.
+    /// A line one side removed must be gone, unless the proof says why.
+    /// Lines that say nothing are not followed.
     #[test]
     fn a_proof_accounts_for_every_line() {
         let base = "fn a() {\n    old();\n}\n";

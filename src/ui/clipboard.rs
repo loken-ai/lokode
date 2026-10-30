@@ -1,27 +1,27 @@
 //! Putting text on the clipboard through the terminal itself.
 //!
-//! The pane is on an alternate screen, so there is no scrollback to select from, and the
-//! program cannot reach a clipboard the way a windowed application would - least of all
-//! over ssh, which is where a local-first agent is often driven from.
+//! The pane is on an alternate screen, so there is no scrollback to select from.
+//! The program cannot reach a clipboard the way a windowed application would.
+//! This holds most of all over ssh.
 //!
-//! The terminal can, and has been able to since OSC 52: a control sequence carrying
-//! base64, which the terminal puts on its own clipboard, on whichever machine it is
-//! running. No dependency, no daemon, and it works through ssh and tmux.
+//! The terminal can, through OSC 52.
+//! It is a control sequence carrying base64, which the terminal puts on its own clipboard.
+//! It works through ssh and tmux and needs no dependency and no daemon.
 
 use std::io::Write;
 
-/// How much may be sent. Terminals bound what they will accept and a conversation is not a
-/// file transfer; past this the copy is written to disk instead.
+/// How much may be sent.
+/// Terminals bound what they accept, and past this the copy is written to disk instead.
 pub const MOST: usize = 100_000;
 
 /// Put `text` on the terminal's clipboard.
 ///
-/// Best effort by construction: the terminal either understands the sequence or ignores
-/// it, and says nothing either way, so the caller must always offer another way out.
+/// Best effort: the terminal either understands the sequence or ignores it, and says nothing.
+/// The caller must always offer another way out.
 pub fn put(text: &str) -> std::io::Result<()> {
     let encoded = base64(text.as_bytes());
     let mut out = std::io::stdout();
-    // tmux passes the sequence through only when told to; the wrapper is what tells it.
+    // tmux passes the sequence through only when wrapped.
     let inner = format!("\x1b]52;c;{encoded}\x07");
     if std::env::var_os("TMUX").is_some() {
         write!(out, "\x1bPtmux;\x1b{inner}\x1b\\")?;
@@ -31,7 +31,7 @@ pub fn put(text: &str) -> std::io::Result<()> {
     out.flush()
 }
 
-/// Base64, written out rather than depended on: one table and 3 shifts.
+/// Base64: one table and 3 shifts.
 fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);

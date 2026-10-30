@@ -13,18 +13,16 @@ use crate::ui::commands::command_choices;
 
 /// Whether the cursor is at the very start of the input.
 ///
-/// The test for "the arrows are free to mean history": anywhere else they are how you move
-/// around what you are writing, and taking them would throw away a half-written line.
+/// The arrows are free to mean history only there.
+/// Anywhere else they move the cursor, and taking them would throw away a half-written line.
 pub(crate) fn at_start(input: &TextArea) -> bool {
     input.cursor() == (0, 0)
 }
 
 /// An input holding `text`, with the cursor after it.
 ///
-/// After it, because everything that puts text here puts it there to be carried on with:
-/// a recalled line to be edited, a command just completed to be given an argument. A
-/// cursor left at the start makes the next keystroke insert in front of what is there and
-/// backspace do nothing at all.
+/// The cursor sits after the text, because the text is put here to be carried on with.
+/// That covers a recalled line to be edited and a completed command to be given an argument.
 pub(crate) fn fresh_input(text: &str) -> TextArea<'static> {
     let mut input = TextArea::from(text.lines().map(String::from).collect::<Vec<_>>());
     // The line being typed is not underlined: the cursor says where it is.
@@ -40,19 +38,18 @@ pub(crate) fn fresh_input(text: &str) -> TextArea<'static> {
 
 /// How long an offer to leave stands before it has to be made again.
 ///
-/// Long enough to be a deliberate second press, short enough that a Ctrl-C typed minutes
-/// apart is 2 interruptions rather than an exit.
+/// Long enough to be a deliberate second press.
+/// Short enough that a Ctrl-C typed minutes apart is 2 interruptions rather than an exit.
 pub(crate) const ASK_AGAIN_WITHIN: Duration = Duration::from_secs(3);
 
 /// What a key says about leaving.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Quit {
-    /// Stop what is running, clear what is typed, or offer to leave - in that order,
-    /// because that is the order of what is in front of the person.
+    /// Stop what is running, clear what is typed, or offer to leave, in that order.
     Ask,
-    /// The end-of-input key: on an empty line it means what it has always meant.
+    /// The end-of-input key: on an empty line it leaves.
     OnEmptyLine,
-    /// Asked for in a way that leaves no doubt.
+    /// Leaves from anywhere.
     Now,
 }
 
@@ -91,10 +88,12 @@ impl Quit {
 
 /// What a key that leaves does.
 ///
-/// Ctrl-C stops a turn, then clears the line, then leaves. Ctrl-D leaves from an empty line.
-/// Ctrl-Q leaves from anywhere. None of them leaves on the first press, except Ctrl-Q when
-/// nothing would be lost: the second press of the same key is the answer, and the question
-/// says what would go.
+/// Ctrl-C stops a turn, then clears the line, then leaves.
+/// Ctrl-D leaves from an empty line.
+/// Ctrl-Q leaves from anywhere.
+/// None of them leaves on the first press, except Ctrl-Q when nothing would be lost.
+/// The second press of the same key is the answer.
+/// The question says what would go.
 pub(crate) fn leaving(quit: Quit, stake: AtStake, confirmed: bool) -> Leaving {
     match quit {
         Quit::Ask if stake.busy => return Leaving::StopTurn,
@@ -138,9 +137,9 @@ pub(crate) fn quit_intent(k: &KeyEvent) -> Option<Quit> {
 /// Hand the line being typed to the editor named by the environment, and take back what
 /// comes out.
 ///
-/// The terminal is given up for as long as it runs and taken again afterwards, because 2
-/// programs drawing on one screen is one program's output. `None` when nothing came back
-/// that was worth taking: an editor closed without saving has said no.
+/// The terminal is given up for as long as the editor runs and taken again afterwards.
+/// `None` when nothing came back that was worth taking.
+/// An editor closed without saving gives `None`.
 pub(crate) async fn write_elsewhere(
     term: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     carried: &str,
@@ -159,8 +158,7 @@ pub(crate) async fn write_elsewhere(
         .arg(&path)
         .status()
         .await;
-    // Taken back whatever the editor did, including failing to start: the alternative is a
-    // terminal in the state an editor left it and an interface drawing into it.
+    // The terminal is taken back whatever the editor did, including failing to start.
     let _ = crate::ui::term::TerminalGuard::new();
     let _ = term.clear();
     ran?;
@@ -173,8 +171,8 @@ pub(crate) async fn write_elsewhere(
 
 /// The list the line being typed calls for, carrying over the one already open.
 ///
-/// Rebuilt from the line rather than driven by keystrokes, so the list and the text can
-/// never disagree about what is being completed.
+/// Rebuilt from the line rather than driven by keystrokes.
+/// So the list and the text never disagree about what is being completed.
 pub(crate) fn open_picker(
     input: &TextArea,
     open: Option<crate::ui::picker::Picker>,
@@ -207,8 +205,7 @@ pub(crate) struct Known<'a> {
 
 /// What a command may be given, for finishing it as it is typed.
 ///
-/// A command whose argument is a name nobody keeps in their head is a command that can
-/// only be used by somebody who does. The names are all known here already.
+/// The names are all known here already.
 pub(crate) fn argument_choices(verb: &str, known: &Known<'_>) -> Vec<crate::ui::picker::Choice> {
     use crate::ui::picker::Choice;
     match verb {
@@ -230,8 +227,8 @@ pub(crate) fn argument_choices(verb: &str, known: &Known<'_>) -> Vec<crate::ui::
 
 /// Whether what is typed already is what is highlighted.
 ///
-/// A command typed in full and matched exactly has nothing left to complete, so the key
-/// that sends should send rather than replace the line with itself.
+/// A command typed in full and matched exactly has nothing left to complete.
+/// The key that sends then sends, rather than replacing the line with itself.
 pub(crate) fn nothing_left_to_complete(
     input: &TextArea,
     picker: &Option<crate::ui::picker::Picker>,
@@ -258,8 +255,9 @@ pub(crate) fn accept_choice(
         .iter()
         .any(|c| c.value == chosen && c.about.starts_with(AGENT));
     let (kind, at, _) = crate::ui::picker::token_at(&line)?;
-    // A command is the whole line and is ready to send; an argument finishes one; a file
-    // is one word in a sentence and the sentence carries on after it.
+    // A command is the whole line and is ready to send.
+    // An argument finishes one.
+    // A file is one word in a sentence and the sentence carries on after it.
     Some(match kind {
         // A command that takes an argument is left with the space its list opens on.
         Kind::Command if crate::ui::commands::TAKES_ARGUMENT.contains(&chosen.as_str()) => {
@@ -278,8 +276,7 @@ const AGENT: &str = "agent: ";
 
 /// The files and directories under the root, for naming one with `@`.
 ///
-/// Bounded and gitignore-aware, like everything else that walks the project: a list is for
-/// choosing from, and a list of every file in a large repository is for scrolling through.
+/// Bounded and gitignore-aware, like everything else that walks the project.
 pub(crate) fn path_choices(root: &std::path::Path) -> Vec<crate::ui::picker::Choice> {
     const MOST: usize = 400;
     // The agents first: a line that opens on one hands the rest to it.
@@ -319,9 +316,10 @@ pub(crate) fn path_choices(root: &std::path::Path) -> Vec<crate::ui::picker::Cho
 
 /// Which decision a keystroke stands for at the approval modal.
 ///
-/// `Enter` is deliberately absent. It is also the send key, so a user mid-sentence when
-/// the modal appears would approve a shell command they never read - the one outcome an
-/// approval flow exists to prevent. Approving is a letter you have to reach for.
+/// `Enter` is absent.
+/// It is also the send key, so a user mid-sentence when the modal appears would approve a
+/// shell command they never read.
+/// Approving takes a letter.
 pub(crate) fn approval_key(k: &KeyEvent) -> Option<ApprovalDecision> {
     if k.kind != KeyEventKind::Press {
         return None;
@@ -348,23 +346,22 @@ mod tests {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
     }
 
-    /// Enter is the send key. If it also approves, a user who is mid-sentence when a
-    /// prompt appears authorises a shell command they never read.
+    /// Enter is the send key and must not approve.
     #[test]
     fn enter_does_not_approve() {
         assert_eq!(approval_key(&press(KeyCode::Enter)), None);
     }
 
-    /// A refusal with nothing said is still a refusal: the keys that back out keep
-    /// working, and what they mean does not change.
+    /// A refusal with nothing said is still a refusal.
+    /// The keys that back out keep working, and what they mean does not change.
     #[test]
     fn refusing_says_nothing_unless_something_was_said() {
         assert_eq!(
             approval_key(&press(KeyCode::Char('n'))),
             Some(ApprovalDecision::Deny(None))
         );
-        // The key that asks for a reason is not itself a decision: the decision is made
-        // when what was typed is sent.
+        // The key that asks for a reason is not itself a decision.
+        // The decision is made when what was typed is sent.
         assert_eq!(approval_key(&press(KeyCode::Char('e'))), None);
         assert_eq!(
             crate::sandbox::approval::denial(crate::sandbox::approval::Denial::User(Some(
@@ -378,7 +375,7 @@ mod tests {
         );
     }
 
-    /// Declining must stay reachable by the 2 gestures people already use to back out.
+    /// Declining stays reachable by the 2 gestures that back out.
     #[test]
     fn declining_is_reachable() {
         assert_eq!(
@@ -416,10 +413,9 @@ mod tests {
 
     /// What each of the leaving keys means, and what an ordinary key does not mean.
     ///
-    /// Ctrl-C asks rather than ends: it used to end a session outright, in the middle of a
-    /// turn, taking with it a change history nobody had looked at. Ctrl-D is the
-    /// end-of-input key and means what it means everywhere, on an empty line. Ctrl-Q is
-    /// the one that leaves no doubt.
+    /// Ctrl-C asks rather than ends.
+    /// Ctrl-D is the end-of-input key and leaves from an empty line.
+    /// Ctrl-Q leaves from anywhere.
     #[test]
     fn the_keys_that_leave_are_told_apart() {
         assert!(matches!(quit_intent(&ctrl('c')), Some(Quit::Ask)));
@@ -431,8 +427,9 @@ mod tests {
         assert_eq!(approval_key(&ctrl('c')), None);
     }
 
-    /// No key leaves on its first press when it would lose something, and the question says
-    /// what. Ctrl-C stops a turn and clears a line before it offers to leave.
+    /// No key leaves on its first press when it would lose something.
+    /// The question says what.
+    /// Ctrl-C stops a turn and clears a line before it offers to leave.
     #[test]
     fn leaving_is_asked_twice_when_something_would_be_lost() {
         let idle = AtStake::default();

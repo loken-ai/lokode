@@ -1,10 +1,11 @@
 //! The styles every part of the interface draws with.
 //!
-//! Text keeps to the terminal's own named colours, which its theme already made legible on
-//! its background. What cannot be named is computed from the background itself: the tint
-//! that sets a surface apart and the colour of code. Both need the terminal to say what
-//! its colours are and to take any colour asked of it; without that they fall back to
-//! named colours and an untinted surface.
+//! Text keeps to the terminal's own named colours.
+//! Its theme already made them legible on its background.
+//! What cannot be named is computed from the background itself.
+//! That covers the tint that sets a surface apart and the colour of code.
+//! Both need the terminal to say what its colours are and to take any colour asked of it.
+//! Without that they fall back to named colours and an untinted surface.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -212,8 +213,9 @@ impl Theme {
 
     /// The theme for a terminal whose text and background colours are known.
     ///
-    /// `truecolor` says whether it takes any colour asked of it; one that does not would
-    /// round a tint to the nearest of its own colours, which is rarely near.
+    /// `truecolor` says whether it takes any colour asked of it.
+    /// One that does not would round a tint to the nearest of its own colours.
+    /// That colour is rarely near.
     pub fn for_colours(fg: Rgb, bg: Rgb, truecolor: bool) -> Self {
         let mut theme = Self::default();
         if is_light(bg) {
@@ -248,8 +250,9 @@ impl Theme {
 
     /// Ask the terminal what its colours are, and build the theme for them.
     ///
-    /// Asked before the screen is taken, since the answer arrives on the input the event
-    /// loop reads afterwards. A terminal that does not answer gets the named colours.
+    /// Asked before the screen is taken, since the answer arrives on the input the event loop
+    /// reads afterwards.
+    /// A terminal that does not answer gets the named colours.
     pub fn detect() -> Self {
         let mut options = terminal_colorsaurus::QueryOptions::default();
         options.timeout = ASK_FOR;
@@ -261,9 +264,10 @@ impl Theme {
                 };
                 Self::for_colours(eight(p.foreground), eight(p.background), truecolor())
             }
-            // No answer, which is what tmux and many terminals give: the background is read
-            // off `COLORFGBG` where the terminal sets it, and taken to be a dark one
-            // otherwise, since a terminal that takes any colour can still be given tints.
+            // No answer, which is what tmux and many terminals give.
+            // The background is read off `COLORFGBG` where the terminal sets it.
+            // Otherwise it is taken to be a dark one.
+            // A terminal that takes any colour can still be given tints.
             Err(_) if truecolor() => {
                 let bg = std::env::var("COLORFGBG")
                     .ok()
@@ -283,8 +287,8 @@ impl Theme {
 /// The background taken when a terminal that takes any colour does not say which it has.
 const ASSUMED_DARK: Rgb = (24, 26, 30);
 
-/// The background `COLORFGBG` names, as `fg;bg` with ANSI colour numbers: 0 to 6 and 8
-/// are dark backgrounds, 7 and 15 light ones.
+/// The background `COLORFGBG` names, as `fg;bg` with ANSI colour numbers.
+/// 0 to 6 and 8 are dark backgrounds, 7 and 15 light ones.
 fn background_of_colorfgbg(value: &str) -> Option<Rgb> {
     let bg: u8 = value.rsplit(';').next()?.trim().parse().ok()?;
     Some(match bg {
@@ -299,8 +303,9 @@ fn truecolor() -> bool {
     takes_any_colour(|k| std::env::var(k).ok())
 }
 
-/// Whether the variables a terminal sets say it takes any colour: `COLORTERM` when it says
-/// so, and otherwise the terminals known to that do without saying it.
+/// Whether the variables a terminal sets say it takes any colour.
+/// `COLORTERM` says so when it is set.
+/// Otherwise the terminals known to take any colour without saying it.
 fn takes_any_colour(var: impl Fn(&str) -> Option<String>) -> bool {
     let colorterm = var("COLORTERM").unwrap_or_default();
     let term = var("TERM").unwrap_or_default();
@@ -328,7 +333,8 @@ fn takes_any_colour(var: impl Fn(&str) -> Option<String>) -> bool {
 
 static THEME: OnceLock<Theme> = OnceLock::new();
 
-/// Settle the theme for the rest of the process. Only the first call counts.
+/// Settle the theme for the rest of the process.
+/// Only the first call counts.
 pub fn set(theme: Theme) {
     let _ = THEME.set(theme);
 }
