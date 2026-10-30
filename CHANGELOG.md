@@ -40,6 +40,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Editors: serve Zed, JetBrains, Neovim, Emacs and VS Code over ACP with lokode acp.
 - Web: serve sessions to a browser with lokode serve, and draw one in a terminal with lokode attach.
 - Backend: name a known provider with --provider or provider.
+- Docs: split the README into guides per task, with the screens they describe.
 
 ### Changed
 
