@@ -74,6 +74,8 @@ configuration remembers, and a backend that serves a single model. With several 
 remembered, the session opens without one and says so. `/model` lists what the backend serves,
 and `/model <name>` switches and remembers the name in your configuration.
 
+<!-- site: figure name=choose-model-120 alt="The list of models, with what each one needs" caption="The list of models, with what each one needs" -->
+
 A switch keeps the conversation. The new model's window comes from its own table in the
 configuration when there is one. What the previous model taught about its tokenizer is
 measured again.
@@ -108,6 +110,8 @@ The window is read from the backend's model list (`max_model_len`), and `--conte
 caps it. The status line shows how full it is: amber past 75%, red once the oldest
 steps start being elided. `/context` says what holds it, largest first: the instructions and
 the tools, what you said, what the model said, the tool results. `/compact` elides now.
+
+<!-- site: figure name=context-120 alt="What fills the window, and how full it is" caption="What fills the window, and how full it is" -->
 
 ## What it cost
 

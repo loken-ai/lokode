@@ -1,0 +1,21 @@
+{# The home page: the hero and the showcase of the theme, then the ways in, the guides and how to start. #}
+{% extends "base.html" %}
+{% block title %}{{ site.title }}{% endblock %}
+{% block main %}
+{% set slides = data.slides %}
+<main class="wrap"><div class="prose">
+{% include "partials/hero.html" %}
+<section>
+{% include "partials/showcase.html" %}
+</section>
+<section><h2>One engine, 4 ways in</h2>
+<div class="cards ways">{% for way in data.ways %}<article class="card way"><h3 class="title"><a href="{{ site.base_path }}{{ way.url }}">{{ way.title }}</a></h3><p>{{ way.text }}</p><p><code>{{ way.command }}</code></p></article>
+{% endfor %}</div></section>
+<section><h2>Guides</h2>
+<div class="cards">{% for p in site.sections.guides.pages %}<article class="card read"><h3 class="title"><a href="{{ p.url }}">{{ p.nav_title }}</a></h3><p>{{ p.description }}</p></article>
+{% endfor %}</div></section>
+<section><h2>Start</h2>
+<pre class="code"><code>{{ data.hero.install }}</code></pre>
+<p>Read the <a href="{{ site.base_path }}/tour/">tour of the screen</a> first, then <a href="{{ site.base_path }}/reference/security/">what is and is not enforced</a>. This is lokode {{ data.version }}.</p></section>
+</div></main>
+{% endblock %}

@@ -3,6 +3,8 @@
 A coding agent that runs in your terminal, against a model on your own machine. It needs no
 account, sends no request off the machine and asks you to adopt no editor.
 
+<!-- site: page title="The lokode tour" -->
+
 > **EXPERIMENTAL.** This component is young and not production ready. Its interface, its
 > configuration and its defaults change without notice. Point it at work you can afford to
 > lose, read [SECURITY.md](SECURITY.md) before pointing it anywhere else, and keep the change
@@ -72,6 +74,7 @@ It needs Rust 1.92 or later and a Unix-like system. The shell tool runs `/bin/sh
 
 A session in the middle of a turn, at 120 columns:
 
+<!-- site: replace name=session-120 alt="A lokode session in the middle of a turn" caption="A lokode session in the middle of a turn" -->
 <!-- screen:120x32 -->
 ```text
  lokode  /p/demo  main ●2                                                          qwen3-coder  127.0.0.1:11435  native
@@ -108,6 +111,7 @@ The client waits on rx.await forever. I add timeout-secs:                       
   shift-tab write  enter send  alt-↑ steps  ctrl-f find  /help more  ctrl-c leave
 ```
 <!-- /screen -->
+<!-- site: end -->
 
 | Part | What it holds |
 |---|---|

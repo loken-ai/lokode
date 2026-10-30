@@ -23,6 +23,8 @@ What lokode asks about, what it confines, and how to settle questions in advance
 - **Egress goes to public addresses only.** `web_fetch` resolves the host, follows redirects
   itself and checks every hop. `--allow-host` names an exception on your own network.
 
+<!-- site: figure name=session-120 alt="A change waits for your answer: once, always under this directory, no, or no with a reason" caption="A change waits for your answer: once, always under this directory, no, or no with a reason" -->
+
 Read [SECURITY.md](../../SECURITY.md) first. On Linux and macOS, a command the agent runs may write only
 in the project, the temporary directories and the build caches, and cannot read your credentials.
 `--sandbox read-only` lets it write nowhere, and `--sandbox off` leaves it unconfined. A command

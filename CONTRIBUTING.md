@@ -76,6 +76,13 @@ race `ctx.cancel` so `Esc` reaches it. If it produces output, clamp it with `ctx
 Then tests: a nominal case and a refusal, using `src/tools/harness.rs`, which gives you a root
 in a temporary directory and answers approvals however the case wants.
 
+## The site
+
+The documentation is built into the site of loken-ai, at https://loken-ai.github.io/lokode/, from the repository `loken-ai/loken-ai.github.io`.  
+It takes the pages of the latest release of lokode.
+
+The guides in `docs/guides` stay readable on GitHub as they are.
+
 ## Reporting things
 
 Bugs and features: https://github.com/loken-ai/lokode/issues.

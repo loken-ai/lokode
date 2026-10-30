@@ -43,6 +43,8 @@ Flags go before `acp`: `lokode --tool-protocol native acp`.
 `lokode serve` serves the project's sessions to a browser page, on 127.0.0.1 only. It prints the
 address to open, with a token that the page then keeps in a cookie.
 
+<!-- site: figure name=web-approval alt="The page of lokode serve: a change waits for an answer, with its diff and 3 buttons" caption="The page of lokode serve: a change waits for an answer, with its diff and 3 buttons" -->
+
 ```sh
 lokode serve --port 8420
 ```
@@ -60,6 +62,8 @@ lokode serve --port 8420
 
 `lokode attach <address>` draws a session of a running `lokode serve` in this terminal, with the
 address it printed. It follows the latest session open, or `--session <id>`, or a new one.
+
+<!-- site: figure name=session-90 alt="The same screen at a narrow width: the rail gives way to the conversation" caption="The same screen at a narrow width: the rail gives way to the conversation" -->
 
 - The thread, the steps, the approvals and the forms are the terminal's own, answered here.
 - What is typed goes to the server, a `/command` included, so it runs where the session lives.

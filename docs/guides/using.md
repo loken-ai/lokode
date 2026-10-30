@@ -7,6 +7,8 @@ Start a session, give it work, and know what runs.
 A `/` at the start of a line opens the commands, and an `@` opens the files under the root.
 Both lists narrow as you type.
 
+<!-- site: figure name=complete-path-120 alt="A path is completed as you type after an @" caption="A path is completed as you type after an @" -->
+
 | Key | In a completion list |
 |---|---|
 | `Tab` | take the item. A command that takes an argument gets a space after it |
@@ -140,6 +142,8 @@ At an approval, a click on a badge answers like its key. `Enter` does nothing th
 The rail opens with what is running: each step that has not ended with how long it has run,
 the call a delegated session is on, the work done outside a turn, and a language server
 reading or building the project.
+
+<!-- site: figure name=busy-120 alt="A turn in progress: what runs is listed in the rail" caption="A turn in progress: what runs is listed in the rail" -->
 
 | To | Do |
 |---|---|

@@ -32,6 +32,8 @@ on a smaller one, with [roles](models.md#one-model-per-kind-of-work).
 `delegate` gives one self-contained task to an agent, in a session of its own with its own
 window, and returns only its answer. The work does not fill the conversation's window.
 
+<!-- site: figure name=delegate-page-120 alt="The page of a delegated task: its steps and its answer" caption="The page of a delegated task: its steps and its answer" -->
+
 Its steps stay under its own step, folded into a count once it ends. `Space` unfolds them, and
 `Enter` opens a page with each step, its evidence and the answer. `Ctrl-C` on its step stops it
 alone.

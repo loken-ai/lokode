@@ -60,6 +60,8 @@ paths are left out of the comparison. `/why` lists what has been learned.
 | `lsp_symbols` | the outline of a file, or the symbols matching a name across the project |
 | `lsp_diagnostics` | what the server reports about a file |
 
+<!-- site: figure name=lsp-page-120 alt="The language servers, what each one is doing" caption="The language servers, what each one is doing" -->
+
 | Language | Server | Extensions |
 |---|---|---|
 | rust | `rust-analyzer` | rs |

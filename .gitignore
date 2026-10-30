@@ -1,2 +1,6 @@
 /target
 .claude/
+/.theme
+
+# Python caches of the scripts.
+__pycache__/
