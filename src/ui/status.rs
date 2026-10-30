@@ -75,6 +75,9 @@ pub struct Status {
 /// The frames of the spinner, one per tick.
 const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
+/// The columns the mark that says there is more takes.
+const MARK_WIDTH: usize = 2;
+
 /// What can be open over the conversation and own the keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Open {
@@ -231,7 +234,7 @@ impl Status {
         for pair in full.spans.chunks(2) {
             let cost: usize = pair.iter().map(|s| s.content.chars().count()).sum();
             // 2 columns kept back for the mark that says there is more.
-            if used + cost + 2 > width {
+            if used + cost + MARK_WIDTH > width {
                 break;
             }
             used += cost;
