@@ -56,6 +56,30 @@ bash = ["rm *", "sudo *"]
 | `ask` | always asks, even when an agreement, `allow` or writing without asking would let it go |
 | `allow` | goes ahead without asking, up to `max-auto` per turn |
 
+A call that changes something meets these checks in order.
+The [`review` model](models.md#one-model-per-kind-of-work) answers first, when one is named.
+While the session [plans](agents.md#planning-before-acting), the call is refused next.
+A [`pre-tool` hook](extending.md#hooks) may then block it.
+
+```mermaid
+flowchart TD
+  call["A call that changes something"] --> pre{"The review model, planning or a pre-tool hook refuses?"}
+  pre -->|no| deny{"deny rule?"}
+  deny -->|no| ask{"ask rule?"}
+  ask -->|no| allow{"allow rule, under max-auto?"}
+  allow -->|no| agreed{"Writing without asking, or an agreement?"}
+  agreed -->|no| you["You answer"]
+  pre --> back["Refused, back to the model with why"]
+  deny --> back
+  ask --> you
+  allow --> run["It runs"]
+  agreed --> run
+  you -->|"y or a"| run
+  you -->|"n, e or x"| back
+```
+
+A side branch is taken when the answer is yes.
+
 A command line is read as the commands it runs.
 
 | Line | Read as |

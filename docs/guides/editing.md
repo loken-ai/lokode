@@ -26,18 +26,30 @@ A tool that can change something, reach the network or run code is asked about f
 | `edit_lines` | apply several such edits to one file in order, all or none |
 | `apply_patch` | apply a unified diff across several files |
 
-After a write, the language servers are told the files changed and were saved.
-Once they have read the new text and have no work left, lokode compares what they report with what they reported before.
+After a write, lokode asks the language servers that know the file.
+The compiler answers when no server knows the file or the servers cannot tell.
+
+```mermaid
+flowchart TD
+  w["A write"] --> ls{"A language server knows the file?"}
+  ls -->|yes| tell["The servers are told: changed and saved"]
+  ls -->|no| cc["The compiler, once per step, bounded wait"]
+  tell --> idle["Wait until they have no work left"]
+  idle --> cmp["Compare with what they reported before"]
+  cmp -->|"they cannot tell"| cc
+  cmp --> v["The verdict, in the write's result"]
+  cc --> v
+```
 
 The tool result lists the errors the write introduced, in any file, with their code and source line.
-
-Without a language server for the file, the compiler is asked to compile, once per step and with a bounded wait.
 
 | A write's step says | When |
 |---|---|
 | `checked` | the servers or the compiler report no new error |
 | `check failed` | they report errors the write introduced |
 | `not checked` | none could tell, and the result says why |
+
+A write gives no verdict when no language server knows the file and no compiler is asked.
 
 The rail's CHANGES marks a file the servers report errors in with `✕` and their count.  
 Only a write that was checked counts when the session decides to escalate.

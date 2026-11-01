@@ -42,7 +42,8 @@ escalate = "qwen3.5:35b"
 | Role | When it answers |
 |---|---|
 | `plan` | from `/plan` to `/act`, said on the screen both ways |
-| `edit` | loaded in the background while a plan is written, ready for acting |
+| `chat` | once planning ends. Without it, the session goes back to the model planning started from |
+| `edit` | an agent that changes files and names no model |
 | `search` | a delegated question |
 | `repair` | a malformed reply to reshape |
 | `review` | before anything changes, to say whether it does what was asked |
@@ -53,18 +54,37 @@ The band shows the model answering now.
 An objection from `review` stops the call and goes back to the model that proposed it.  
 A reviewer that cannot be reached never blocks anything.
 
-A step whose change fails its check raises the session to `escalate` for the steps that follow, and says so.
-2 writes that pass bring it back down.  
-A step that only reads moves nothing.
+With an `escalate` model named, the session moves to it and back:
+
+```mermaid
+flowchart LR
+  def(["The session's model"])
+  w["A write fails its check"]
+  p["A proof refused twice"]
+  t["A turn starts, most writes failed"]
+  esc(["The escalate model"])
+  back["2 writes pass"]
+  def --> w
+  def --> p
+  def --> t
+  w --> esc
+  p --> esc
+  t --> esc
+  esc --> back
+  back --> def
+```
+
+Each move is said on the screen.
+The 2 [refused proofs](agents.md#handing-work-to-an-agent) fall in one turn.  
+A step that only reads moves nothing, and nothing moves while planning.
 
 What each model managed is remembered per project, outside the repository: how many of its last 50 writes passed their check.
-
-When the cheap model fails most of its writes in a project, the next turn starts on the stronger one and says so.
-It decides only after 4 writes.  
+A turn starts on the `escalate` model when the session's model failed most of them, once 4 are remembered.  
 `/why` says what is in force and on what evidence.
 
-While a plan is written, the `edit` model, or else the default one, is asked for in the background, so the server loads it before `/act`.
-It never delays or fails a turn.
+While a plan is written, the `edit` model, or else the `chat` one, is asked for in the background, so the server holds it ready.
+With neither model named, nothing is asked for.  
+The background request never delays or fails a turn.
 
 The background request runs against a backend on this machine or this network only.
 `preload = false` turns it off.

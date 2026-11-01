@@ -21,7 +21,7 @@ A run without a terminal acts on it only with `--approve all`.
 | write without asking, commands still asked | from act | `--accept-edits` | `"edits"` |
 | plan, nothing changes | from writing | `--plan` | `"plan"` |
 
-A project can plan on its strongest model and act on a smaller one, with [roles](models.md#one-model-per-kind-of-work).
+A project can plan on its strongest model and act on a smaller one, with the `plan` and `chat` [roles](models.md#one-model-per-kind-of-work).
 
 ## Handing work to an agent
 
@@ -82,12 +82,27 @@ api-key-env = "ANTHROPIC_API_KEY"
   Its answer is handed to the session at its next step, in this turn or the next.  
   Stopping the turn does not stop it.
   It is listed in the rail and in `/jobs`, where enter stops it alone.
-- In a project in git, an agent that changes files works in its own copy, a worktree in lokode's state directory, made from the project as it stands: files not committed and files git does not track included, ignored files left out.
-  Its tools and its shell write there alone, and its changes are approved like any other.
-  Nothing reaches the project until the session brings the work in.
-- Its answer comes with the patch and a number, and the session calls `take_work` with it.
-  The work comes in as one change `/undo` puts back.  
-  A turn does not end while work waits.
+- Without `background`, an agent that changes files writes in the project.
+- With `background`, an agent that changes files gets a copy: a worktree in lokode's state directory, made from the project as it stands: files not committed and files git does not track included, ignored files left out.
+  Its tools and its shell write there alone.
+- A turn does not end while work waits.
+
+```mermaid
+flowchart TD
+  start["An agent with background that changes files"] --> copy{"A copy can be made?"}
+  copy -->|yes| work["It works in its copy, its changes asked there"]
+  copy -->|no| hold["It writes in the project, holding its files"]
+  work --> ans["Its answer, with the patch and a number"]
+  ans --> take{"take_work: did the project change?"}
+  take -->|no| inn["The work comes in"]
+  take -->|yes| show["Nothing written: both sides of each shared file"]
+  show --> merge["The session merges, calls again with proofs"]
+  merge --> proof{"Every added and removed line accounted for?"}
+  proof -->|"no: the lines are listed"| merge
+  proof -->|yes| coh["The rest comes in, a model reads both sides"]
+  inn --> after["Checked like any write, one change for /undo"]
+  coh --> after
+```
 
 | Since the agent started, the project | `take_work` |
 |---|---|
@@ -101,8 +116,7 @@ api-key-env = "ANTHROPIC_API_KEY"
   Each line either side added must be in the file, and each line either side removed must be gone.
   A line left out on purpose goes in `dropped`, with why.
 - A refusal lists only the lines the proof does not account for, and writes nothing.
-- Once in, the files are checked like any write.
-  An error comes from putting both together, and the session fixes it before the turn ends.
+- An error found once the work is in comes from putting both together, and the session fixes it before the turn ends.
 - When the project changed meanwhile, a model reads both sides together once, and says what would not work together: a name or signature one side changed and the other uses, the same thing done twice, behaviour that contradicts.
 - That model is the `review` role's model, or the session's.
   It is given the objectives and both sides' changes without their context, cut short, and answers `OK` or 5 lines at most.
@@ -113,8 +127,8 @@ api-key-env = "ANTHROPIC_API_KEY"
 - A project outside git is copied through a private repository kept beside the copy, which holds where the agent started.
   The project is never made a repository.  
   Files `.gitignore` names are left out, and a project over 256 MB is not copied.
-- When there is no copy, because the project is too large or its repository does not track it, the agent writes in the project.
-  A file it writes is its own until it answers: the session and the other agents are refused it, before anyone is asked.
+- A project too large to copy, or one its repository does not track, gets no copy.
+  A file the agent writes there is its own until it answers: the session and the other agents are refused it, before anyone is asked.
 - An answer that arrives while no turn runs starts a turn.
 - The task is taken as written: no file is attached for it and the project is not searched for it.
 

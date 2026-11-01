@@ -47,7 +47,7 @@ The system message carries the tool manifest, a server that has to truncate keep
 
 ## The ways in
 
-The terminal screen, `lokode acp`, `lokode serve` and `lokode attach` are 4 views of one engine.
+The terminal screen, `lokode acp` and `lokode serve` are 3 views of one engine, and `lokode attach` is a client of `lokode serve`.
 
 The events the engine sends are turned into what an editor reads in `src/acp/updates.rs`, and back into what the screen draws in `src/ui/remote.rs`.
 

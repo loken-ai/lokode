@@ -18,7 +18,7 @@ lokode speaks the OpenAI-compatible API and works against [loken](https://github
 The default backend is `http://127.0.0.1:11435`.  
 lokode also speaks the Anthropic Messages API and knows [17 providers](docs/guides/configuration.md#which-provider) by name.
 
-Beside its own screen, it serves editors over the Agent Client Protocol (`lokode acp`) and a browser page (`lokode serve`), and a terminal can attach to a session either serves (`lokode attach`).
+Beside its own screen, it serves editors over the Agent Client Protocol (`lokode acp`) and a browser page (`lokode serve`), and a terminal can attach to a session of `lokode serve` (`lokode attach`).
 
 Plugins add commands, agents, skills, hooks, tool servers and language servers, including the plugins written for other coding agents.
 

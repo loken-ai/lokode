@@ -9,6 +9,32 @@ What is written here is what the code does today.
 The defaults suit a machine you are experimenting on, not one that matters.
 Nothing below has been audited.
 
+The approval stands between the model and each tool that changes something.
+The programs marked not confined run with your privileges.
+
+```mermaid
+flowchart TD
+  model(["The model"])
+  you(["You: screen, editor or page"])
+  gate{"Approval"}
+  files["File tools<br/>under --root only"]
+  fetch["web_fetch<br/>public hosts only"]
+  cmd["bash, run_tests<br/>in the sandbox"]
+  out["outside_sandbox<br/>not confined"]
+  mcp["Tool servers<br/>not confined"]
+  store[("Transcript, change history<br/>not redacted")]
+  progs["Hooks, language servers, compiler<br/>not confined, not asked"]
+  model -->|"a call that changes something"| gate
+  you -->|"answers"| gate
+  gate -->|"writes"| files
+  gate -->|"each host"| fetch
+  gate -->|"each command"| cmd
+  gate -->|"no allow rule"| out
+  gate -->|"unless readOnlyHint"| mcp
+  files --> store
+  files -.->|"around a write"| progs
+```
+
 ## What is enforced
 
 **Path confinement.** Every tool that takes a path resolves it through one function, which canonicalises the target and refuses anything that does not land under `--root`.
@@ -90,7 +116,8 @@ A multi-file patch is applied wholly or not at all.
   A name that does not exist is reported at startup.
 - A command that fails tells the model it ran in the sandbox.
   The model may then ask to run it outside, with `outside_sandbox`.  
-  That question always reaches you: no `allow` rule answers it, and a run without a terminal refuses it.
+  That question reaches you: no `allow` rule answers it, and a run without a terminal refuses it.  
+  An `[A]lways` given to it covers that exact command outside the sandbox.
 - A sandbox asked for on a system that cannot confine refuses the command rather than run it unconfined.  
   On such a system with nothing asked, commands run unconfined and the session says so.
 
@@ -100,6 +127,12 @@ Approving a command is approving everything that command can do.
 
 **`run_tests` runs the project's own code.** `cargo test` builds `build.rs`, `npm test` runs lifecycle scripts, `pytest` imports `conftest.py`.  
 Approving it on a repository you have not read is approving whatever that repository wants to run.
+
+**Checking a write runs the project's tools.** After a write, lokode asks the language servers that know the file, the built-in ones included.
+Without one that can tell, it asks the compiler: `cargo check`, `tsc`, `go build` or `python3 -m py_compile`.  
+Both run outside the sandbox, with your privileges, and neither is asked about.
+A language server or a compiler may run code of the project, as `cargo check` runs `build.rs`.  
+`[lsp] enabled = false` turns the language servers off.
 
 **Nothing is redacted.** `.env`, `~/.aws/credentials` inside the root, a `.git/config` with a token in it.
 All of it is readable by the model if it is under the root, and all of it is recorded in the session transcript.
@@ -116,9 +149,11 @@ Delete the directory when you are done with the session.
 **An MCP server is a third party with your privileges.** It is a program you configured, and `lokode` starts it with the project as its working directory.
 Nothing here confines what it does.
 
-The path sandbox governs this agent's own file tools, not another process.
+A call to one of the server's tools is approved, and the approval names the server.
+Approving a call is approving whatever that program does with it.
 
-Every call to one of the server's tools is approved and the approval names the server, but approving a call is approving whatever that program does with it.
+A tool the server marks `readOnlyHint` runs without a question.
+That mark is the server's own claim, and lokode does not check it.
 
 **A plugin runs programs with your privileges.** Its hooks, tool servers and language servers are programs.  
 Installing one shows what it runs and asks, and an update that changes what runs asks again.
