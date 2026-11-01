@@ -1,12 +1,11 @@
 # Providers and configuration
 
-Which server lokode talks to, which API, and every setting.
-
 ## Which provider
 
-A provider lokode knows is named rather than written out, with `--provider` or with
-`provider = "openrouter"` in `[backend]` or in a `[backends]` entry. It gives the url, the API
-and the variable the key is read from. A `url`, `kind` or `api-key-env` written beside it wins.
+A provider lokode knows is named rather than written out, with `--provider` or with `provider = "openrouter"` in `[backend]` or in a `[backends]` entry.
+
+The provider gives the url, the API and the variable the key is read from.
+A `url`, `kind` or `api-key-env` written beside it wins.
 
 | Provider | Url | Key from |
 |---|---|---|
@@ -28,25 +27,22 @@ and the variable the key is read from. A `url`, `kind` or `api-key-env` written 
 | `llamacpp` | `http://127.0.0.1:8080/v1` | none |
 | `vllm` | `http://127.0.0.1:8000/v1` | none |
 
-- `--provider` takes the place of the configured `[backend]`, so no key written for another
-  backend is sent to this one. A later file that names a provider does the same.
-- Any other OpenAI-compatible server is reached by its url. A url ending in `/v1` or `/openai`
-  is the API's root, and a bare host gets `/v1`.
+- `--provider` takes the place of the configured `[backend]`, so no key written for another backend is sent to this one.
+  A later file that names a provider does the same.
+- Any other OpenAI-compatible server is reached by its url.
+  A url ending in `/v1` or `/openai` is the API's root, and a bare host gets `/v1`.
 - `/model` lists what the provider serves.
 
 ## Which API
 
-`kind = "auto"` reads it from the URL: `api.anthropic.com` is the Messages API, and anything
-else is OpenAI-compatible. Name a kind to reach a proxy of Anthropic's format on your own host.
+`kind = "auto"` reads it from the URL: `api.anthropic.com` is the Messages API, and anything else is OpenAI-compatible.
+Name a kind to reach a proxy of Anthropic's format on your own host.
 
-The credential is found the same way for both: the environment, then a named variable, then a
-file only you can read. It goes in `Authorization: Bearer` for the OpenAI family and in
-`x-api-key` for Anthropic.
+The credential is found the same way for both: the environment, then a named variable, then a file only you can read.
+It goes in `Authorization: Bearer` for the OpenAI family and in `x-api-key` for Anthropic.
 
-The differences stop at the boundary: the system prompt, the tool results and the stream.
-Reasoning arrives as `<think>` tags, a `reasoning` field, a `reasoning_content` field or
-Anthropic's thinking blocks. All 4 are shown the same way, set apart, and never sent back to
-the model.
+Reasoning arrives as `<think>` tags, a `reasoning` field, a `reasoning_content` field or Anthropic's thinking blocks.
+All 4 are shown the same way, set apart, and never sent back to the model.
 
 ## How tools are called
 
@@ -56,12 +52,9 @@ the model.
 | `envelope` | one JSON object per turn, held to a grammar built from the tool schemas. It needs only a completion |
 | `auto` | the default. The backend is asked once at startup for a call, and a server that answers with prose or refuses the field gets the envelope |
 
-The band says which protocol is in force.
-
 ## Configuring it
 
-Settings come from 5 places, and the narrower wins: a flag, the environment,
-`<root>/.lokode.toml`, `~/.config/lokode/config.toml`, the built-in default.
+Settings come from 5 places, and the narrower wins: a flag, the environment, `<root>/.lokode.toml`, `~/.config/lokode/config.toml`, the built-in default.
 
 ```toml
 # ~/.config/lokode/config.toml, or .lokode.toml in a project
@@ -129,12 +122,11 @@ transcripts = true
 
 The trusted settings are kept in `$XDG_DATA_HOME/lokode/trusted.json`.
 
-`lokode --show-config` prints the files read and what everything resolved to. It names the
-headers without their values.
+`lokode --show-config` prints the files read and what everything resolved to.
+It names the headers without their values.
 
-**Credentials.** `LOKODE_API_KEY` comes first, then the variable named by `api-key-env`, then
-an `api-key` in the file. The file is accepted only if nobody else can read it. A key about to
-cross a network unencrypted is warned about.
+**Credentials.** `LOKODE_API_KEY` comes first, then the variable named by `api-key-env`, then an `api-key` in the file.
+The file is accepted only if nobody else can read it.  
+A key about to cross a network unencrypted is warned about.
 
-Environment variables: `LOKODE_MODEL`, `LOKODE_BACKEND_URL`, `LOKODE_LOG_FILE`,
-`LOKODE_API_KEY`.
+Environment variables: `LOKODE_MODEL`, `LOKODE_BACKEND_URL`, `LOKODE_LOG_FILE`, `LOKODE_API_KEY`.

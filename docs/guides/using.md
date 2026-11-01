@@ -1,7 +1,5 @@
 # Using lokode
 
-Start a session, give it work, and know what runs.
-
 ## Using it
 
 A `/` at the start of a line opens the commands, and an `@` opens the files under the root.
@@ -14,11 +12,11 @@ Both lists narrow as you type.
 | `Tab` | take the item. A command that takes an argument gets a space after it |
 | `Enter` | take a command and send it, or take a path |
 
-A command's answer longer than a sentence opens on a page over the conversation. `Esc`,
-`Enter` or `q` closes it.
+A command's answer longer than a sentence opens on a page over the conversation.
+`Esc`, `Enter` or `q` closes it.
 
-`Alt-Up` and `Alt-Down` move between the steps of the session. What the step pointed at
-offers:
+`Alt-Up` and `Alt-Down` move between the steps of the session.  
+What the step pointed at offers:
 
 | Pointed at | Keys |
 |---|---|
@@ -50,8 +48,9 @@ offers:
 | `Ctrl-C` | stop the step pointed at, stop the turn or a command of yours, clear the line, or leave when pressed twice on an empty line |
 | `Ctrl-D`, `Ctrl-Q` | leave |
 
-It asks before something is lost. Leaving asks for the key a second time. The others open a
-list with `no` selected.
+lokode asks before something is lost.
+Leaving asks for the key a second time.  
+The others open a list with `no` selected.
 
 | Action | Asks when |
 |---|---|
@@ -80,68 +79,70 @@ list with `no` selected.
 | `/approve`, `/approve forget` | what is in force here and in the configuration, or take it back |
 | `/why`, `/digest`, `/tools`, `/agents`, `/skills`, `/plugins`, `/mcp` | what is in force, what is known, what can be called |
 
-A command that takes a name offers the names. `/model`, `/undo`, `/resume` and `/mcp` open a
-list that narrows as you type. `/help` lists every command, with those the project ships.
+A command that takes a name offers the names.
+`/model`, `/undo`, `/resume` and `/mcp` open a list that narrows as you type.  
+`/help` lists every command, with those the project ships.
 
-The window title says whether the session works or waits for you. Ghostty, WezTerm, Windows
-Terminal and iTerm2 from 3.6 also show it as progress in the tab. While the terminal is not in
-front, a waiting question and the end of a turn arrive as a desktop notification, or as a bell
-where the terminal has none.
+The window title says whether the session works or waits for you.
+Ghostty, WezTerm, Windows Terminal and iTerm2 from 3.6 also show it as progress in the tab.
 
-lokode takes the mouse for the wheel, clicks and a selection that scrolls past the edge.
-`Ctrl-Y` puts a selection on the terminal's clipboard, through ssh and tmux. Hold `Shift`
-while dragging for the terminal's own selection, or press `Ctrl-T` to hand it the mouse.
+While the terminal is not in front, a waiting question and the end of a turn arrive as a desktop notification, or as a bell where the terminal has none.
 
-Answers are rendered as markdown: fenced code coloured by language, headings, lists, quotes,
-tables, links and emphasis. A diff is numbered, with the changed words marked. There are no
-borders.
+`Ctrl-Y` reaches the terminal's clipboard through ssh and tmux.
+
+Answers are rendered as markdown: fenced code coloured by language, headings, lists, quotes, tables, links and emphasis.  
+A diff is numbered, with the changed words marked.
+There are no borders.
 
 A line sent while the agent works joins the turn at the next step, and the screen says when.
 A slash command typed then runs at once.
 
-A file named with `@` goes with the question. A directory sends its listing. The status line
-says what the files will cost before the line is sent. What is attached is bounded like any
-other content. A mention that is not a path here is left alone, and nothing outside the
-project can be named.
+The status line says what the attached files cost before the line is sent.
+They are bounded like any other content.  
+A mention that is not a path here is left alone, and nothing outside the project can be named.
 
-A shell command and a test suite show the end of their output under their step while they
-run. The tool's result replaces it when they finish. The model reads the whole output.
+A shell command and a test suite show the end of their output under their step while they run.
+The tool's result replaces it when they finish.  
+The model reads the whole output.
 
-The status line says what the turn is doing and for how long: fitting the history, waiting for
-the model, reading the prompt, thinking, answering, repairing a reply or running a tool. While loken reads a long prompt, it
-shows how far it has got.
+The status line says what the turn is doing and for how long: fitting the history, waiting for the model, reading the prompt, thinking, answering, repairing a reply or running a tool.
 
-While the model writes its answer, a small model guesses the next read and the read is made
-ahead. The step that asks for it is answered without a round trip, and its row says
-`guessed`. A guess never delays the turn, and a guess that would change something is dropped.
-The guessing model is the project's search model, or the one answering. It runs against a
-backend on this machine or this network, never a hosted one. `speculate = false` turns it off.
+While loken reads a long prompt, it shows how far it has got.
 
-A turn ends on a receipt: its time, its steps, what it read and wrote, the files it changed
-and its energy. A quick turn that changed nothing gets none.
+While the model writes its answer, a small model guesses the next read and the read is made ahead.
+The step that asks for it is answered without a round trip, and its row says `guessed`.
+
+A guess never delays the turn, and a guess that would change something is dropped.
+
+The guessing model is the project's search model, or the one answering.
+It runs against a backend on this machine or this network, never a hosted one.  
+`speculate = false` turns it off.
+
+A turn ends on a receipt: its time, its steps, what it read and wrote, the files it changed and its energy.
+A quick turn that changed nothing gets none.
 
 The loop declines 3 things:
 
-- a read already made this turn, with nothing written since, is answered with its result, and
-  the model is told it repeats itself
+- a read already made this turn, with nothing written since, is answered with its result, and the model is told it repeats itself
 - a whole-file write over a file changed on disk since the model read it is refused
 - a path that does not exist is answered with where the file is
 
-`/retry` asks the last question again. What the agent did after it leaves the conversation.
-`/retry <model>` asks another model. The transcript keeps both attempts, and `/undo` puts back
-the files of the first.
+`/retry` asks the last question again.  
+What the agent did after it leaves the conversation.
 
-A turn that gets nowhere is handed back early. 3 steps in a row where every call failed or
-repeated itself end it, and so do 6 failed calls in a turn that changed nothing. The screen
-names the tool that kept failing.
+`/retry <model>` asks another model.
+The transcript keeps both attempts, and `/undo` puts back the files of the first.
 
-At an approval, a click on a badge answers like its key. `Enter` does nothing there.
+A turn that gets nowhere is handed back early.
+3 steps in a row where every call failed or repeated itself end it, and so do 6 failed calls in a turn that changed nothing.  
+The screen names the tool that kept failing.
+
+At an approval, a click on a badge answers like its key.
+`Enter` does nothing there.
 
 ## What runs
 
-The rail opens with what is running: each step that has not ended with how long it has run,
-the call a delegated session is on, the work done outside a turn, and a language server
-reading or building the project.
+The rail opens with what is running: each step that has not ended with how long it has run, the call a delegated session is on, the work done outside a turn, and a language server reading or building the project.
 
 <!-- site: figure name=busy-120 alt="A turn in progress: what runs is listed in the rail" caption="A turn in progress: what runs is listed in the rail" -->
 
@@ -154,8 +155,9 @@ reading or building the project.
 | stop work done outside a turn | choose it in `/jobs` |
 | see where the language servers stand | `/lsp`, or choose a server in `/jobs` |
 
-A stopped call ends in an error that tells the model the person stopped it, and the turn goes
-on. Work outside a turn is the model held ready on the backend and the project being looked
-into. Looking into the project, once stopped, stays stopped for the session.
+A stopped call ends in an error that tells the model the person stopped it, and the turn goes on.
+
+Work outside a turn is the model held ready on the backend and the project being looked into.
+Looking into the project, once stopped, stays stopped for the session.
 
 Commands of your own run side by side, each under its step, with their output as it comes.

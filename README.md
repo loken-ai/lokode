@@ -1,7 +1,7 @@
 # lokode
 
-A coding agent that runs in your terminal, against a model on your own machine. It needs no
-account, sends no request off the machine and asks you to adopt no editor.
+A coding agent that runs in your terminal, against a model on your own machine.
+It needs no account, sends no request off the machine and asks you to adopt no editor.
 
 <!-- site: page title="The lokode tour" -->
 
@@ -14,23 +14,21 @@ account, sends no request off the machine and asks you to adopt no editor.
 lokode --model qwen3-coder:latest --root .
 ```
 
-It speaks the OpenAI-compatible API, so it works against [loken](https://github.com/loken-ai/loken),
-ollama, vLLM, llama.cpp or any other server of that API. The default backend is
-`http://127.0.0.1:11435`. It also speaks the Anthropic Messages API, and knows
-[17 providers](docs/guides/configuration.md#which-provider) by name.
+lokode speaks the OpenAI-compatible API and works against [loken](https://github.com/loken-ai/loken), ollama, vLLM, llama.cpp or any other server of that API.
+The default backend is `http://127.0.0.1:11435`.  
+lokode also speaks the Anthropic Messages API and knows [17 providers](docs/guides/configuration.md#which-provider) by name.
 
-Beside its own screen it serves editors over the Agent Client Protocol (`lokode acp`) and a
-browser page (`lokode serve`), and a terminal can attach to a session either serves
-(`lokode attach`). Plugins add commands, agents, skills, hooks, tool servers and language
-servers, including the plugins written for other coding agents.
+Beside its own screen, it serves editors over the Agent Client Protocol (`lokode acp`) and a browser page (`lokode serve`), and a terminal can attach to a session either serves (`lokode attach`).
+
+Plugins add commands, agents, skills, hooks, tool servers and language servers, including the plugins written for other coding agents.
 
 ## What it does
 
-It reads, searches and edits files under one root, runs commands in a sandbox and asks a
-language server. `--max-steps` caps the steps of one turn.
+lokode reads, searches and edits files under one root, runs commands in a sandbox and asks a language server.  
+`--max-steps` caps the steps of one turn.
 
-Each row opens the guide that covers it, in `docs/guides`, also published at
-<https://loken-ai.github.io/lokode/>. Those marked local rely on the model running on your machine.
+Each row opens its guide in `docs/guides`, also published at <https://loken-ai.github.io/lokode/>.
+Rows marked local rely on the model running on your machine.
 
 | | |
 |---|---|
@@ -63,7 +61,8 @@ Each row opens the guide that covers it, in `docs/guides`, also published at
 cargo install --path .     # or cargo build --release, then target/release/lokode
 ```
 
-It needs Rust 1.92 or later and a Unix-like system. The shell tool runs `/bin/sh`.
+lokode needs Rust 1.92 or later and a Unix-like system.
+The shell tool runs `/bin/sh`.
 
 | Optional | What it adds |
 |---|---|

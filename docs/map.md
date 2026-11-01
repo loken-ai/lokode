@@ -1,6 +1,8 @@
 # The map of lokode
 
-One engine runs the turns. The terminal screen, an editor, a browser page and an attached terminal are 4 views of it. Commands run inside the sandbox, and an agent that writes works in a copy of the project.
+One engine runs the turns.
+The terminal screen, an editor, a browser page and an attached terminal are 4 views of it.  
+Commands run inside the sandbox, and an agent that writes works in a copy of the project.
 
 <svg class="map" viewBox="0 0 880 520" role="img" aria-label="The 4 interfaces around the engine, the sandbox around the commands and the copy an agent works in">
   <g class="edge">
@@ -25,7 +27,7 @@ One engine runs the turns. The terminal screen, an editor, a browser page and an
   <rect class="box" x="650" y="340" width="180" height="44" rx="10"/><text x="740" y="367" text-anchor="middle">A background agent</text>
   <rect class="box" x="650" y="400" width="180" height="50" rx="10"/><text x="740" y="422" text-anchor="middle">Review and proof</text><text class="dim" x="740" y="438" text-anchor="middle">the caller merges, then lands it</text>
 </svg>
-<p class="cap">Dashed outlines are the places work is confined: the sandbox around commands, and the copy around an agent that writes.</p>
+<p class="cap">Dashed outlines confine work: the sandbox around commands, the copy around an agent that writes.</p>
 
 ## Where to read more
 
