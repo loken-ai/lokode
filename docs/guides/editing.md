@@ -31,14 +31,16 @@ The compiler answers when no server knows the file or the servers cannot tell.
 
 ```mermaid
 flowchart TD
-  w["A write"] --> ls{"A language server knows the file?"}
+  w(["A write"]) --> ls{"A language server knows the file?"}
   ls -->|yes| tell["The servers are told: changed and saved"]
   ls -->|no| cc["The compiler, once per step, bounded wait"]
-  tell --> idle["Wait until they have no work left"]
+  tell --> idle["Wait until they have no work left, within a limit"]
+  idle -->|"the wait runs out"| cc
   idle --> cmp["Compare with what they reported before"]
   cmp -->|"they cannot tell"| cc
-  cmp --> v["The verdict, in the write's result"]
-  cc --> v
+  cmp -->|"they can tell"| v(["The verdict, in the write's result"])
+  cc -->|"a project file is found"| v
+  cc -->|"no project file"| nov(["No verdict"])
 ```
 
 The tool result lists the errors the write introduced, in any file, with their code and source line.

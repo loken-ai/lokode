@@ -89,9 +89,13 @@ api-key-env = "ANTHROPIC_API_KEY"
 
 ```mermaid
 flowchart TD
-  start["An agent with background that changes files"] --> copy{"A copy can be made?"}
+  start(["An agent with background that changes files"]) --> copy{"A copy can be made?"}
   copy -->|yes| work["It works in its copy, its changes asked there"]
-  copy -->|no| hold["It writes in the project, holding its files"]
+  copy -->|"no: too large, or not tracked"| hold["It writes in the project, holding its files"]
+  copy -->|"the copy fails"| fail(["The agent does not start"])
+  hold --> text(["Its answer as plain text, with no patch"])
+  work -->|"it changed nothing"| none(["The copy is removed, the answer says so"])
+  work -->|"the user stopped it"| kept(["No patch, the copy is kept, the work is not offered"])
   work --> ans["Its answer, with the patch and a number"]
   ans --> take{"take_work: did the project change?"}
   take -->|no| inn["The work comes in"]
@@ -100,7 +104,7 @@ flowchart TD
   merge --> proof{"Every added and removed line accounted for?"}
   proof -->|"no: the lines are listed"| merge
   proof -->|yes| coh["The rest comes in, a model reads both sides"]
-  inn --> after["Checked like any write, one change for /undo"]
+  inn --> after(["Checked like any write, one change for /undo"])
   coh --> after
 ```
 

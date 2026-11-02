@@ -63,19 +63,21 @@ A [`pre-tool` hook](extending.md#hooks) may then block it.
 
 ```mermaid
 flowchart TD
-  call["A call that changes something"] --> pre{"The review model, planning or a pre-tool hook refuses?"}
+  call(["A call that changes something"]) --> pre{"The review model, planning or a pre-tool hook refuses?"}
   pre -->|no| deny{"deny rule?"}
   deny -->|no| ask{"ask rule?"}
   ask -->|no| allow{"allow rule, under max-auto?"}
   allow -->|no| agreed{"Writing without asking, or an agreement?"}
-  agreed -->|no| you["You answer"]
-  pre --> back["Refused, back to the model with why"]
-  deny --> back
-  ask --> you
-  allow --> run["It runs"]
-  agreed --> run
+  agreed -->|no| you
+  pre -->|yes| back(["Refused, back to the model with why"])
+  deny -->|yes| back
+  ask -->|yes| you["You answer"]
+  allow -->|yes| run(["It runs"])
+  agreed -->|yes| run
   you -->|"y or a"| run
   you -->|"n, e or x"| back
+  you -->|"nobody to answer"| back
+  you -->|"the turn is abandoned"| stop(["The call is interrupted"])
 ```
 
 A side branch is taken when the answer is yes.

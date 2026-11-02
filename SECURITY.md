@@ -14,12 +14,12 @@ The programs marked not confined run with your privileges.
 
 ```mermaid
 flowchart TD
-  model(["The model"])
-  you(["You: screen, editor or page"])
+  model["The model"]
+  you["You: screen, editor or page"]
   gate{"Approval"}
   files["File tools<br/>under --root only"]
-  fetch["web_fetch<br/>public hosts only"]
-  cmd["bash, run_tests<br/>in the sandbox"]
+  fetch["web_fetch<br/>public hosts only, unless --allow-host"]
+  cmd["bash, run_tests<br/>in the sandbox, unless it is off"]
   out["outside_sandbox<br/>not confined"]
   mcp["Tool servers<br/>not confined"]
   store[("Transcript, change history<br/>not redacted")]
@@ -32,7 +32,11 @@ flowchart TD
   gate -->|"no allow rule"| out
   gate -->|"unless readOnlyHint"| mcp
   files --> store
-  files -.->|"around a write"| progs
+  fetch --> store
+  cmd --> store
+  out --> store
+  mcp --> store
+  files -.->|"around a change"| progs
 ```
 
 ## What is enforced

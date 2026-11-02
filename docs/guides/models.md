@@ -58,11 +58,11 @@ With an `escalate` model named, the session moves to it and back:
 
 ```mermaid
 flowchart LR
-  def(["The session's model"])
+  def["The session's model"]
   w["A write fails its check"]
   p["A proof refused twice"]
   t["A turn starts, most writes failed"]
-  esc(["The escalate model"])
+  esc["The escalate model"]
   back["2 writes pass"]
   def --> w
   def --> p
