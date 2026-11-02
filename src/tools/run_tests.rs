@@ -66,15 +66,23 @@ impl Tool for RunTests {
         // The suite runs the project's own code, so it runs in the same sandbox as the
         // shell.
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let (mut cmd, held) =
-            match crate::sandbox::confine::command(ctx.sandbox.as_deref(), program, &args) {
-                Ok(built) => built,
-                Err(e) => {
-                    return Ok(ToolOutput::err(format!(
-                        "the sandbox could not be applied, so the tests did not run: {e}"
-                    )))
-                }
-            };
+        let asking = crate::sandbox::confine::Asking {
+            gate: std::sync::Arc::new(ctx.clone()),
+            origin: format!("run_tests: {program} {}", argv.join(" ")),
+        };
+        let (mut cmd, held) = match crate::sandbox::confine::command(
+            ctx.sandbox.as_deref(),
+            Some(asking),
+            program,
+            &args,
+        ) {
+            Ok(built) => built,
+            Err(e) => {
+                return Ok(ToolOutput::err(format!(
+                    "the sandbox could not be applied, so the tests did not run: {e}"
+                )))
+            }
+        };
         // A test suite is the longest thing this agent starts.
         // Abandoning the turn has to take the suite with it.
         cmd.kill_on_drop(true);
@@ -88,7 +96,7 @@ impl Tool for RunTests {
             Ok(c) => c,
             Err(e) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
         };
-        drop(held);
+        // Kept until the suite has ended: the lease is its right to the network.
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let collect = async {
@@ -117,6 +125,9 @@ impl Tool for RunTests {
         report.push_str(&ctx.clamp(err));
         if let Some(sandbox) = ctx.sandbox.as_ref().filter(|_| code != 0) {
             report.push_str(&format!("\n{}", sandbox.note()));
+            for line in held.turned_away() {
+                report.push_str(&format!("\nnetwork refused {line}"));
+            }
         }
         Ok(ToolOutput::ok(report))
     }

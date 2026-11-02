@@ -180,7 +180,17 @@ fn matching(rules: &Rules, scope: &ApprovalScope, root: &Path, need: Need) -> Op
                 }
             };
         }
-        ApprovalScope::Host(host) => (&rules.egress, host.clone()),
+        ApprovalScope::Host(host) => {
+            let (name, port) = crate::sandbox::approval::split_authority(host);
+            return rules
+                .egress
+                .iter()
+                .find(|p| {
+                    let (pattern, wanted) = crate::sandbox::approval::split_authority(p);
+                    (wanted.is_none() || wanted == port) && glob_matches(pattern, name)
+                })
+                .map(|p| format!("\"{p}\""));
+        }
         ApprovalScope::Tool(tool) => (&rules.tools, tool.clone()),
         // Settled where the session runs, by its own rules.
         ApprovalScope::Told(_) => return None,
@@ -244,6 +254,32 @@ mod tests {
 
     fn bash(cmd: &str) -> ApprovalScope {
         ApprovalScope::Command(cmd.into())
+    }
+
+    /// A rule with no port covers every port, and a rule with a port covers that one.
+    #[test]
+    fn an_egress_rule_may_name_a_port() {
+        let rules = |names: &[&str]| Rules {
+            egress: names.iter().map(|n| n.to_string()).collect(),
+            ..Default::default()
+        };
+        let host = |h: &str| ApprovalScope::Host(h.into());
+        let root = Path::new("/p");
+        let p = policy(
+            rules(&["a.test", "b.test:443", "*.c.test:22"]),
+            Rules::default(),
+        );
+        assert_eq!(p.verdict(&host("a.test:25"), root, 0), Verdict::Allowed);
+        assert_eq!(p.verdict(&host("b.test:443"), root, 0), Verdict::Allowed);
+        assert_eq!(p.verdict(&host("b.test:22"), root, 0), Verdict::Ask);
+        assert_eq!(p.verdict(&host("x.c.test:22"), root, 0), Verdict::Allowed);
+        assert_eq!(p.verdict(&host("x.c.test:80"), root, 0), Verdict::Ask);
+        let p = policy(Rules::default(), rules(&["a.test:22"]));
+        assert!(matches!(
+            p.verdict(&host("a.test:22"), root, 0),
+            Verdict::Refused(_)
+        ));
+        assert_eq!(p.verdict(&host("a.test:443"), root, 0), Verdict::Ask);
     }
 
     #[test]

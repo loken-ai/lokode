@@ -20,6 +20,7 @@ flowchart TD
   files["File tools<br/>under --root only"]
   fetch["web_fetch<br/>public hosts only, unless --allow-host"]
   cmd["bash, run_tests<br/>in the sandbox, unless it is off"]
+  proxy["Proxy<br/>one decision per host"]
   out["outside_sandbox<br/>not confined"]
   mcp["Tool servers<br/>not confined"]
   store[("Transcript, change history<br/>not redacted")]
@@ -29,6 +30,8 @@ flowchart TD
   gate -->|"writes"| files
   gate -->|"each host"| fetch
   gate -->|"each command"| cmd
+  cmd -->|"each host"| gate
+  cmd -.-> proxy
   gate -->|"no allow rule"| out
   gate -->|"unless readOnlyHint"| mcp
   files --> store
@@ -76,7 +79,8 @@ An `allow` rule covers a line only when it covers every command and the line wri
 A `deny` rule names commands as written.
 A program run by another one, as with `xargs rm` or `find -exec rm`, is not seen by the rules.
 
-**Egress.** `web_fetch` accepts only `http(s)`, resolves the host rather than trusting the name, and refuses loopback, link-local (including the cloud metadata address), RFC1918, CGNAT and unique-local addresses.
+**Egress.** The proxy and `web_fetch` share one guard.
+`web_fetch` accepts only `http(s)`, resolves the host rather than trusting the name, and refuses loopback, link-local (including the cloud metadata address), RFC1918, CGNAT and unique-local addresses.
 
 `web_fetch` follows redirects itself, so the same check runs on every hop, and asks again when a redirect leaves the host you approved.  
 `--allow-host` opens a named exception.
@@ -100,16 +104,55 @@ A multi-file patch is applied wholly or not at all.
 |---|---|
 | Linux | Landlock |
 | macOS | Seatbelt, through `/usr/bin/sandbox-exec` and a profile lokode writes |
+| Windows | none: a command runs with your rights, whatever `[shell] sandbox` says |
 
 | `[shell] sandbox` | What a command may write | Network |
 |---|---|---|
-| `workspace` (default) | the project, `/tmp`, `$TMPDIR`, the build caches below your home directory that exist, and `[shell] writable` | yes |
-| `read-only` | nothing but the devices under `/dev` | no |
-| `off` | anything you may write | yes |
+| `workspace` (default) | the project, `/tmp`, `$TMPDIR`, the build caches below your home directory that exist, and `[shell] writable` | `proxy` |
+| `read-only` | nothing but the devices under `/dev` | `closed` |
+| `off` | anything you may write | open |
 
-- `[shell] network = false` leaves the command able to neither bind nor connect a TCP socket, on this machine included.
-  UDP is not cut on Linux, where the kernel needs Landlock ABI 4.
-  On macOS every IP socket is cut.
+| `[shell] network` | What a command reaches |
+|---|---|
+| `proxy` (default in the workspace) | what the proxy lets through, host by host |
+| `closed` | nothing |
+| `open` | everything |
+| `audit` | everything the rules do not refuse, and each host is recorded |
+
+- **Through the proxy**, a command has no route of its own.
+  `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` (SOCKS5) name the proxy of the session, and a token that belongs to that command.
+  On Linux with `nft` installed, a program that ignores them is carried too.
+  The namespace redirects every TCP connection to the proxy, and answers the name lookups itself with addresses of its own that stand for the names asked, so the question still names the host.
+  Such a connection carries no lease, so it is carried only while exactly 1 command holds the network.
+  Where `nft` is missing, or the kernel refuses the rules, a program that ignores the variables cannot connect.
+  `git` over ssh is then provided for: `GIT_SSH_COMMAND` runs `lokode tunnel`, which carries the connection through the same proxy.
+  Another client runs it as `ssh -o "ProxyCommand=lokode tunnel %h %p"`.
+- **Each host is decided once per command**, by the same checks as `web_fetch`: the `egress` rules of the configuration, an agreement given with `Always`, then you.
+  A refusal in the configuration wins.
+  The question names the command and the host.
+- **A name is not looked up before the host is agreed to**, because a lookup is itself a message that leaves the machine.
+  The proxy resolves the name, refuses private, loopback and metadata addresses, and connects to the address it checked.
+  `--allow-host` names an exception.
+- **An upload larger than usual is put to you.**
+  The proxy counts the bytes of every connection, whatever the protocol.
+  A connection that sends several times more than any earlier one to its host is paused until you answer.
+  Once it has received as much as the largest earlier upload, it must also send more for each byte received than any earlier one did.
+  What is usual is learned from the connections already seen, kept for the project in `$XDG_DATA_HOME/lokode/egress-history.json`.
+  The bytes a session sends to a host over all its connections are compared with the most an earlier session sent, so an upload cut into small connections is paused too.
+  A project that has seen nothing yet has nothing to compare with, so the first upload of a connection is put to you, and its size becomes the first usual.
+  The total of a session is not compared until an earlier session has ended.
+- **`/net`** lists what commands reached.
+  `/net save` writes the hosts agreed to with `Always` into `[approve.allow] egress` of `.lokode.toml`, so that the next person to work on the project does not answer the same questions.
+- On Linux the proxy listens in a network namespace made with an unprivileged user namespace, and a command joins it before Landlock applies.
+  The namespace has a loopback and no other route, so UDP and raw sockets are cut as well, and a service the command starts on its own loopback is reachable by it alone.
+  Where the kernel does not allow the namespace, the network is closed and the session says so.
+- On Linux the namespace includes a mount namespace in which the machine's runtime directory is empty, and so are the sockets that sit in the temporary directory when the session starts: the display, the terminal multiplexer and the key agents.
+  The session bus, the user's service manager, the container engine and the key agents live there, and a program that reaches one of them starts a process outside the sandbox.
+  A socket that is created elsewhere, or in the temporary directory after the session starts, is not hidden.
+  macOS does not hide them.
+- On macOS the profile cuts every IP socket except the proxy's own address.
+- `closed` uses the same namespace on Linux, and Landlock on a system that has no namespace.
+  Landlock leaves UDP open before ABI 4.
 - `LOKODE_API_KEY` and the variable named by `api-key-env` are taken out of the command's environment.
 - At every level but `off`, the credentials below your home directory cannot be read: `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.netrc`, `.git-credentials`, `.npmrc`, `.pypirc`, `.docker/config.json`, `.cargo/credentials.toml`, `.config/gh`, `.config/gcloud`, the keyrings, lokode's own configuration and its sessions.
   `[shell] hidden` adds to them.  
@@ -124,6 +167,12 @@ A multi-file patch is applied wholly or not at all.
   An `[A]lways` given to it covers that exact command outside the sandbox.
 - A sandbox asked for on a system that cannot confine refuses the command rather than run it unconfined.  
   On such a system with nothing asked, commands run unconfined and the session says so.
+
+**The proxy filters by host, not by content.**
+It sees the host and the port of a tunnel, and nothing of what travels in it.
+A host you agreed to receives whatever a command sends it, and a service that relays, such as a paste site or an API that takes the sender's own key, is a way out.
+A connection that names one host and reaches another through shared infrastructure, known as domain fronting, is not detected.
+The detection of large uploads compares with what the project has done before: it catches a sudden flood, and a leak in small pieces stays under it.
 
 **Outside the sandbox, a command is not confined.** It runs `/bin/sh -lc <string>` with your privileges and your environment.
 `-l` sources your login profile.  

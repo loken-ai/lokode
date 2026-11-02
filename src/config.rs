@@ -380,9 +380,20 @@ pub struct ShellSection {
     /// it never reads. Written like `writable`.
     #[serde(default)]
     pub hidden: Vec<PathBuf>,
-    /// Whether a confined command may open TCP connections.
-    /// Yes in the workspace, no in read-only, when not given.
-    pub network: Option<bool>,
+    /// How a confined command reaches the network: `closed`, `proxy` or `open`.
+    ///
+    /// When not given, `proxy` in the workspace where the system allows it, `closed` in
+    /// read-only.
+    /// The earlier form is a boolean: true is `open`, false is `closed`.
+    pub network: Option<NetworkSetting>,
+}
+
+/// What `[shell] network` says: a mode, or the earlier boolean.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum NetworkSetting {
+    Mode(crate::sandbox::confine::Network),
+    Flag(bool),
 }
 
 impl ShellSection {
@@ -1071,19 +1082,79 @@ pub fn resolve_sandbox(
             Err(why) => warnings.push(why.replace("writable", "hidden")),
         }
     }
-    let network = cfg.shell.network.unwrap_or(level != Level::ReadOnly);
-    if !network && crate::sandbox::confine::available() && !crate::sandbox::confine::cuts_network()
-    {
-        warnings.push(
-            "this kernel's Landlock cannot cut the network, so sandboxed commands keep it".into(),
-        );
-    }
+    use crate::sandbox::confine::Network;
+    let network = match cfg.shell.network {
+        Some(NetworkSetting::Mode(mode)) => mode,
+        Some(NetworkSetting::Flag(open)) => {
+            warnings.push(
+                "[shell] network = true or false is the earlier form: \
+                 write \"open\" or \"closed\""
+                    .into(),
+            );
+            match open {
+                true => Network::Open,
+                false => Network::Closed,
+            }
+        }
+        None if level == Level::ReadOnly => Network::Closed,
+        None => Network::Proxy,
+    };
+    let network = match level {
+        Level::ReadOnly if network != Network::Closed => {
+            warnings.push("a read-only sandbox keeps the network closed".into());
+            Network::Closed
+        }
+        _ => network,
+    };
     Sandbox {
         level,
         writable,
         hidden,
         network,
+        egress: None,
         unset,
+    }
+}
+
+/// Start the proxy a sandbox needs and say what became of its network.
+///
+/// Through the proxy needs one.
+/// Where none can start, the network is closed.
+/// A closed network uses the namespace when there is one and Landlock otherwise.
+pub async fn start_egress(
+    sandbox: &mut crate::sandbox::confine::Sandbox,
+    allow_hosts: std::sync::Arc<std::collections::HashSet<String>>,
+    journal: std::sync::Arc<crate::sandbox::egress::Journal>,
+    warnings: &mut Vec<String>,
+) {
+    use crate::sandbox::confine::Network;
+    let wanted = match sandbox.network {
+        Network::Proxy | Network::Audit => true,
+        Network::Closed => cfg!(target_os = "linux"),
+        Network::Open => false,
+    };
+    if !wanted {
+        return;
+    }
+    match crate::sandbox::egress::Egress::start(allow_hosts, journal).await {
+        Ok(egress) => sandbox.egress = Some(std::sync::Arc::new(egress)),
+        Err(e) if matches!(sandbox.network, Network::Proxy | Network::Audit) => {
+            warnings.push(format!(
+                "the network proxy could not start ({e}), so the network of commands is closed \
+                 (write network = \"open\" under [shell] to open it)"
+            ));
+            sandbox.network = Network::Closed;
+        }
+        Err(_) => {}
+    }
+    if sandbox.network == Network::Closed
+        && sandbox.egress.is_none()
+        && crate::sandbox::confine::available()
+        && !crate::sandbox::confine::cuts_network()
+    {
+        warnings.push(
+            "this kernel's Landlock cannot cut the network, so sandboxed commands keep it".into(),
+        );
     }
 }
 
@@ -1274,7 +1345,7 @@ mod tests {
             assert_eq!(s.unset, ["LOKODE_API_KEY", "MY_KEY"]);
             let s = resolve_sandbox(&cfg, root.path(), Level::ReadOnly, &mut warnings);
             assert!(s.writable.is_empty());
-            assert!(!s.network);
+            assert_eq!(s.network, crate::sandbox::confine::Network::Closed);
             std::fs::create_dir(home.path().join(".ssh")).unwrap();
             let s = resolve_sandbox(&cfg, root.path(), Level::Workspace, &mut warnings);
             assert!(s.hidden.contains(&home.path().join(".ssh")));

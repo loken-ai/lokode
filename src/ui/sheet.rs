@@ -54,6 +54,7 @@ fn subtitle_of(verb: &str) -> &'static str {
         "context" => "what fills the window",
         "cost" => "what this session spent",
         "approve" => "what is settled and agreed",
+        "net" => "what commands reached",
         "tools" => "what the model can call",
         "diff" => "what this session changed",
         "why" => "why this model answers",
@@ -71,7 +72,7 @@ impl Sheet {
     pub fn new(verb: &str, body: &str) -> Self {
         let body = if crate::ui::chat::looks_like_diff(body) {
             Body::Diff(body.to_string())
-        } else if matches!(verb, "help" | "cost" | "approve" | "tools" | "mcp")
+        } else if matches!(verb, "help" | "cost" | "approve" | "net" | "tools" | "mcp")
             || body.contains("\n## ")
             || body.starts_with("## ")
         {

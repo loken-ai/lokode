@@ -184,6 +184,9 @@ enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
+    /// Carry standard input and output to a host through the proxy of the session.
+    /// For a client that does not read the proxy variables, as `ssh -o ProxyCommand` runs it.
+    Tunnel { host: String, port: u16 },
     /// Install, update, remove or list plugins.
     Plugin {
         #[command(subcommand)]
@@ -248,6 +251,7 @@ fn main() -> Result<()> {
         Some(Command::Acp) => return acp_command(cli, None),
         Some(Command::Serve { port }) => return acp_command(cli, Some(port.unwrap_or(0))),
         Some(Command::Attach { url, session }) => return attach_command(cli, url, session),
+        Some(Command::Tunnel { host, port }) => return tunnel_command(&host, port),
         None => {}
     }
 
@@ -536,6 +540,20 @@ fn attach_command(cli: Cli, url: String, session: Option<String>) -> Result<()> 
         .enable_all()
         .build()?;
     runtime.block_on(lokode::ui::app_loop::run_remote(resolved.app, url, session))
+}
+
+/// Carry this process's standard input and output to `host:port` through the session's proxy.
+///
+/// The reason for a refusal goes to standard error, where the client that ran it shows it.
+fn tunnel_command(host: &str, port: u16) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    if let Err(why) = runtime.block_on(lokode::sandbox::tunnel::run(host, port)) {
+        eprintln!("lokode tunnel: {why}");
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 /// Install, update, remove or list plugins, saying what was done.
@@ -869,15 +887,12 @@ fn print_config(cfg: &Resolved) {
         "  sandbox            {}",
         match &a.sandbox {
             None => "off".to_string(),
-            Some(s) if s.writable.is_empty() => format!(
-                "{}, network {}",
-                s.level.label(),
-                if s.network { "on" } else { "off" }
-            ),
+            Some(s) if s.writable.is_empty() =>
+                format!("{}, network {}", s.level.label(), s.network.label()),
             Some(s) => format!(
                 "{}, network {}, writes in {}",
                 s.level.label(),
-                if s.network { "on" } else { "off" },
+                s.network.label(),
                 s.writable
                     .iter()
                     .map(|d| d.display().to_string())

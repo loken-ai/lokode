@@ -298,6 +298,30 @@ impl ToolCtx {
     /// Puts it to the user otherwise.
     /// Records an `Always`.
     /// Notices if the turn is abandoned while the prompt is on screen.
+    /// Agree to a host without asking, and note it for `/net save`.
+    ///
+    /// A rule of the configuration that refuses it still answers first.
+    /// A rule that asks is still asked about.
+    /// The agreement lasts for the session: the host is asked about again in a later one.
+    pub async fn record(&self, req: ApprovalRequest) -> Approval {
+        match self.policy.verdict(
+            &req.scope,
+            &self.root,
+            self.auto_used.load(Ordering::Relaxed),
+        ) {
+            crate::sandbox::policy::Verdict::Refused(why) => {
+                tracing::info!(tool = %req.tool, scope = ?req.scope, %why, "refused by policy");
+                return Approval::Denied(Denial::Rule(why));
+            }
+            crate::sandbox::policy::Verdict::Insist(_) => return self.approve(req).await,
+            _ => {}
+        }
+        if let crate::sandbox::approval::ApprovalScope::Host(host) = &req.scope {
+            self.session_approvals.audited(host);
+        }
+        Approval::Proceed
+    }
+
     pub async fn approve(&self, req: ApprovalRequest) -> Approval {
         // The configuration is read first, and its refusals answer on their own.
         // A rule written down so that something never happens is not reachable by an

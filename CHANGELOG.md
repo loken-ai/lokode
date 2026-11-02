@@ -4,6 +4,20 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+### Added
+
+- Shell: filter the network of commands through a proxy that asks about each host and port.
+- Shell: choose closed, proxy, audit or open for the network of commands.
+- Shell: carry the connections of programs that ignore the proxy, such as ssh.
+- Shell: pause a command that sends more to a host than ever before.
+- Shell: tell a failed command which hosts the proxy refused and why.
+- Interface: list in /net the hosts and ports commands reached, and save them to the project.
+
+### Changed
+
+- Shell: filter the network through the proxy by default in the workspace.
+- Shell: cut UDP as well when the network is closed on Linux.
+
 ## [0.4.0] - 2026-11-02
 
 ### Added

@@ -5,7 +5,8 @@
 //! A confined command and everything it starts may write only beneath the directories its
 //! [`Sandbox`] names, and to the devices under `/dev`.
 //! It may read everything but what the sandbox hides.
-//! It may open TCP connections only when the sandbox lets it.
+//! It may reach the network only as the sandbox lets it: not at all, through the proxy of
+//! [`egress`](super::egress), or freely.
 //!
 //! | System | Mechanism |
 //! |---|---|
@@ -13,9 +14,35 @@
 //! | macOS | Seatbelt: the command runs under `sandbox-exec` with a profile written here |
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-/// What has to be kept until a confined command has been spawned.
-pub type Held = Option<std::os::fd::OwnedFd>;
+use super::egress::{Egress, Gate, Lease};
+
+/// What has to be kept until a confined command has ended.
+///
+/// The ruleset is needed until the command has been spawned.
+/// The lease is the command's right to the proxy, and it ends with the command.
+#[derive(Default)]
+pub struct Held {
+    _ruleset: Option<std::os::fd::OwnedFd>,
+    _lease: Option<Lease>,
+}
+
+impl Held {
+    /// The connections of the command that were turned away, and why.
+    pub fn turned_away(&self) -> Vec<String> {
+        self._lease
+            .as_ref()
+            .map(Lease::turned_away)
+            .unwrap_or_default()
+    }
+}
+
+/// Who asks for the connections of a command, and how it is named in the question.
+pub struct Asking {
+    pub gate: Arc<dyn Gate>,
+    pub origin: String,
+}
 
 /// What confines commands on this system, for saying so.
 pub const MECHANISM: &str = if cfg!(target_os = "macos") {
@@ -46,15 +73,16 @@ pub fn cuts_network() -> bool {
 /// A sandbox that cannot be applied is an error, never a command left unconfined.
 pub fn command(
     sandbox: Option<&Sandbox>,
+    asking: Option<Asking>,
     program: &str,
     args: &[&str],
 ) -> std::io::Result<(tokio::process::Command, Held)> {
     match sandbox {
-        Some(s) => s.command(program, args),
+        Some(s) => s.command(asking, program, args),
         None => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.args(args);
-            Ok((cmd, None))
+            Ok((cmd, Held::default()))
         }
     }
 }
@@ -81,6 +109,32 @@ impl Level {
     }
 }
 
+/// How a confined command reaches the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Network {
+    /// It reaches nothing.
+    Closed,
+    /// It reaches what the proxy lets through, host by host.
+    Proxy,
+    /// It reaches everything.
+    Open,
+    /// It goes through the proxy, which lets every host through and records it.
+    /// A rule that refuses a host still does.
+    Audit,
+}
+
+impl Network {
+    pub fn label(self) -> &'static str {
+        match self {
+            Network::Closed => "closed",
+            Network::Proxy => "proxy",
+            Network::Open => "open",
+            Network::Audit => "audit",
+        }
+    }
+}
+
 /// What a confined command may do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sandbox {
@@ -89,34 +143,87 @@ pub struct Sandbox {
     pub writable: Vec<PathBuf>,
     /// The directories and files it may not read.
     pub hidden: Vec<PathBuf>,
-    /// Whether it may bind and connect TCP sockets.
-    pub network: bool,
+    /// How it reaches the network.
+    pub network: Network,
+    /// The proxy and the network namespace of the session, when it has them.
+    pub egress: Option<Arc<Egress>>,
     /// The environment variables taken out of what it inherits.
     pub unset: Vec<String>,
 }
 
 impl Sandbox {
     /// A command that runs `program` with `args` in this sandbox, and what must be kept
-    /// until it has been spawned.
+    /// until it has ended.
+    ///
+    /// Through the proxy, the command is given a lease and the environment that uses it.
+    /// `asking` says who answers the proxy's questions.
+    /// A command that is to go through the proxy without anyone to ask is refused.
     pub fn command(
         &self,
+        asking: Option<Asking>,
         program: &str,
         args: &[&str],
     ) -> std::io::Result<(tokio::process::Command, Held)> {
-        if cfg!(target_os = "macos") {
-            let mut cmd = seatbelt::command(&seatbelt::profile(self), program, args);
-            for var in &self.unset {
-                cmd.env_remove(var);
+        let lease = match self.network {
+            Network::Proxy | Network::Audit => {
+                let egress = self
+                    .egress
+                    .as_ref()
+                    .ok_or_else(|| std::io::Error::other("the network proxy is not running"))?;
+                let asking = asking
+                    .ok_or_else(|| std::io::Error::other("nobody answers for this command"))?;
+                // An audit has the questions answered by recording the host.
+                let gate: std::sync::Arc<dyn super::egress::Gate> = match self.network {
+                    Network::Audit => std::sync::Arc::new(super::egress::Recording(asking.gate)),
+                    _ => asking.gate,
+                };
+                Some(egress.lease(gate, asking.origin))
             }
-            return Ok((cmd, None));
+            Network::Closed | Network::Open => None,
+        };
+        let (mut cmd, ruleset) = if cfg!(target_os = "macos") {
+            let cmd = seatbelt::command(&seatbelt::profile(self), program, args);
+            (cmd, None)
+        } else {
+            let mut cmd = tokio::process::Command::new(program);
+            cmd.args(args);
+            let fd = self.confine(&mut cmd)?;
+            (cmd, Some(fd))
+        };
+        for var in &self.unset {
+            cmd.env_remove(var);
         }
-        let mut cmd = tokio::process::Command::new(program);
-        cmd.args(args);
-        let fd = self.confine(&mut cmd)?;
-        Ok((cmd, Some(fd)))
+        if let Some(lease) = &lease {
+            cmd.envs(lease.env());
+        }
+        Ok((
+            cmd,
+            Held {
+                _ruleset: ruleset,
+                _lease: lease,
+            },
+        ))
     }
 
-    /// Confine `cmd` with Landlock.
+    /// The namespaces the command joins, when its network is cut or filtered by them.
+    fn namespaces(&self) -> Option<[std::os::fd::RawFd; 3]> {
+        match self.network {
+            Network::Open => None,
+            Network::Closed | Network::Proxy | Network::Audit => {
+                self.egress.as_ref().and_then(|e| e.namespaces())
+            }
+        }
+    }
+
+    /// Whether Landlock leaves TCP alone.
+    ///
+    /// A namespace has already cut the network, and an open network has not been cut.
+    /// A closed network without a namespace is cut by Landlock.
+    fn tcp_free(&self) -> bool {
+        self.network != Network::Closed || self.namespaces().is_some()
+    }
+
+    /// Confine `cmd` with Landlock, and put it in the network namespace when there is one.
     ///
     /// It takes out the variables the command must not see.
     /// It has the command give up what the sandbox does not allow before it runs.
@@ -125,14 +232,16 @@ impl Sandbox {
         for var in &self.unset {
             cmd.env_remove(var);
         }
-        let fd = ruleset(&self.writable, &self.hidden, self.network)?;
+        let fd = ruleset(&self.writable, &self.hidden, self.tcp_free())?;
         use std::os::fd::AsRawFd;
         let raw = fd.as_raw_fd();
-        // SAFETY: `restrict_after_fork` makes 2 syscalls and nothing else.
+        let spaces = self.namespaces().unwrap_or([-1; 3]);
+        // SAFETY: `restrict_after_fork` makes a few syscalls and nothing else.
         // It does no allocation and takes no locks, which is what a post-fork hook may do.
         // `raw` stays open because the caller keeps `fd` until the spawn is over.
+        // `spaces` are owned by the session's egress, which the sandbox keeps alive.
         unsafe {
-            cmd.pre_exec(move || restrict_after_fork(raw));
+            cmd.pre_exec(move || restrict_after_fork(raw, spaces));
         }
         Ok(fd)
     }
@@ -144,8 +253,12 @@ impl Sandbox {
             _ => "may write only in the project, the temporary directory and the build caches",
         };
         let network = match self.network {
-            true => "",
-            false => ", and may not open a network connection",
+            Network::Open => "",
+            Network::Proxy => ", and reaches the network only through the proxy, host by host",
+            Network::Audit => {
+                ", and reaches the network through the proxy, which records each host"
+            }
+            Network::Closed => ", and may not open a network connection",
         };
         format!(
             "It ran in a sandbox: it {writes}{network}. If the sandbox is what stopped it, the \
@@ -189,6 +302,11 @@ mod seatbelt {
     /// The profile for `sandbox`.
     /// The last rule that matches decides.
     pub fn profile(sandbox: &super::Sandbox) -> String {
+        profile_for(sandbox, sandbox.egress.as_ref().map(|e| e.port()))
+    }
+
+    /// The profile for `sandbox`, with the proxy listening on `proxy_port` when there is one.
+    pub fn profile_for(sandbox: &super::Sandbox, proxy_port: Option<u16>) -> String {
         let mut out = vec![
             "(version 1)".to_string(),
             "(allow default)".to_string(),
@@ -201,10 +319,18 @@ mod seatbelt {
         for path in &sandbox.hidden {
             out.push(format!("(deny file-read* {})", filter(path)));
         }
-        if !sandbox.network {
+        if sandbox.network != super::Network::Open {
             out.push("(deny network-outbound (remote ip))".to_string());
             out.push("(deny network-bind (local ip))".to_string());
             out.push("(deny network-inbound (local ip))".to_string());
+        }
+        // Through the proxy, the one address it listens on stays reachable.
+        if let (super::Network::Proxy | super::Network::Audit, Some(port)) =
+            (sandbox.network, proxy_port)
+        {
+            out.push(format!(
+                "(allow network-outbound (remote ip \"localhost:{port}\"))"
+            ));
         }
         out.join("\n")
     }
@@ -443,14 +569,34 @@ mod linux {
         Ok(())
     }
 
-    /// Apply the ruleset to this process. Runs in the child, between `fork` and `exec`.
+    /// Join the namespaces when there are some, then apply the ruleset to this process.
+    /// Runs in the child, between `fork` and `exec`.
     ///
-    /// 2 syscalls and nothing else: no allocation, no locks, nothing that another thread
+    /// A few syscalls and nothing else: no allocation, no locks, nothing that another thread
     /// in the parent could have been holding when the fork happened.
+    /// The user namespace comes first, because joining the network namespace takes the rights
+    /// that only it gives.
     ///
     /// # Safety
     /// `fd` must be an open Landlock ruleset descriptor.
-    pub unsafe fn restrict_after_fork(fd: RawFd) -> io::Result<()> {
+    /// `spaces` must be open descriptors of the user, network and mount namespaces, in that
+    /// order, or negative for none.
+    pub unsafe fn restrict_after_fork(fd: RawFd, spaces: [RawFd; 3]) -> io::Result<()> {
+        let [user, net, mount] = spaces;
+        if user >= 0 {
+            // Joining the mount namespace puts the working directory at its root.
+            let mut here = [0u8; 4096];
+            if libc::getcwd(here.as_mut_ptr().cast(), here.len()).is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::setns(user, libc::CLONE_NEWUSER) != 0
+                || libc::setns(net, libc::CLONE_NEWNET) != 0
+                || libc::setns(mount, libc::CLONE_NEWNS) != 0
+                || libc::chdir(here.as_ptr().cast()) != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+        }
         // Landlock refuses to apply without this.
         // It stops a confined command from regaining privileges through a setuid binary.
         if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
@@ -486,7 +632,7 @@ mod elsewhere {
 
     /// # Safety
     /// Never called: there is no ruleset to apply.
-    pub unsafe fn restrict_after_fork(_fd: RawFd) -> io::Result<()> {
+    pub unsafe fn restrict_after_fork(_fd: RawFd, _spaces: [RawFd; 3]) -> io::Result<()> {
         Ok(())
     }
 }
@@ -512,7 +658,8 @@ mod tests {
                 dir.path().join("secret"),
                 PathBuf::from("/a \"quoted\" dir"),
             ],
-            network: false,
+            network: Network::Closed,
+            egress: None,
             unset: Vec::new(),
         };
         let profile = seatbelt::profile(&sandbox);
@@ -540,10 +687,27 @@ mod tests {
         at(r#"(deny file-read* (subpath "/a \"quoted\" dir"))"#);
         at("(deny network-outbound (remote ip))");
         let open = seatbelt::profile(&Sandbox {
-            network: true,
-            ..sandbox
+            network: Network::Open,
+            ..sandbox.clone()
         });
         assert!(!open.contains("network"), "{open}");
+        // Through the proxy, TCP is cut and the proxy's own address is let back in after it.
+        let proxied = Sandbox {
+            network: Network::Proxy,
+            ..sandbox
+        };
+        let through = seatbelt::profile_for(&proxied, Some(3128));
+        let lines: Vec<&str> = through.lines().collect();
+        let cut = lines
+            .iter()
+            .position(|l| *l == "(deny network-outbound (remote ip))")
+            .unwrap();
+        let back = lines
+            .iter()
+            .position(|l| *l == "(allow network-outbound (remote ip \"localhost:3128\"))")
+            .unwrap();
+        assert!(cut < back, "{through}");
+        assert!(!seatbelt::profile_for(&proxied, None).contains("localhost"));
         let cmd = seatbelt::command(&profile, "/bin/sh", &["-lc", "ls"]);
         let args: Vec<String> = cmd
             .as_std()
@@ -631,7 +795,8 @@ mod tests {
             level: Level::Workspace,
             writable: vec![dir.path().to_path_buf()],
             hidden: vec![dir.path().join("secret")],
-            network: true,
+            network: Network::Open,
+            egress: None,
             unset: Vec::new(),
         };
         let mut cmd = tokio::process::Command::new("/bin/sh");
@@ -655,12 +820,13 @@ mod tests {
         }
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let run = |network: bool| {
+        let run = |network: Network| {
             let sandbox = Sandbox {
                 level: Level::Workspace,
                 writable: Vec::new(),
                 hidden: Vec::new(),
                 network,
+                egress: None,
                 unset: Vec::new(),
             };
             async move {
@@ -677,7 +843,149 @@ mod tests {
         if !std::path::Path::new("/bin/bash").exists() {
             return;
         }
-        assert!(run(true).await);
-        assert!(!run(false).await);
+        assert!(run(Network::Open).await);
+        assert!(!run(Network::Closed).await);
+    }
+
+    /// A gate that answers the same way to everything.
+    #[cfg(target_os = "linux")]
+    struct Answer(bool);
+
+    #[cfg(target_os = "linux")]
+    #[async_trait::async_trait]
+    impl Gate for Answer {
+        async fn approve(
+            &self,
+            _req: crate::sandbox::approval::ApprovalRequest,
+        ) -> crate::sandbox::approval::Approval {
+            match self.0 {
+                true => crate::sandbox::approval::Approval::Proceed,
+                false => crate::sandbox::approval::Approval::Denied(
+                    crate::sandbox::approval::Denial::User(None),
+                ),
+            }
+        }
+    }
+
+    /// What a command prints, run in a sandbox with the network `network`.
+    ///
+    /// `None` where this machine cannot make the namespace, which the tests then skip.
+    #[cfg(target_os = "linux")]
+    async fn printed(network: Network, agree: bool, script: &str) -> Option<String> {
+        if !available() || !std::path::Path::new("/bin/bash").exists() {
+            return None;
+        }
+        let allow = Arc::new(["127.0.0.1".to_string()].into_iter().collect());
+        let egress = Egress::start(allow, Default::default()).await.ok()?;
+        let sandbox = Sandbox {
+            level: Level::Workspace,
+            writable: Vec::new(),
+            hidden: Vec::new(),
+            network,
+            egress: Some(Arc::new(egress)),
+            unset: Vec::new(),
+        };
+        let asking = Asking {
+            gate: Arc::new(Answer(agree)),
+            origin: "bash: test".into(),
+        };
+        let (mut cmd, held) = sandbox
+            .command(Some(asking), "/bin/bash", &["-c", script])
+            .unwrap();
+        let out = cmd.output().await.unwrap();
+        drop(held);
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// A service on this machine's loopback, which answers once and hangs up.
+    #[cfg(target_os = "linux")]
+    fn service() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for _ in 0..8 {
+                let _ = listener.accept();
+            }
+        });
+        port
+    }
+
+    /// The command reaches the service directly: what the test is measured against.
+    #[cfg(target_os = "linux")]
+    fn direct(port: u16) -> String {
+        format!("exec 3<>/dev/tcp/127.0.0.1/{port} && echo connected")
+    }
+
+    /// The command asks the proxy for a tunnel to the service and prints the answer line.
+    #[cfg(target_os = "linux")]
+    fn tunnel(port: u16) -> String {
+        format!(
+            "url=$https_proxy; hostport=${{url#*@}}; proxy=${{hostport##*:}}; \
+             user=${{url#http://}}; user=${{user%%:*}}; \
+             auth=$(printf '%s:x' \"$user\" | base64); \
+             exec 3<>/dev/tcp/127.0.0.1/$proxy; \
+             printf 'CONNECT 127.0.0.1:{port} HTTP/1.1\\r\\nProxy-Authorization: Basic %s\\r\\n\\r\\n' \"$auth\" >&3; \
+             head -1 <&3"
+        )
+    }
+
+    /// A closed network is the namespace's own loopback: the service on this machine's is out
+    /// of reach, and an open network reaches it.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_closed_network_does_not_reach_this_machines_loopback() {
+        let port = service();
+        let Some(open) = printed(Network::Open, true, &direct(port)).await else {
+            return;
+        };
+        assert!(open.contains("connected"), "{open}");
+        let closed = printed(Network::Closed, true, &direct(port)).await.unwrap();
+        assert!(!closed.contains("connected"), "{closed}");
+    }
+
+    /// The namespace keeps the identity of the one who runs the command.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_command_in_the_namespace_keeps_its_identity() {
+        let Some(seen) = printed(Network::Closed, true, "id -u").await else {
+            return;
+        };
+        // SAFETY: a plain call that returns an identity.
+        let own = unsafe { libc::getuid() };
+        assert_eq!(seen.trim(), own.to_string());
+    }
+
+    /// Through the proxy a command reaches the host the gate agrees to, and only that way.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_proxied_command_reaches_what_the_gate_agrees_to() {
+        let port = service();
+        let Some(agreed) = printed(Network::Proxy, true, &tunnel(port)).await else {
+            return;
+        };
+        assert!(agreed.starts_with("HTTP/1.1 200"), "{agreed}");
+        let refused = printed(Network::Proxy, false, &tunnel(port)).await.unwrap();
+        assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+        let direct = printed(Network::Proxy, true, &direct(port)).await.unwrap();
+        assert!(!direct.contains("connected"), "{direct}");
+    }
+
+    /// A command that is to go through the proxy with nobody to answer for it does not run.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_proxied_command_without_a_gate_is_refused() {
+        let Ok(egress) = Egress::start(Arc::new(Default::default()), Default::default()).await
+        else {
+            return;
+        };
+        let sandbox = Sandbox {
+            level: Level::Workspace,
+            writable: Vec::new(),
+            hidden: Vec::new(),
+            network: Network::Proxy,
+            egress: Some(Arc::new(egress)),
+            unset: Vec::new(),
+        };
+        assert!(sandbox.command(None, "/bin/true", &[]).is_err());
     }
 }

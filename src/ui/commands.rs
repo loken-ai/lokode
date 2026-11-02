@@ -404,6 +404,96 @@ pub(crate) struct CommandCtx<'a> {
     pub(crate) busy: bool,
 }
 
+/// What the commands' network has done, or `/net save` to share the hosts agreed to.
+async fn net(
+    rest: &str,
+    root: &std::path::Path,
+    approvals: &crate::sandbox::approval::SessionApprovals,
+) -> String {
+    use crate::sandbox::egress::size;
+    if rest == "save" {
+        let hosts = approvals.hosts().await;
+        if hosts.is_empty() {
+            return "no host has been agreed to with Always".to_string();
+        }
+        return match crate::sandbox::hosts::save(root, &hosts) {
+            Err(e) => format!("the hosts were not saved: {e:#}"),
+            Ok(saved) => {
+                let mut out = match saved.added.is_empty() {
+                    true => "every host agreed to is already in the project file\n".to_string(),
+                    false => format!(
+                        "{} host(s) added to `[approve.allow] egress` of `{}`: {}\n",
+                        saved.added.len(),
+                        saved.path.display(),
+                        saved.added.join(", ")
+                    ),
+                };
+                if !saved.added.is_empty() {
+                    out.push_str(match saved.trusted {
+                        true => "Commit the file to share them.\n",
+                        false => {
+                            "The file holds other settings that were not trusted, so the next \
+                             session asks again.\nCommit the file to share the hosts.\n"
+                        }
+                    });
+                }
+                out
+            }
+        };
+    }
+    let journal = approvals.journal();
+    let mut out = String::from("## Reached by commands in this session\n\n");
+    let seen = journal.seen();
+    if seen.is_empty() {
+        out.push_str("No command has reached for the network.\n");
+    } else {
+        out.push_str("| Host | Ports | Connections | Sent | Received | Refused |\n|---|---|---|---|---|---|\n");
+        for (host, s) in &seen {
+            let refused = match &s.last_refusal {
+                Some(why) => format!("{} ({why})", s.refused),
+                None => s.refused.to_string(),
+            };
+            let ports: Vec<String> = s.ports.iter().map(|p| p.to_string()).collect();
+            out.push_str(&format!(
+                "| `{host}` | {} | {} | {} | {} | {refused} |\n",
+                ports.join(", "),
+                s.connections,
+                size(s.sent),
+                size(s.received)
+            ));
+        }
+    }
+    let usual = journal.usual();
+    if !usual.is_empty() {
+        out.push_str("\n## Usual for this project\n\n");
+        out.push_str(
+            "| Host | Largest upload | Most sent for each byte received |\n|---|---|---|\n",
+        );
+        for (host, u) in &usual {
+            out.push_str(&format!(
+                "| `{host}` | {} | {:.2} |\n",
+                size(u.sent),
+                u.ratio
+            ));
+        }
+        out.push_str("\nA connection that sends more than both is paused and put to you.\n");
+    }
+    let agreed = approvals.hosts().await;
+    out.push_str("\n## Agreed with Always\n\n");
+    match agreed.is_empty() {
+        true => out.push_str("No host.\n"),
+        false => {
+            for host in &agreed {
+                out.push_str(&format!("- `{host}`\n"));
+            }
+            out.push_str(
+                "\n`/net save` adds them to the project file, for everyone who works on it.\n",
+            );
+        }
+    }
+    out
+}
+
 /// Sign in to the server `name` over HTTP.
 /// The address is given at once.
 /// The server is started again once the browser comes back.
@@ -878,6 +968,9 @@ pub(crate) async fn run_command(command: &str, cx: CommandCtx<'_>) -> Ran {
         }
         return Ran::Said(out);
     }
+    if verb == "net" {
+        return Ran::Said(net(rest, root, approvals).await);
+    }
     if verb == "plan" || verb == "act" {
         if busy {
             return Ran::Said("the agent is working; ask again when the turn is over".into());
@@ -1051,7 +1144,7 @@ const GROUPS: [(&str, &[&str]); 4] = [
     (
         "Where things stand",
         &[
-            "why", "cost", "context", "jobs", "lsp", "digest", "tools", "agents", "skills",
+            "why", "cost", "context", "jobs", "net", "lsp", "digest", "tools", "agents", "skills",
             "plugins", "mcp", "help",
         ],
     ),
@@ -1136,6 +1229,7 @@ pub(crate) const HELP: &str = "\
 /lsp    the language servers, where each stands and what it reports
 /compact elide the oldest steps now rather than when it fills
 /approve what is in force, here and in the configuration, or /approve forget
+/net    what commands reached over the network, or /net save to share the hosts agreed to
 /plan   read and search, change nothing
 /act    leave planning, change things again
 /model  what the backend serves, or /model <name> to switch and remember it
@@ -1232,5 +1326,64 @@ mod shell_tests {
         let (is_error, body) = run_shell("sleep 30", Path::new("."), 4096, stop, |_| {}).await;
         assert!(is_error);
         assert_eq!(body, "stopped before it finished");
+    }
+}
+
+#[cfg(test)]
+mod net_tests {
+    use super::*;
+    use crate::sandbox::approval::{ApprovalScope, SessionApprovals};
+
+    /// `/net` says what was reached and which hosts `/net save` would share.
+    #[tokio::test]
+    async fn net_lists_what_was_reached_and_the_hosts_agreed_to() {
+        let approvals = SessionApprovals::new();
+        let root = std::path::Path::new("/p");
+        assert!(net("", root, &approvals)
+            .await
+            .contains("No command has reached"));
+
+        approvals.journal().reached("docs.rs", 443);
+        approvals.journal().connected("docs.rs", 2_000, 90_000);
+        approvals
+            .mark_always(ApprovalScope::Host("docs.rs".into()))
+            .await;
+        let said = net("", root, &approvals).await;
+        assert!(
+            said.contains("| `docs.rs` | 443 | 1 | 2.0 KB | 90.0 KB | 0 |"),
+            "{said}"
+        );
+        assert!(said.contains("- `docs.rs`"), "{said}");
+        assert!(said.contains("/net save"), "{said}");
+    }
+
+    /// Nothing is written when nothing was agreed to.
+    #[tokio::test]
+    async fn net_save_has_nothing_to_save_before_an_agreement() {
+        let approvals = SessionApprovals::new();
+        let said = net("save", std::path::Path::new("/p"), &approvals).await;
+        assert!(said.contains("no host has been agreed to"), "{said}");
+    }
+
+    /// Saving writes the agreed hosts into the project file.
+    #[test]
+    fn net_save_writes_the_agreed_hosts_into_the_project_file() {
+        let root = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        crate::paths::with_env(&[("XDG_DATA_HOME", data.path().to_str())], || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                let approvals = SessionApprovals::new();
+                approvals
+                    .mark_always(ApprovalScope::Host("crates.io".into()))
+                    .await;
+                let said = net("save", root.path(), &approvals).await;
+                assert!(said.contains("crates.io"), "{said}");
+            });
+        });
+        let text = std::fs::read_to_string(root.path().join(".lokode.toml")).unwrap();
+        assert!(text.contains("\"crates.io\""), "{text}");
     }
 }

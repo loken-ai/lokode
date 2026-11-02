@@ -77,6 +77,7 @@ The others open a list with `no` selected.
 | `/jobs` | what is running now, to point at its step or stop work done outside a turn |
 | `/lsp` | the language servers: where each stands, the files it reports, why one is down |
 | `/approve`, `/approve forget` | what is in force here and in the configuration, or take it back |
+| `/net`, `/net save` | what commands reached over the network, or share the hosts you agreed to with the project |
 | `/why`, `/digest`, `/tools`, `/agents`, `/skills`, `/plugins`, `/mcp` | what is in force, what is known, what can be called |
 
 A command that takes a name offers the names.

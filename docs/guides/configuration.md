@@ -81,7 +81,7 @@ allow-hosts = ["docs.example.com"]
 
 [shell]
 sandbox = "workspace"           # workspace | read-only | off
-network = true                  # false refuses TCP to a sandboxed command
+network = "proxy"               # proxy | closed | open | audit
 writable = ["~/.local/share/pnpm"]
 hidden = ["~/work/secrets"]
 

@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -9,6 +8,7 @@ use serde_json::{json, Value};
 use url::Url;
 
 use crate::sandbox::approval::{Approval, ApprovalRequest, ApprovalScope};
+use crate::sandbox::egress::public_addrs;
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 
 /// How many redirects to follow before giving up.
@@ -199,67 +199,8 @@ async fn check_public(url: Url, allow: &HashSet<String>) -> Result<Url, String> 
     }
 
     let port = url.port_or_known_default().unwrap_or(80);
-    let addrs = tokio::net::lookup_host((host.as_str(), port))
-        .await
-        .map_err(|e| format!("cannot resolve {host}: {e}"))?;
-
-    let mut saw_none = true;
-    for addr in addrs {
-        saw_none = false;
-        if is_blocked(addr.ip()) {
-            return Err(format!(
-                "{host} resolves to {}, which is not a public address \
-                 (pass --allow-host {host} if that is deliberate)",
-                addr.ip()
-            ));
-        }
-    }
-    if saw_none {
-        return Err(format!("{host} resolves to nothing"));
-    }
+    public_addrs(&host, port).await?;
     Ok(url)
-}
-
-/// Whether an address belongs to a range this tool must not reach.
-///
-/// Loopback and the link-local block that carries cloud metadata are the ones that matter most.
-/// Every non-public range is refused.
-/// Reaching a service inside the network the agent runs in is the same class of mistake.
-fn is_blocked(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_blocked_v4(v4),
-        IpAddr::V6(v6) => is_blocked_v6(v6),
-    }
-}
-
-fn is_blocked_v4(v4: Ipv4Addr) -> bool {
-    let [a, b, ..] = v4.octets();
-    v4.is_loopback()
-        || v4.is_private()
-        || v4.is_link_local()
-        || v4.is_broadcast()
-        || v4.is_documentation()
-        || v4.is_unspecified()
-        || v4.is_multicast()
-        || a == 0
-        // Carrier-grade NAT, 100.64.0.0/10.
-        || (a == 100 && (b & 0xc0) == 64)
-        // Reserved, 240.0.0.0/4.
-        || a >= 240
-}
-
-fn is_blocked_v6(v6: Ipv6Addr) -> bool {
-    if let Some(mapped) = v6.to_ipv4_mapped() {
-        return is_blocked_v4(mapped);
-    }
-    let first = v6.segments()[0];
-    v6.is_loopback()
-        || v6.is_unspecified()
-        || v6.is_multicast()
-        // Unique local, fc00::/7.
-        || (first & 0xfe00) == 0xfc00
-        // Link-local unicast, fe80::/10.
-        || (first & 0xffc0) == 0xfe80
 }
 
 /// Reduce a page to the text a model can read.
@@ -363,61 +304,6 @@ fn decode_entities(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn v4(s: &str) -> IpAddr {
-        s.parse().unwrap()
-    }
-
-    /// The address a compromised fetch is aimed at first.
-    #[test]
-    fn cloud_metadata_is_blocked() {
-        assert!(is_blocked(v4("169.254.169.254")));
-    }
-
-    #[test]
-    fn loopback_and_private_ranges_are_blocked() {
-        for addr in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "192.168.1.1",
-            "172.16.0.1",
-            "0.0.0.0",
-        ] {
-            assert!(is_blocked(v4(addr)), "{addr} should be refused");
-        }
-    }
-
-    #[test]
-    fn carrier_grade_nat_is_blocked() {
-        assert!(is_blocked(v4("100.64.0.1")));
-        assert!(is_blocked(v4("100.127.255.255")));
-        // 100.63 and 100.128 are outside the /10 and are ordinary public space.
-        assert!(!is_blocked(v4("100.63.255.255")));
-        assert!(!is_blocked(v4("100.128.0.1")));
-    }
-
-    #[test]
-    fn public_addresses_are_allowed() {
-        for addr in ["1.1.1.1", "8.8.8.8", "93.184.216.34"] {
-            assert!(!is_blocked(v4(addr)), "{addr} should be allowed");
-        }
-    }
-
-    /// An IPv4 address wearing an IPv6 costume is the same address.
-    #[test]
-    fn ipv4_mapped_addresses_are_judged_as_ipv4() {
-        assert!(is_blocked(v4("::ffff:127.0.0.1")));
-        assert!(is_blocked(v4("::ffff:169.254.169.254")));
-        assert!(!is_blocked(v4("::ffff:8.8.8.8")));
-    }
-
-    #[test]
-    fn ipv6_local_ranges_are_blocked() {
-        for addr in ["::1", "::", "fc00::1", "fd12:3456::1", "fe80::1"] {
-            assert!(is_blocked(v4(addr)), "{addr} should be refused");
-        }
-        assert!(!is_blocked(v4("2606:4700:4700::1111")));
-    }
 
     #[tokio::test]
     async fn non_http_schemes_are_refused() {

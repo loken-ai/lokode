@@ -24,7 +24,9 @@ pub enum ApprovalScope {
     Unconfined(String),
     /// Writes by one tool anywhere under a directory.
     Path { tool: String, prefix: PathBuf },
-    /// Network egress to one host.
+    /// Network egress to one host, or to one port of it when written `host:port`.
+    ///
+    /// An address with colons is written in brackets before its port: `[::1]:443`.
     Host(String),
     /// Every call of a tool whose whole surface is the single action just approved.
     Tool(String),
@@ -80,8 +82,45 @@ impl ApprovalScope {
                     prefix: sp,
                 },
             ) => gt == st && sp.starts_with(gp),
+            (ApprovalScope::Host(g), ApprovalScope::Host(h)) => {
+                let (gh, gp) = split_authority(g);
+                let (hh, hp) = split_authority(h);
+                gh == hh && (gp.is_none() || gp == hp)
+            }
             _ => granted == self,
         }
+    }
+}
+
+/// A host and a port written as one name: `host:port`, with brackets around an address that
+/// has colons.
+pub fn authority(host: &str, port: u16) -> String {
+    match host.contains(':') {
+        true => format!("[{host}]:{port}"),
+        false => format!("{host}:{port}"),
+    }
+}
+
+/// The host, and the port when one is written, of a name made by `authority` or of a rule.
+///
+/// A rule may hold a wildcard in its host part, and a name with no port stands for every port.
+pub fn split_authority(name: &str) -> (&str, Option<u16>) {
+    if let Some(rest) = name.strip_prefix('[') {
+        return match rest.split_once(']') {
+            Some((host, "")) => (host, None),
+            Some((host, tail)) => match tail.strip_prefix(':').and_then(|p| p.parse().ok()) {
+                Some(port) => (host, Some(port)),
+                None => (name, None),
+            },
+            None => (name, None),
+        };
+    }
+    match name.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => match port.parse() {
+            Ok(port) => (host, Some(port)),
+            Err(_) => (name, None),
+        },
+        _ => (name, None),
     }
 }
 
@@ -176,6 +215,10 @@ pub struct SessionApprovals {
     /// Writes and nothing else.
     /// A shell command and a request leaving the machine are still asked about.
     writes: AtomicBool,
+    /// The hosts an audit let through, which are listed for `/net save` and agreed to by nothing else.
+    audited: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// What the commands' network has seen, which the questions about it are answered from.
+    journal: std::sync::Arc<crate::sandbox::egress::Journal>,
 }
 
 impl SessionApprovals {
@@ -193,6 +236,7 @@ impl SessionApprovals {
         Self {
             always: Mutex::new(always),
             kept: Some(root.to_path_buf()),
+            journal: std::sync::Arc::new(crate::sandbox::egress::Journal::kept_for(root)),
             ..Self::default()
         }
     }
@@ -231,6 +275,36 @@ impl SessionApprovals {
         let mut held = self.always.lock().await;
         held.insert(scope);
         self.keep(&held);
+    }
+
+    /// What the commands' network has seen.
+    pub fn journal(&self) -> std::sync::Arc<crate::sandbox::egress::Journal> {
+        self.journal.clone()
+    }
+
+    /// Note a host that an audit let through.
+    ///
+    /// It is listed with the agreed hosts, but it stays asked about in a later session.
+    pub fn audited(&self, host: &str) {
+        self.audited.lock().unwrap().insert(host.to_string());
+    }
+
+    /// The hosts agreed to with `Always`, and those an audit let through, by name.
+    pub async fn hosts(&self) -> Vec<String> {
+        let mut hosts: Vec<String> = self
+            .always
+            .lock()
+            .await
+            .iter()
+            .filter_map(|s| match s {
+                ApprovalScope::Host(h) => Some(h.clone()),
+                _ => None,
+            })
+            .collect();
+        hosts.extend(self.audited.lock().unwrap().iter().cloned());
+        hosts.sort();
+        hosts.dedup();
+        hosts
     }
 
     /// Whether agreements outlive the session.
@@ -313,6 +387,25 @@ pub async fn ask_for(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_name_is_split_into_host_and_port() {
+        assert_eq!(split_authority("docs.rs"), ("docs.rs", None));
+        assert_eq!(split_authority("docs.rs:443"), ("docs.rs", Some(443)));
+        assert_eq!(split_authority("*.rs:22"), ("*.rs", Some(22)));
+        assert_eq!(split_authority("[::1]:22"), ("::1", Some(22)));
+        assert_eq!(split_authority("::1"), ("::1", None));
+        assert_eq!(authority("::1", 22), "[::1]:22");
+    }
+
+    #[test]
+    fn an_agreement_with_a_port_covers_that_port_only() {
+        let host = |h: &str| ApprovalScope::Host(h.into());
+        assert!(host("a.test:443").covered_by(&host("a.test:443")));
+        assert!(!host("a.test:22").covered_by(&host("a.test:443")));
+        assert!(host("a.test:22").covered_by(&host("a.test")));
+        assert!(!host("a.test").covered_by(&host("a.test:443")));
+    }
+
     use super::*;
 
     fn cmd(s: &str) -> ApprovalScope {

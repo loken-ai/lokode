@@ -115,6 +115,17 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     } else {
         SessionApprovals::kept_for(&cfg.root)
     });
+    let mut sandbox = cfg.sandbox.clone();
+    let mut sandbox_notes = Vec::new();
+    if let Some(s) = sandbox.as_mut() {
+        crate::config::start_egress(
+            s,
+            Arc::new(cfg.allow_hosts.clone()),
+            session_approvals.journal(),
+            &mut sandbox_notes,
+        )
+        .await;
+    }
     let mut ctx = ToolCtx {
         editor: None,
         claims: Default::default(),
@@ -143,7 +154,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         allow_hosts: Arc::new(cfg.allow_hosts.clone()),
         known: Default::default(),
         tail: Default::default(),
-        sandbox: cfg.sandbox.clone().map(Arc::new),
+        sandbox: sandbox.map(Arc::new),
         planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
     };
 
@@ -411,6 +422,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     });
     model_notes.extend(delegation.unknown());
     model_notes.extend(skill_warnings);
+    model_notes.extend(sandbox_notes);
     // What an agent did in its own copy is taken, or left, by the session.
     registry.register(crate::tools::worktree::TakeWork::new(
         delegation.works.clone(),

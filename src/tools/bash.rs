@@ -102,8 +102,13 @@ impl Tool for Bash {
 
         // Kept until the spawn is over.
         // A sandbox that cannot be applied refuses the command rather than run it unconfined.
+        let asking = crate::sandbox::confine::Asking {
+            gate: std::sync::Arc::new(ctx.clone()),
+            origin: format!("bash: {}", a.cmd.lines().next().unwrap_or_default()),
+        };
         let (mut cmd, _held) = match crate::sandbox::confine::command(
             sandbox.map(|s| s.as_ref()),
+            Some(asking),
             "/bin/sh",
             &["-lc", &a.cmd],
         ) {
@@ -162,6 +167,9 @@ impl Tool for Bash {
         report.push_str(&ctx.clamp(err));
         if let Some(sandbox) = sandbox.filter(|_| code != 0) {
             report.push_str(&format!("\n{}", sandbox.note()));
+            for line in _held.turned_away() {
+                report.push_str(&format!("\nnetwork refused {line}"));
+            }
         }
 
         Ok(ToolOutput::ok(report))
@@ -506,6 +514,226 @@ mod tests {
             .await;
         refused(&out, "interrupted");
         assert!(!h.exists("ran"));
+    }
+
+    /// A harness whose commands reach the network only through the proxy.
+    ///
+    /// `None` where this machine cannot make the namespaces, which the tests then skip.
+    #[cfg(target_os = "linux")]
+    async fn proxied() -> Option<Harness> {
+        if !crate::sandbox::confine::available() {
+            return None;
+        }
+        let mut h = Harness::confined();
+        let allow = std::sync::Arc::new(["127.0.0.1".to_string()].into_iter().collect());
+        let egress = crate::sandbox::egress::Egress::start(allow, Default::default())
+            .await
+            .ok()?;
+        h.ctx.sandbox = Some(std::sync::Arc::new(crate::sandbox::confine::Sandbox {
+            network: crate::sandbox::confine::Network::Proxy,
+            egress: Some(std::sync::Arc::new(egress)),
+            ..(**h.ctx.sandbox.as_ref().unwrap()).clone()
+        }));
+        Some(h)
+    }
+
+    /// The command asks the proxy for a tunnel to `port` and prints the answer line.
+    #[cfg(target_os = "linux")]
+    fn tunnel(port: u16) -> String {
+        format!(
+            "url=$https_proxy; hostport=${{url#*@}}; proxy=${{hostport##*:}}; \
+             user=${{url#http://}}; user=${{user%%:*}}; \
+             auth=$(printf '%s:x' \"$user\" | base64); \
+             exec 3<>/dev/tcp/127.0.0.1/$proxy; \
+             printf 'CONNECT 127.0.0.1:{port} HTTP/1.1\\r\\nProxy-Authorization: Basic %s\\r\\n\\r\\n' \"$auth\" >&3; \
+             head -1 <&3 | tee /dev/stderr | grep -q ' 200 '"
+        )
+    }
+
+    /// A service on this machine's loopback.
+    #[cfg(target_os = "linux")]
+    fn service() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for _ in 0..4 {
+                let _ = listener.accept();
+            }
+        });
+        port
+    }
+
+    /// A command in the sandbox reaches a host through the proxy once the host is agreed to,
+    /// and the question names the command.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_command_reaches_an_agreed_host_through_the_proxy() {
+        let Some(h) = proxied().await else {
+            return;
+        };
+        h.write("tunnel.sh", &tunnel(service()));
+        let out = h.run(&Bash, json!({"cmd": "bash tunnel.sh"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("exit: 0"), "{}", out.content);
+        let asked = h.asked();
+        let host = asked
+            .iter()
+            .find(|r| matches!(&r.scope, ApprovalScope::Host(h) if h.starts_with("127.0.0.1:")))
+            .expect("the host was not asked about");
+        assert!(
+            host.summary.starts_with("bash: bash tunnel.sh"),
+            "{}",
+            host.summary
+        );
+    }
+
+    /// A command that ignores every proxy variable is still carried, by the name it asked for.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_connection_that_ignores_the_proxy_is_asked_about_by_name() {
+        let Some(h) = proxied().await else {
+            return;
+        };
+        let egress = h.ctx.sandbox.as_ref().unwrap().egress.as_ref().unwrap();
+        if !egress.redirects() {
+            return;
+        }
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": "unset https_proxy http_proxy HTTPS_PROXY HTTP_PROXY ALL_PROXY all_proxy; \
+                    getent hosts svc.test; \
+                    bash -c 'exec 3<>/dev/tcp/svc.test/80; sleep 1' 2>&1; true"}),
+            )
+            .await;
+        succeeded(&out);
+        assert!(out.content.contains("198.18."), "{}", out.content);
+        assert!(
+            h.asked()
+                .iter()
+                .any(|r| r.scope == ApprovalScope::Host("svc.test:80".into())),
+            "{:?}",
+            h.asked().iter().map(|r| &r.scope).collect::<Vec<_>>()
+        );
+    }
+
+    /// An audit lets the host through without a question, and remembers it as agreed to.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn an_audit_records_the_host_instead_of_asking() {
+        let Some(mut h) = proxied().await else {
+            return;
+        };
+        let sandbox = h.ctx.sandbox.clone().unwrap();
+        h.ctx.sandbox = Some(std::sync::Arc::new(crate::sandbox::confine::Sandbox {
+            network: crate::sandbox::confine::Network::Audit,
+            ..(*sandbox).clone()
+        }));
+        h.write("tunnel.sh", &tunnel(service()));
+        let out = h.run(&Bash, json!({"cmd": "bash tunnel.sh"})).await;
+        assert!(out.content.contains("exit: 0"), "{}", out.content);
+        assert!(
+            !h.asked()
+                .iter()
+                .any(|r| matches!(r.scope, ApprovalScope::Host(_))),
+            "a host was asked about"
+        );
+        let hosts = h.ctx.session_approvals.hosts().await;
+        assert!(
+            matches!(hosts.as_slice(), [one] if one.starts_with("127.0.0.1:")),
+            "{hosts:?}"
+        );
+        // The session lists it for `/net save`, and nothing agrees to it for the next one.
+        assert!(
+            !h.ctx
+                .session_approvals
+                .is_always(&ApprovalScope::Host(hosts[0].clone()))
+                .await
+        );
+    }
+
+    /// A rule that refuses a host still refuses it in an audit.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn an_audit_keeps_the_rules_that_refuse() {
+        let Some(mut h) = proxied().await else {
+            return;
+        };
+        let sandbox = h.ctx.sandbox.clone().unwrap();
+        h.ctx.sandbox = Some(std::sync::Arc::new(crate::sandbox::confine::Sandbox {
+            network: crate::sandbox::confine::Network::Audit,
+            ..(*sandbox).clone()
+        }));
+        h.ctx.policy = std::sync::Arc::new(crate::sandbox::policy::Policy {
+            deny: crate::sandbox::policy::Rules {
+                egress: vec!["127.0.0.1".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        h.write("tunnel.sh", &tunnel(service()));
+        let out = h.run(&Bash, json!({"cmd": "bash tunnel.sh"})).await;
+        assert!(out.content.contains("exit: 1"), "{}", out.content);
+        assert!(h.ctx.session_approvals.hosts().await.is_empty());
+    }
+
+    /// The sockets of the machine's services are out of reach, and the working directory is kept.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn the_sockets_of_the_machines_services_are_out_of_reach() {
+        // A socket in a directory of the kind an agent of the session leaves in /tmp.
+        let Ok(dir) = tempfile::Builder::new().prefix("ssh-").tempdir_in("/tmp") else {
+            return;
+        };
+        let socket = dir.path().join("agent.1");
+        let Ok(_listener) = std::os::unix::net::UnixListener::bind(&socket) else {
+            return;
+        };
+        assert!(std::os::unix::net::UnixStream::connect(&socket).is_ok());
+        let Some(h) = proxied().await else {
+            return;
+        };
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": format!(
+                    "pwd; test -S {} || echo hidden; test -z \"$(ls -A /run)\" && echo run-empty",
+                    socket.display()
+                )}),
+            )
+            .await;
+        assert!(
+            out.content.contains(&h.root.display().to_string()),
+            "{}",
+            out.content
+        );
+        assert!(out.content.contains("hidden"), "{}", out.content);
+        assert!(out.content.contains("run-empty"), "{}", out.content);
+    }
+
+    /// A rule that refuses the host is named to the model, which cannot see what the proxy said.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_refused_host_is_named_in_what_the_command_returns() {
+        let Some(mut h) = proxied().await else {
+            return;
+        };
+        h.ctx.policy = std::sync::Arc::new(crate::sandbox::policy::Policy {
+            deny: crate::sandbox::policy::Rules {
+                egress: vec!["127.0.0.1".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        h.write("tunnel.sh", &tunnel(service()));
+        let out = h.run(&Bash, json!({"cmd": "bash tunnel.sh"})).await;
+        assert!(out.content.contains("exit: 1"), "{}", out.content);
+        assert!(
+            out.content
+                .contains("network refused 127.0.0.1: refused by the policy rule"),
+            "{}",
+            out.content
+        );
     }
 }
 
