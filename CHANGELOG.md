@@ -4,6 +4,8 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-02
+
 ### Added
 
 - Interface: render answers as markdown, with code coloured by language and numbered diffs.
