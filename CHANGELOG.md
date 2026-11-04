@@ -15,6 +15,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Sounds: play a success or an error sound when a turn, a command, a sub-agent or a question ends.
 - Shell: run commands with Git Bash or PowerShell on Windows.
 - Shell: confine the commands of Windows to the project at the low integrity level.
+- Interface: share the sessions of a server with a group of machines over an encrypted channel.
 
 ### Changed
 

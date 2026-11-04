@@ -183,6 +183,10 @@ pub struct FileConfig {
     /// The sounds that tell an action has finished.
     #[serde(default)]
     pub sounds: crate::sound::SoundsSection,
+    /// The group of machines whose sessions one dashboard shows.
+    /// Only the user's own files are read for it.
+    #[serde(default)]
+    pub dashboard: DashboardSection,
     /// Which model does which kind of work.
     #[serde(default)]
     pub roles: crate::agent::roles::Roles,
@@ -255,6 +259,49 @@ impl LspServer {
             settings: over.settings.or(self.settings),
             env,
             enabled: over.enabled.or(self.enabled),
+        }
+    }
+}
+
+/// The machines whose lokode servers a dashboard reaches, and the secret that proves a machine
+/// belongs to the group.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DashboardSection {
+    /// Which group this machine is in. Two groups on one network do not see each other.
+    pub name: Option<String>,
+    /// What every machine of the group holds, and nobody else.
+    pub secret: Option<String>,
+    /// Addresses of servers to reach where multicast does not, as `host:port`.
+    #[serde(default)]
+    pub seeds: Vec<String>,
+}
+
+impl DashboardSection {
+    /// The group, when both its name and its secret are written.
+    pub fn group(&self) -> Result<crate::dashboard::wire::Group, String> {
+        match (&self.name, &self.secret) {
+            (Some(name), Some(secret)) if !name.is_empty() && !secret.is_empty() => {
+                Ok(crate::dashboard::wire::Group {
+                    name: name.clone(),
+                    secret: secret.clone(),
+                })
+            }
+            _ => Err(
+                "write the name and the secret of the group under [dashboard] in the \
+                      configuration of the user"
+                    .to_string(),
+            ),
+        }
+    }
+
+    fn after(self, over: DashboardSection) -> DashboardSection {
+        let mut seeds = self.seeds;
+        seeds.extend(over.seeds);
+        DashboardSection {
+            name: over.name.or(self.name),
+            secret: over.secret.or(self.secret),
+            seeds,
         }
     }
 }
@@ -589,11 +636,12 @@ fn parse(text: &str, path: &Path) -> Result<FileConfig> {
     let cfg: FileConfig =
         toml::from_str(text).with_context(|| format!("parsing {}", path.display()))?;
 
-    let has_key =
-        cfg.backend.api_key.is_some() || cfg.backends.values().any(|b| b.api_key.is_some());
+    let has_key = cfg.backend.api_key.is_some()
+        || cfg.backends.values().any(|b| b.api_key.is_some())
+        || cfg.dashboard.secret.is_some();
     if has_key && is_readable_by_others(path) {
         anyhow::bail!(
-            "{} contains an api-key and is readable by others; \
+            "{} contains an api-key or a dashboard secret and is readable by others; \
              run `chmod 600 {}`, or use api-key-env to name a variable instead",
             path.display(),
             path.display()
@@ -712,6 +760,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
         },
         hooks: base.hooks.after(over.hooks),
         sounds: base.sounds.under(over.sounds),
+        dashboard: base.dashboard.after(over.dashboard),
         plugins: PluginsSection {
             disabled: {
                 let mut d = base.plugins.disabled;
@@ -805,6 +854,8 @@ pub fn load(root: &Path, trust: bool) -> Result<Loaded> {
     for (name, server) in added.lsp {
         cfg.lsp.servers.entry(name).or_insert(server);
     }
+    // A project file cannot name the group, the secret or the servers of a dashboard.
+    let dashboard = cfg.dashboard.clone();
     let path = project_config_path(root);
     let mut untrusted = None;
     if let Some(text) = read_text(&path)? {
@@ -825,6 +876,7 @@ pub fn load(root: &Path, trust: bool) -> Result<Loaded> {
         };
         cfg = merge(cfg, project);
     }
+    cfg.dashboard = dashboard;
     Ok(Loaded {
         file: cfg,
         untrusted,

@@ -183,6 +183,10 @@ enum Command {
         /// The port on 127.0.0.1. Any free one when not given.
         #[arg(long)]
         port: Option<u16>,
+        /// Share the sessions with the dashboards of the group named under [dashboard].
+        /// The server then listens on the network, which it does not otherwise.
+        #[arg(long)]
+        share: bool,
     },
     /// Carry standard input and output to a host through the proxy of the session.
     /// For a client that does not read the proxy variables, as `ssh -o ProxyCommand` runs it.
@@ -259,8 +263,10 @@ fn main() -> Result<()> {
     let mut cli = Cli::parse();
     match cli.command.take() {
         Some(Command::Plugin { action }) => return plugin_command(action),
-        Some(Command::Acp) => return acp_command(cli, None),
-        Some(Command::Serve { port }) => return acp_command(cli, Some(port.unwrap_or(0))),
+        Some(Command::Acp) => return acp_command(cli, None, false),
+        Some(Command::Serve { port, share }) => {
+            return acp_command(cli, Some(port.unwrap_or(0)), share)
+        }
         Some(Command::Attach { url, session }) => return attach_command(cli, url, session),
         Some(Command::Tunnel { host, port }) => return tunnel_command(&host, port),
         Some(Command::ConfineExec { writable, command }) => {
@@ -516,7 +522,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
 ///
 /// Each session is configured for its project as the terminal would be.
 /// A project's guarded settings wait for trust, since nobody can be asked here.
-fn acp_command(cli: Cli, port: Option<u16>) -> Result<()> {
+fn acp_command(cli: Cli, port: Option<u16>, share: bool) -> Result<()> {
     let root = cli.root.canonicalize().map_err(|e| {
         anyhow::anyhow!(
             "--root {} could not be canonicalized: {e}",
@@ -536,11 +542,21 @@ fn acp_command(cli: Cli, port: Option<u16>) -> Result<()> {
         }
         Ok(resolved.app)
     });
+    let group = match share {
+        true => Some(
+            config::load(&root, false)?
+                .file
+                .dashboard
+                .group()
+                .map_err(anyhow::Error::msg)?,
+        ),
+        false => None,
+    };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     match port {
-        Some(port) => runtime.block_on(lokode::serve::run(config_for, root, port)),
+        Some(port) => runtime.block_on(lokode::serve::run(config_for, root, port, group)),
         None => runtime.block_on(lokode::acp::run(config_for)),
     }
 }

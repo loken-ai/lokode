@@ -50,6 +50,7 @@ pub mod checkpoint;
 pub mod claude;
 pub mod commands;
 pub mod config;
+pub mod dashboard;
 pub mod frontmatter;
 pub mod headless;
 pub mod lsp;

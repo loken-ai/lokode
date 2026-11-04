@@ -31,6 +31,8 @@ use tokio::net::TcpStream;
 
 use crate::acp::{self, ConfigFor, Conn};
 
+mod share;
+
 const PAGE: &str = include_str!("index.html");
 const SCRIPT: &str = include_str!("page.js");
 const STYLE: &str = include_str!("page.css");
@@ -133,7 +135,12 @@ impl Web {
 }
 
 /// Serve the project at `root` on `port` of the loopback address, 0 for any, until stopped.
-pub async fn run(config_for: ConfigFor, root: PathBuf, port: u16) -> Result<()> {
+pub async fn run(
+    config_for: ConfigFor,
+    root: PathBuf,
+    port: u16,
+    share: Option<crate::dashboard::wire::Group>,
+) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let port = listener.local_addr()?.port();
     let (pages, _) = tokio::sync::broadcast::channel(BACKLOG);
@@ -157,6 +164,13 @@ pub async fn run(config_for: ConfigFor, root: PathBuf, port: u16) -> Result<()> 
         web.root.display(),
         web.token
     );
+    if let Some(group) = share {
+        let shared = share::start(web.clone(), group.clone()).await?;
+        println!(
+            "and shares its sessions with the group {} on port {shared}",
+            group.name
+        );
+    }
     loop {
         tokio::select! {
             accepted = listener.accept() => {

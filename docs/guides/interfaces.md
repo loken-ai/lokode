@@ -81,6 +81,24 @@ It follows the latest session open, or `--session <id>`, or a new one.
 - What is typed goes to the server, a `/command` included, so it runs where the session lives.
 - Several terminals and pages can follow one session at once.
 
+### Sharing sessions with other machines
+
+`lokode serve --share` lets the dashboards of a group of machines follow and drive the sessions of this server.
+The group is a name and a secret, written once on every machine in the configuration of the user.
+
+```toml
+[dashboard]
+name = "home"
+secret = "a long phrase that only these machines know"
+seeds = ["192.0.2.7:41000"]
+```
+
+- The server announces itself to the group on the local network and listens on it, which it does not do without `--share`.
+- A machine without the secret cannot finish the handshake, and what travels is encrypted.
+- `seeds` lists servers to reach where multicast does not cross, as `host:port`.
+- Only the user's own configuration is read for `[dashboard]`, never the file of a project.
+- The file that holds the secret must not be readable by others.
+
 ## Without the interface
 
 `-p` (`--prompt`) runs one turn and exits.
