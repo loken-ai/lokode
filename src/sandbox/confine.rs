@@ -447,7 +447,14 @@ mod linux {
         handled_access_fs: u64,
         /// ABI 4. Left out of the size given to the kernel when no network is handled.
         handled_access_net: u64,
+        /// ABI 6. Left out of the size given to the kernel before it.
+        scoped: u64,
     }
+
+    /// Connecting to an abstract socket made outside the sandbox. ABI 6.
+    const SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
+    /// Sending a signal to a process outside the sandbox. ABI 6.
+    const SCOPE_SIGNAL: u64 = 1 << 1;
 
     const BIND_TCP: u64 = 1 << 0;
     const CONNECT_TCP: u64 = 1 << 1;
@@ -512,13 +519,19 @@ mod linux {
         };
         // With no rule for a port, every TCP bind and connect is refused.
         let cut = !network && abi >= 4;
+        let scoped = match abi >= 6 {
+            true => SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL,
+            false => 0,
+        };
         let attr = RulesetAttr {
             handled_access_fs: writes_for(abi) | reads,
             handled_access_net: if cut { BIND_TCP | CONNECT_TCP } else { 0 },
+            scoped,
         };
-        let size = match cut {
-            true => std::mem::size_of::<RulesetAttr>(),
-            false => std::mem::size_of::<u64>(),
+        let size = match (abi >= 6, cut) {
+            (true, _) => std::mem::size_of::<RulesetAttr>(),
+            (false, true) => 2 * std::mem::size_of::<u64>(),
+            (false, false) => std::mem::size_of::<u64>(),
         };
         // SAFETY: `attr` is live for the call and holds at least the size the kernel is told.
         let fd = unsafe {
@@ -962,6 +975,49 @@ mod tests {
         };
         assert!(run(service.path().to_path_buf()).await);
         assert!(!run(elsewhere.path().to_path_buf()).await);
+    }
+
+    /// A command cannot reach an abstract socket made outside the sandbox, nor signal a process
+    /// that is outside it.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_command_cannot_reach_what_is_outside_its_sandbox() {
+        use std::os::linux::net::SocketAddrExt;
+        if abi().is_none_or(|v| v < 6) || !std::path::Path::new("/usr/bin/python3").exists() {
+            return;
+        }
+        let name = format!("lokode-test-{}", std::process::id());
+        let address = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+        let _listener = std::os::unix::net::UnixListener::bind_addr(&address).unwrap();
+        let sleeper = std::process::Command::new("sleep").arg("30").spawn();
+        let Ok(mut sleeper) = sleeper else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let sandbox = Sandbox {
+            level: Level::Workspace,
+            writable: vec![dir.path().to_path_buf()],
+            hidden: Vec::new(),
+            network: Network::Open,
+            egress: None,
+            unset: Vec::new(),
+        };
+        let mut cmd = tokio::process::Command::new("/usr/bin/python3");
+        cmd.arg("-c").arg(format!(
+            "import socket, os, signal\n\
+             s = socket.socket(socket.AF_UNIX)\n\
+             try:\n s.connect('\\0{name}'); print('socket')\n\
+             except OSError: pass\n\
+             try:\n os.kill({}, signal.SIGTERM); print('signal')\n\
+             except OSError: pass\n",
+            sleeper.id()
+        ));
+        let fd = sandbox.confine(&mut cmd).unwrap();
+        let out = cmd.output().await.unwrap();
+        drop(fd);
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let _ = sleeper.kill();
+        let _ = sleeper.wait();
+        assert!(!stdout.contains("socket"), "{stdout}");
+        assert!(!stdout.contains("signal"), "{stdout}");
     }
 
     /// A gate that answers the same way to everything.

@@ -148,6 +148,7 @@ A multi-file patch is applied wholly or not at all.
   Where the kernel does not allow the namespace, the network is closed and the session says so.
 - On Linux the namespace includes a mount namespace in which the machine's runtime directory is empty, and so are the sockets that sit in the temporary directory when the session starts: the display, the terminal multiplexer and the key agents.
   The session bus, the user's service manager, the container engine and the key agents live there, and a program that reaches one of them starts a process outside the sandbox.
+  Where the kernel has Landlock ABI 6, a command also cannot connect to an abstract socket made outside the sandbox, nor send a signal to a process outside it.
   Where the kernel has Landlock ABI 9, a command may also connect only to the sockets that sit under the directories it may write to.
   On an older kernel, a socket that is created elsewhere, or in the temporary directory after the session starts, is not hidden.
   On macOS the profile refuses a connection to a socket that is a file outside the writable paths, unless the network is open.

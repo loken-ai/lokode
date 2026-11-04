@@ -25,6 +25,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 - Tools: connect web_fetch to the address that passed the check, on every redirect.
 - Sandbox: refuse unix sockets outside the writable paths on Linux and macOS.
+- Sandbox: refuse abstract sockets and signals that leave the sandbox.
 
 ## [0.4.0] - 2026-11-02
 
