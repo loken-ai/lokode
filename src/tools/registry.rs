@@ -284,11 +284,24 @@ impl ToolCtx {
 /// Redirects are turned off.
 /// `web_fetch` follows them itself, so the address guard runs again on every hop.
 pub fn tool_http_client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
+    tool_http_builder().build().map_err(Into::into)
+}
+
+/// The same client, with `host` fixed to the addresses that were checked.
+///
+/// The connection goes to one of them, and the name is not resolved a second time.
+pub fn pinned_http_client(host: &str, addrs: &[std::net::SocketAddr]) -> Result<reqwest::Client> {
+    tool_http_builder()
+        .resolve_to_addrs(host, addrs)
+        .build()
+        .map_err(Into::into)
+}
+
+fn tool_http_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent(concat!("lokode/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
-        .build()?)
 }
 
 impl ToolCtx {

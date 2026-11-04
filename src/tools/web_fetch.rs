@@ -48,7 +48,7 @@ impl Tool for WebFetch {
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
         let a: Args = serde_json::from_value(args)?;
-        let mut url = match parse_public(&a.url, &ctx.allow_hosts).await {
+        let (mut url, mut addrs) = match parse_public(&a.url, &ctx.allow_hosts).await {
             Ok(u) => u,
             Err(e) => return Ok(ToolOutput::err(e)),
         };
@@ -85,10 +85,20 @@ impl Tool for WebFetch {
                 }
             }
 
+            // The addresses that were checked are the ones connected to.
+            let http = match (&addrs, url.host_str()) {
+                (addrs, Some(host)) if !addrs.is_empty() => {
+                    match crate::tools::registry::pinned_http_client(host, addrs) {
+                        Ok(client) => client,
+                        Err(e) => return Ok(ToolOutput::err(format!("request failed: {e}"))),
+                    }
+                }
+                _ => ctx.http.clone(),
+            };
             let resp = tokio::select! {
                 biased;
                 _ = ctx.cancel.cancelled() => return Ok(ToolOutput::err("interrupted by user")),
-                r = ctx.http.get(url.clone()).send() => match r {
+                r = http.get(url.clone()).send() => match r {
                     Ok(r) => r,
                     Err(e) => return Ok(ToolOutput::err(format!("request failed: {e}"))),
                 },
@@ -116,7 +126,7 @@ impl Tool for WebFetch {
                         "unusable redirect target: {location}"
                     )));
                 };
-                url = match check_public(next, &ctx.allow_hosts).await {
+                (url, addrs) = match check_public(next, &ctx.allow_hosts).await {
                     Ok(u) => u,
                     Err(e) => return Ok(ToolOutput::err(format!("refused redirect: {e}"))),
                 };
@@ -172,7 +182,10 @@ async fn read_capped(
 }
 
 /// Parse a model-supplied string and establish that it points somewhere public.
-async fn parse_public(raw: &str, allow: &HashSet<String>) -> Result<Url, String> {
+async fn parse_public(
+    raw: &str,
+    allow: &HashSet<String>,
+) -> Result<(Url, Vec<std::net::SocketAddr>), String> {
     let url = Url::parse(raw).map_err(|e| format!("not a usable URL: {e}"))?;
     check_public(url, allow).await
 }
@@ -182,7 +195,13 @@ async fn parse_public(raw: &str, allow: &HashSet<String>) -> Result<Url, String>
 /// The host is resolved here rather than trusted as written.
 /// A name may point at a loopback or metadata address.
 /// The prefix `https://` says nothing about where the packets go.
-async fn check_public(url: Url, allow: &HashSet<String>) -> Result<Url, String> {
+///
+/// The addresses that passed come back with the URL, and the request connects to them.
+/// A host the user allowed comes back with none.
+async fn check_public(
+    url: Url,
+    allow: &HashSet<String>,
+) -> Result<(Url, Vec<std::net::SocketAddr>), String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!(
             "only http(s) URLs are allowed, got {}",
@@ -195,12 +214,12 @@ async fn check_public(url: Url, allow: &HashSet<String>) -> Result<Url, String> 
         .to_string();
 
     if allow.contains(&host) {
-        return Ok(url);
+        return Ok((url, Vec::new()));
     }
 
     let port = url.port_or_known_default().unwrap_or(80);
-    public_addrs(&host, port).await?;
-    Ok(url)
+    let addrs = public_addrs(&host, port).await?;
+    Ok((url, addrs))
 }
 
 /// Reduce a page to the text a model can read.
@@ -327,6 +346,20 @@ mod tests {
             err.contains("not a public address"),
             "unexpected message: {err}"
         );
+    }
+
+    /// The connection goes to the address that was checked, whatever the name resolves to now.
+    #[tokio::test]
+    async fn a_request_connects_to_the_address_that_was_checked() {
+        let port = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await;
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let client = crate::tools::registry::pinned_http_client("pinned.invalid", &[addr]).unwrap();
+        let resp = client
+            .get(format!("http://pinned.invalid:{port}/"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.text().await.unwrap(), "ok");
     }
 
     /// The escape hatch has to actually open, or anyone with a LAN service is stuck.

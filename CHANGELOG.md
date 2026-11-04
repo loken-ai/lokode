@@ -18,6 +18,10 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Shell: filter the network through the proxy by default in the workspace.
 - Shell: cut UDP as well when the network is closed on Linux.
 
+### Fixed
+
+- Tools: connect web_fetch to the address that passed the check, on every redirect.
+
 ## [0.4.0] - 2026-11-02
 
 ### Added
