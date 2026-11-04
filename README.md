@@ -45,10 +45,11 @@ Rows marked local rely on the model running on your machine.
 | [Background discovery](docs/guides/models.md#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody waits, kept between sessions |
 | [Speculation](docs/guides/using.md#using-it) *(local)* | the next read guessed while the model is still writing |
 | [The engine](docs/guides/models.md#what-the-engine-measures) *(local)* | what loken measured of each request, its energy and the power of the machine |
-| [Sandbox](docs/guides/safety.md#where-it-is-careful) | the commands it runs write only in the project, and cannot read your credentials |
+| [Sandbox](docs/guides/safety.md#where-it-is-careful) | the commands it runs write only in the project, cannot read your credentials, and reach the network through a proxy that asks about each host |
 | [Agents](docs/guides/agents.md#handing-work-to-an-agent) | a search or a task handed to a named agent, in a window of its own, in the background and in a copy of the project |
 | [Plans](docs/guides/agents.md#work-of-several-steps) | work of several steps kept as a list |
 | [Hooks](docs/guides/extending.md#hooks) | commands around a tool call and at the end of a turn |
+| [Sounds](docs/guides/extending.md#sounds) | a sound when a turn, an agent or a question ends, for a success or an error |
 | [Commands, skills and plugins](docs/guides/extending.md#commands-written-as-files) | prompts, know-how and extensions kept as files, installed from git or a marketplace |
 | [MCP](docs/guides/extending.md#tools-from-elsewhere) | tools, documents and prompts from another server, signed in to when it asks |
 | [Providers](docs/guides/configuration.md#which-provider) | 17 providers by name, or any server of the OpenAI API |
