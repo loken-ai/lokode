@@ -323,6 +323,15 @@ mod seatbelt {
             out.push("(deny network-outbound (remote ip))".to_string());
             out.push("(deny network-bind (local ip))".to_string());
             out.push("(deny network-inbound (local ip))".to_string());
+            // A socket that is a file is reachable only under the paths the command may write to.
+            // With the network open, the system's own services keep working, such as the resolver.
+            out.push("(deny network-outbound (remote unix-socket))".to_string());
+            for path in &sandbox.writable {
+                out.push(format!(
+                    "(allow network-outbound (remote unix-socket {}))",
+                    filter(path)
+                ));
+            }
         }
         // Through the proxy, the one address it listens on stays reachable.
         if let (super::Network::Proxy | super::Network::Audit, Some(port)) =
@@ -374,6 +383,9 @@ mod linux {
     const REFER: u64 = 1 << 13;
     /// ABI 3. Without it, a command can empty a file it may not write to.
     const TRUNCATE: u64 = 1 << 14;
+    /// Connecting to a socket that is a file. ABI 9.
+    /// Without it, a command can reach any service that listens on a path.
+    const RESOLVE_UNIX: u64 = 1 << 16;
 
     #[repr(C)]
     struct RulesetAttr {
@@ -405,7 +417,7 @@ mod linux {
         (v > 0).then_some(v as u32)
     }
 
-    /// Everything write-shaped this kernel knows how to govern.
+    /// Everything write-shaped this kernel knows how to govern, and the sockets that are files.
     fn writes_for(abi: u32) -> u64 {
         let mut bits = WRITE_FILE
             | REMOVE_DIR
@@ -422,6 +434,9 @@ mod linux {
         }
         if abi >= 3 {
             bits |= TRUNCATE;
+        }
+        if abi >= 9 {
+            bits |= RESOLVE_UNIX;
         }
         bits
     }
@@ -686,6 +701,15 @@ mod tests {
         at("(allow file-write* (subpath \"/no/such/dir\"))");
         at(r#"(deny file-read* (subpath "/a \"quoted\" dir"))"#);
         at("(deny network-outbound (remote ip))");
+        // A socket that is a file is cut, then let back in under the writable paths.
+        assert!(
+            at("(deny network-outbound (remote unix-socket))")
+                < at(&format!(
+                    "(allow network-outbound (remote unix-socket (subpath \"{}\")))",
+                    real.display()
+                )),
+            "{profile}"
+        );
         let open = seatbelt::profile(&Sandbox {
             network: Network::Open,
             ..sandbox.clone()
@@ -845,6 +869,44 @@ mod tests {
         }
         assert!(run(Network::Open).await);
         assert!(!run(Network::Closed).await);
+    }
+
+    /// A command reaches a socket that is a file only where it may write.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_command_cannot_connect_to_a_socket_outside_its_directories() {
+        if abi().is_none_or(|v| v < 9) || !std::path::Path::new("/usr/bin/python3").exists() {
+            return;
+        }
+        let service = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let socket = service.path().join("agent.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let run = |writable: PathBuf| {
+            let socket = socket.clone();
+            async move {
+                let sandbox = Sandbox {
+                    level: Level::Workspace,
+                    writable: vec![writable],
+                    hidden: Vec::new(),
+                    network: Network::Open,
+                    egress: None,
+                    unset: Vec::new(),
+                };
+                let mut cmd = tokio::process::Command::new("/usr/bin/python3");
+                cmd.arg("-c").arg(format!(
+                    "import socket; s = socket.socket(socket.AF_UNIX); \
+                     s.connect({:?}); print('connected')",
+                    socket.display().to_string()
+                ));
+                let fd = sandbox.confine(&mut cmd).unwrap();
+                let out = cmd.output().await.unwrap();
+                drop(fd);
+                String::from_utf8_lossy(&out.stdout).contains("connected")
+            }
+        };
+        assert!(run(service.path().to_path_buf()).await);
+        assert!(!run(elsewhere.path().to_path_buf()).await);
     }
 
     /// A gate that answers the same way to everything.
