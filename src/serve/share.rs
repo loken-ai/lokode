@@ -30,18 +30,27 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 
 /// Listen for the dashboards of `group` and announce this server to it.
 ///
-/// Returns the port. The tasks end with the process.
-pub(super) async fn start(web: Arc<Web>, group: Group) -> Result<u16> {
-    let listener = TcpListener::bind(("0.0.0.0", 0)).await?;
-    let port = listener.local_addr()?.port();
-    announcing(
-        Announcement {
-            group: group.name.clone(),
-            node: crate::mcp::oauth::random().chars().take(12).collect(),
-            port,
-        },
-        group.clone(),
-    );
+/// It listens on `listen`, and returns the address it listens on.
+/// The tasks end with the process.
+pub(super) async fn start(
+    web: Arc<Web>,
+    group: Group,
+    listen: std::net::SocketAddr,
+) -> Result<std::net::SocketAddr> {
+    let listener = TcpListener::bind(listen).await?;
+    let bound = listener.local_addr()?;
+    let port = bound.port();
+    // A server on the loopback address cannot be reached from the machines that would hear it.
+    if !bound.ip().is_loopback() {
+        announcing(
+            Announcement {
+                group: group.name.clone(),
+                node: crate::mcp::oauth::random().chars().take(12).collect(),
+                port,
+            },
+            group.clone(),
+        );
+    }
     tokio::spawn(async move {
         loop {
             let Ok((stream, from)) = listener.accept().await else {
@@ -55,7 +64,7 @@ pub(super) async fn start(web: Arc<Web>, group: Group) -> Result<u16> {
             });
         }
     });
-    Ok(port)
+    Ok(bound)
 }
 
 /// One dashboard, until it goes.
@@ -129,8 +138,10 @@ mod tests {
     #[tokio::test]
     async fn a_dashboard_of_the_group_is_answered_and_hears_the_events() {
         let web = web();
-        let port = start(web.clone(), group("s3cret")).await.unwrap();
-        let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let port = start(web.clone(), group("s3cret"), "127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let stream = TcpStream::connect(port).await.unwrap();
         let (mut send, mut recv) = connect(stream, &group("s3cret")).await.unwrap();
         send.send(&json!({"tag": 7, "rpc": {"method": "_lokode/hello"}}))
             .await
@@ -158,8 +169,10 @@ mod tests {
     /// A machine without the secret is dropped before it can ask for anything.
     #[tokio::test]
     async fn a_machine_without_the_secret_is_dropped() {
-        let port = start(web(), group("s3cret")).await.unwrap();
-        let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let port = start(web(), group("s3cret"), "127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let stream = TcpStream::connect(port).await.unwrap();
         let got = connect(stream, &group("wrong")).await;
         match got {
             Err(_) => {}

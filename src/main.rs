@@ -185,8 +185,10 @@ enum Command {
         port: Option<u16>,
         /// Share the sessions with the dashboards of the group named under [dashboard].
         /// The server then listens on the network, which it does not otherwise.
-        #[arg(long)]
-        share: bool,
+        /// It takes the address to listen on, as `ip:port`, so that a dashboard on another
+        /// network can name it in `seeds`. Without one, every interface and any free port.
+        #[arg(long, num_args = 0..=1, default_missing_value = "0.0.0.0:0", value_name = "ADDRESS")]
+        share: Option<std::net::SocketAddr>,
     },
     /// Carry standard input and output to a host through the proxy of the session.
     /// For a client that does not read the proxy variables, as `ssh -o ProxyCommand` runs it.
@@ -202,6 +204,8 @@ enum Command {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
+    /// Show the sessions of every lokode server of the group named under [dashboard].
+    Dashboard,
     /// Install, update, remove or list plugins.
     Plugin {
         #[command(subcommand)]
@@ -263,12 +267,13 @@ fn main() -> Result<()> {
     let mut cli = Cli::parse();
     match cli.command.take() {
         Some(Command::Plugin { action }) => return plugin_command(action),
-        Some(Command::Acp) => return acp_command(cli, None, false),
+        Some(Command::Acp) => return acp_command(cli, None, None),
         Some(Command::Serve { port, share }) => {
             return acp_command(cli, Some(port.unwrap_or(0)), share)
         }
         Some(Command::Attach { url, session }) => return attach_command(cli, url, session),
         Some(Command::Tunnel { host, port }) => return tunnel_command(&host, port),
+        Some(Command::Dashboard) => return dashboard_command(cli),
         Some(Command::ConfineExec { writable, command }) => {
             return confine_exec_command(&writable, &command)
         }
@@ -522,7 +527,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
 ///
 /// Each session is configured for its project as the terminal would be.
 /// A project's guarded settings wait for trust, since nobody can be asked here.
-fn acp_command(cli: Cli, port: Option<u16>, share: bool) -> Result<()> {
+fn acp_command(cli: Cli, port: Option<u16>, share: Option<std::net::SocketAddr>) -> Result<()> {
     let root = cli.root.canonicalize().map_err(|e| {
         anyhow::anyhow!(
             "--root {} could not be canonicalized: {e}",
@@ -543,14 +548,15 @@ fn acp_command(cli: Cli, port: Option<u16>, share: bool) -> Result<()> {
         Ok(resolved.app)
     });
     let group = match share {
-        true => Some(
+        Some(listen) => Some((
             config::load(&root, false)?
                 .file
                 .dashboard
                 .group()
                 .map_err(anyhow::Error::msg)?,
-        ),
-        false => None,
+            listen,
+        )),
+        None => None,
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -585,6 +591,28 @@ fn tunnel_command(host: &str, port: u16) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Show the sessions of the servers of the group in this terminal.
+fn dashboard_command(cli: Cli) -> Result<()> {
+    let _log_guard = init_logging(cli.log_file.clone().or_else(|| env_path("LOKODE_LOG_FILE")))?;
+    let root = cli.root.canonicalize()?;
+    let config::Loaded { file, .. } = config::load(&root, false)?;
+    let section = file.dashboard.clone();
+    let group = section.group().map_err(anyhow::Error::msg)?;
+    let (seeds, lost) = lokode::dashboard::resolve_seeds(&section.seeds);
+    for seed in lost {
+        eprintln!("lokode dashboard: the seed {seed} does not resolve");
+    }
+    let app = resolve(cli, root, file)?.app;
+    let open: lokode::dashboard::Opener = Box::new(move |url, session| {
+        let app = app.clone();
+        Box::pin(lokode::ui::app_loop::run_remote(app, url, Some(session)))
+    });
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(lokode::dashboard::run(group, seeds, open))
 }
 
 /// Run a command at the low integrity level, and end with its exit code.

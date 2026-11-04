@@ -94,10 +94,36 @@ seeds = ["192.0.2.7:41000"]
 ```
 
 - The server announces itself to the group on the local network and listens on it, which it does not do without `--share`.
+- `--share 192.0.2.10:8421` names the address to listen on, so that a dashboard on another network can name it in `seeds`. Without an address, every interface and any free port.
 - A machine without the secret cannot finish the handshake, and what travels is encrypted.
 - `seeds` lists servers to reach where multicast does not cross, as `host:port`.
 - Only the user's own configuration is read for `[dashboard]`, never the file of a project.
 - The file that holds the secret must not be readable by others.
+
+### Watching several servers
+
+`lokode dashboard` lists the sessions of every server of the group, whichever machine it runs on.
+It finds the servers by their announcements, and by `seeds` where those do not arrive.
+
+| State | Meaning |
+|---|---|
+| waiting | the session asks you something and nobody has answered |
+| working | a turn is running |
+| idle | nothing is running |
+
+- A line shows the project, the session, the state, what it is doing, the steps of its plan that are done, and how long it has been quiet.
+- Sessions that wait come first, then those that work.
+- A server that cannot be reached is listed with the reason.
+- Up and down select a line, and `q` leaves.
+
+| Key | What it does |
+|---|---|
+| `y`, `a`, `n` | answers the question a waiting session asks: once, always (the line says what that covers) or reject |
+| `m` | types a message to the session, sent with enter |
+| `x` | ends the turn the session is in |
+| enter | shows the session whole, as `lokode attach` does, and leaving it comes back to the list |
+
+What a key does is done on the machine where the session lives, with the rights of the server.
 
 ## Without the interface
 

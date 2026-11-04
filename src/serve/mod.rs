@@ -31,6 +31,7 @@ use tokio::net::TcpStream;
 
 use crate::acp::{self, ConfigFor, Conn};
 
+pub mod bridge;
 mod share;
 
 const PAGE: &str = include_str!("index.html");
@@ -139,7 +140,7 @@ pub async fn run(
     config_for: ConfigFor,
     root: PathBuf,
     port: u16,
-    share: Option<crate::dashboard::wire::Group>,
+    share: Option<(crate::dashboard::wire::Group, std::net::SocketAddr)>,
 ) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     let port = listener.local_addr()?.port();
@@ -164,10 +165,10 @@ pub async fn run(
         web.root.display(),
         web.token
     );
-    if let Some(group) = share {
-        let shared = share::start(web.clone(), group.clone()).await?;
+    if let Some((group, listen)) = share {
+        let shared = share::start(web.clone(), group.clone(), listen).await?;
         println!(
-            "and shares its sessions with the group {} on port {shared}",
+            "and shares its sessions with the group {} at {shared}",
             group.name
         );
     }

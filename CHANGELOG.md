@@ -16,6 +16,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Shell: run commands with Git Bash or PowerShell on Windows.
 - Shell: confine the commands of Windows to the project at the low integrity level.
 - Interface: share the sessions of a server with a group of machines over an encrypted channel.
+- Interface: follow the sessions of several servers in lokode dashboard, and answer, message, stop or open them.
 
 ### Changed
 
