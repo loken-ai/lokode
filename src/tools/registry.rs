@@ -387,6 +387,10 @@ impl ToolCtx {
             tracing::info!(tool = %req.tool, scope = ?req.scope, "covered by an earlier agreement");
             return Approval::Proceed;
         }
+        crate::sound::play(
+            crate::sound::Event::Notification,
+            crate::sound::Outcome::Success,
+        );
         crate::agent::hooks::notify(
             &self.notify,
             &self.root,

@@ -129,6 +129,7 @@ impl Tool for Bash {
         cmd.stdin(std::process::Stdio::null());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+        let started = std::time::Instant::now();
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
@@ -159,6 +160,13 @@ impl Tool for Bash {
             Err(e) => return Ok(ToolOutput::err(format!("could not wait for it: {e}"))),
         };
 
+        crate::sound::command_ended(
+            started.elapsed(),
+            match code {
+                0 => crate::sound::Outcome::Success,
+                _ => crate::sound::Outcome::Error,
+            },
+        );
         let mut report = String::new();
         report.push_str(&format!("exit: {code}\n"));
         report.push_str("stdout:\n");

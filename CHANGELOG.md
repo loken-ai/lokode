@@ -12,6 +12,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Shell: pause a command that sends more to a host than ever before.
 - Shell: tell a failed command which hosts the proxy refused and why.
 - Interface: list in /net the hosts and ports commands reached, and save them to the project.
+- Sounds: play a success or an error sound when a turn, a command, a sub-agent or a question ends.
 
 ### Changed
 

@@ -269,6 +269,7 @@ fn main() -> Result<()> {
         }
     }
     let config::Loaded { file, untrusted } = loaded;
+    lokode::sound::declare(file.sounds.clone());
 
     let log_file = cli
         .log_file

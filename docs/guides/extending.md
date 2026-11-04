@@ -45,6 +45,39 @@ A decision is `{"decision": "block", "reason": "..."}`, with `context` for what 
 A hook that outlives its timeout, 30 seconds by default, is stopped with everything it started.
 Its output is bounded.
 
+## Sounds
+
+A sound tells that an action has finished and whether it went well.
+Nothing plays until `[sounds]` declares one.
+
+```toml
+[sounds]
+turn-end = "auto"
+agent-end = "auto"
+notification = "success"
+command-end = "auto"
+command-end-after = 30
+```
+
+| Event | When |
+|---|---|
+| `turn-end` | the model has answered, or the turn ended otherwise |
+| `agent-end` | a sub-agent has answered |
+| `notification` | the session waits for you, as for an approval |
+| `command-end` | a shell command ended, after it ran for `command-end-after` seconds. Every command plays it when that key is not written. Success is an exit code of 0 |
+
+| Value | What plays |
+|---|---|
+| `auto` | the success sound or the error sound, by how the event ended |
+| `success`, `error` | that sound, whatever the outcome |
+| a path | that audio file, whatever the outcome. WAV, MP3, FLAC, OGG Vorbis and AAC in M4A are read |
+
+A turn that you interrupt plays nothing.
+The sounds work the same on Linux, Windows and macOS, and a machine with no audio device stays silent.
+A project's `[sounds]` apply once you trust them, as its hooks do.
+A sound that cannot be played, because of a missing file, an unknown format or no audio device, is logged once as a warning.
+A build without the `sound` feature plays nothing.
+
 ## Commands written as files
 
 A Markdown file is a command, named by its file: `review.md` makes `/review`, and `git/commit.md` makes `/git:commit`.

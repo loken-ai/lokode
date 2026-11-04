@@ -571,6 +571,14 @@ async fn finish(
     if let Some(text) = crate::agent::hooks::said(crate::agent::hooks::Event::AgentEnd, &rans) {
         answer = format!("{answer}\n\n{text}");
     }
+    crate::sound::play(
+        crate::sound::Event::AgentEnd,
+        if called_after {
+            crate::sound::Outcome::Error
+        } else {
+            crate::sound::Outcome::Success
+        },
+    );
     if called_after {
         return ToolOutput::ok(ctx.clamp(format!(
             "It did not finish{}. What it said last, which may be partial:\n{answer}",

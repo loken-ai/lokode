@@ -2151,7 +2151,8 @@ impl Agent {
                     continue;
                 }
                 self.close_step(record);
-                self.end_turn(&events).await;
+                self.end_turn(&events, Some(crate::sound::Outcome::Success))
+                    .await;
                 return Ok(());
             }
             record.after.tools = turn.calls.iter().map(|c| c.name.clone()).collect();
@@ -2440,7 +2441,8 @@ impl Agent {
                         "stopped: {why} (last: {tools}). Say what to do differently.{back}"
                     )))
                     .await;
-                self.end_turn(&events).await;
+                self.end_turn(&events, Some(crate::sound::Outcome::Error))
+                    .await;
                 return Ok(());
             }
         }
@@ -2451,7 +2453,8 @@ impl Agent {
                 self.cfg.max_steps
             )))
             .await;
-        self.end_turn(&events).await;
+        self.end_turn(&events, Some(crate::sound::Outcome::Error))
+            .await;
         Ok(())
     }
 
@@ -2734,7 +2737,14 @@ impl Agent {
     /// What the hook says is a notice rather than part of the conversation: the turn is over, so
     /// there is nothing left for the model to do about it, and the person is the one who has to
     /// read that the formatter rewrote 3 files.
-    async fn end_turn(&self, events: &mpsc::Sender<AgentEvent>) {
+    ///
+    /// `outcome` is how the turn ended, for the sound declared for its end.
+    /// A turn the person interrupted ends with none.
+    async fn end_turn(
+        &self,
+        events: &mpsc::Sender<AgentEvent>,
+        outcome: Option<crate::sound::Outcome>,
+    ) {
         // What the turn came to, in one line: how long, how many steps, what it cost and what it
         // changed.
         // All 4 were known and thrown away.
@@ -2770,6 +2780,9 @@ impl Agent {
         if let Some(text) = crate::agent::hooks::said(crate::agent::hooks::Event::TurnEnd, &rans) {
             let _ = events.send(AgentEvent::Notice(text)).await;
         }
+        if let Some(outcome) = outcome {
+            crate::sound::play(crate::sound::Event::TurnEnd, outcome);
+        }
         let _ = events.send(AgentEvent::TurnDone).await;
     }
 
@@ -2783,7 +2796,8 @@ impl Agent {
         let _ = events.send(AgentEvent::Notice(why.to_string())).await;
         // The hook runs here too: an abandoned turn can have changed files, and that is exactly
         // when a formatter or a test suite is worth running.
-        self.end_turn(events).await;
+        let outcome = (why != "interrupted").then_some(crate::sound::Outcome::Error);
+        self.end_turn(events, outcome).await;
     }
 
     /// How many times turn-end hooks may keep one turn going.

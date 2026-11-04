@@ -72,6 +72,8 @@ url = { version = "2", features = ["serde"] }
 getrandom = "0.3"
 sha2 = "0.10"
 base64 = "0.22"
+# The sound that tells an action has finished
+rodio = { version = "0.23", default-features = false, features = ["playback", "wav", "mp3", "flac", "vorbis", "mp4"], optional = true }
 
 # Landlock on Linux, whose syscalls are made directly so that what runs between fork and exec
 # is exactly two of them, and the signals that stop a hook's processes on any Unix.
@@ -84,3 +86,8 @@ tempfile = "3"
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+[features]
+default = ["sound"]
+# Sounds for the end of a turn. Without it the build needs no audio library.
+sound = ["dep:rodio"]

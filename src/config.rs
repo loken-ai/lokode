@@ -180,6 +180,9 @@ pub struct FileConfig {
     /// Commands to run at the edges of a tool call and a turn.
     #[serde(default)]
     pub hooks: HooksSection,
+    /// The sounds that tell an action has finished.
+    #[serde(default)]
+    pub sounds: crate::sound::SoundsSection,
     /// Which model does which kind of work.
     #[serde(default)]
     pub roles: crate::agent::roles::Roles,
@@ -708,6 +711,7 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
             },
         },
         hooks: base.hooks.after(over.hooks),
+        sounds: base.sounds.under(over.sounds),
         plugins: PluginsSection {
             disabled: {
                 let mut d = base.plugins.disabled;
