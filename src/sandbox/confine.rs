@@ -56,12 +56,17 @@ pub struct Asking {
 /// What confines commands on this system, for saying so.
 pub const MECHANISM: &str = if cfg!(target_os = "macos") {
     "Seatbelt"
+} else if cfg!(windows) {
+    "low integrity level"
 } else {
     "Landlock"
 };
 
 /// Whether commands can be confined here.
 pub fn available() -> bool {
+    if cfg!(windows) {
+        return std::env::current_exe().is_ok();
+    }
     match cfg!(target_os = "macos") {
         true => std::path::Path::new(seatbelt::SANDBOX_EXEC).exists(),
         false => abi().is_some(),
@@ -70,6 +75,9 @@ pub fn available() -> bool {
 
 /// Whether a sandbox here can keep a command off the network.
 pub fn cuts_network() -> bool {
+    if cfg!(windows) {
+        return false;
+    }
     match cfg!(target_os = "macos") {
         true => available(),
         false => abi().is_some_and(|v| v >= 4),
@@ -193,9 +201,12 @@ impl Sandbox {
         let (mut cmd, ruleset) = if cfg!(target_os = "macos") {
             let cmd = seatbelt::command(&seatbelt::profile(self), program, args);
             (cmd, None)
+        } else if cfg!(windows) {
+            (self.low_integrity(program, args)?, None)
         } else {
             let mut cmd = tokio::process::Command::new(program);
             cmd.args(args);
+            #[cfg_attr(not(unix), allow(clippy::let_unit_value))]
             let fd = self.confine(&mut cmd)?;
             (cmd, Some(fd))
         };
@@ -212,6 +223,25 @@ impl Sandbox {
                 _lease: lease,
             },
         ))
+    }
+
+    /// `program` with `args`, run by `lokode confine-exec` at the low integrity level.
+    ///
+    /// Only a level that writes somewhere names directories.
+    fn low_integrity(
+        &self,
+        program: &str,
+        args: &[&str],
+    ) -> std::io::Result<tokio::process::Command> {
+        let mut cmd = tokio::process::Command::new(std::env::current_exe()?);
+        cmd.arg("confine-exec");
+        if self.level != Level::ReadOnly {
+            for dir in &self.writable {
+                cmd.arg("--writable").arg(dir);
+            }
+        }
+        cmd.arg("--").arg(program).args(args);
+        Ok(cmd)
     }
 
     /// The namespaces the command joins, when its network is cut or filtered by them.

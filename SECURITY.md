@@ -98,13 +98,13 @@ A multi-file patch is applied wholly or not at all.
 
 ## What is not enforced
 
-**A command runs in a sandbox, on Linux and macOS.** `bash` and `run_tests` run their command under a sandbox that the command and everything it starts cannot undo.
+**A command runs in a sandbox, on Linux, macOS and Windows.** `bash` and `run_tests` run their command under a sandbox that the command and everything it starts cannot undo.
 
 | System | Mechanism |
 |---|---|
 | Linux | Landlock |
 | macOS | Seatbelt, through `/usr/bin/sandbox-exec` and a profile lokode writes |
-| Windows | none: a command runs with your rights, whatever `[shell] sandbox` says |
+| Windows | the low integrity level, through `lokode confine-exec`, which runs the shell in a job of its own |
 
 | `[shell] sandbox` | What a command may write | Network |
 |---|---|---|
@@ -152,6 +152,11 @@ A multi-file patch is applied wholly or not at all.
   On an older kernel, a socket that is created elsewhere, or in the temporary directory after the session starts, is not hidden.
   On macOS the profile refuses a connection to a socket that is a file outside the writable paths, unless the network is open.
   That rule has not been run on a Mac yet, and the temporary directory stays reachable there, since it is writable.
+- On Windows the sandbox confines writes only.
+  A command at the low integrity level cannot write to your files, except under the directories `lokode confine-exec` gives the low label: the project, the temporary directories and the build caches.
+  Those labels stay on the directories after the session.
+  The paths in `[shell] hidden` can still be read, and the network is not cut: `proxy` and `audit` ask about the hosts of programs that read the proxy variables, and `closed` has no effect.
+  This has not been run on a Windows machine yet.
 - On macOS the profile cuts every IP socket except the proxy's own address.
 - `closed` uses the same namespace on Linux, and Landlock on a system that has no namespace.
   Landlock leaves UDP open before ABI 4.

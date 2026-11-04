@@ -187,6 +187,17 @@ enum Command {
     /// Carry standard input and output to a host through the proxy of the session.
     /// For a client that does not read the proxy variables, as `ssh -o ProxyCommand` runs it.
     Tunnel { host: String, port: u16 },
+    /// Run a command at the low integrity level, in a job of its own. Windows only.
+    /// The session runs it in front of the shell, and a person has no use for it.
+    #[command(hide = true)]
+    ConfineExec {
+        /// A directory the command may write to.
+        #[arg(long = "writable")]
+        writable: Vec<std::path::PathBuf>,
+        /// The program and its arguments.
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
     /// Install, update, remove or list plugins.
     Plugin {
         #[command(subcommand)]
@@ -252,6 +263,9 @@ fn main() -> Result<()> {
         Some(Command::Serve { port }) => return acp_command(cli, Some(port.unwrap_or(0))),
         Some(Command::Attach { url, session }) => return attach_command(cli, url, session),
         Some(Command::Tunnel { host, port }) => return tunnel_command(&host, port),
+        Some(Command::ConfineExec { writable, command }) => {
+            return confine_exec_command(&writable, &command)
+        }
         None => {}
     }
 
@@ -555,6 +569,28 @@ fn tunnel_command(host: &str, port: u16) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Run a command at the low integrity level, and end with its exit code.
+fn confine_exec_command(writable: &[std::path::PathBuf], command: &[String]) -> Result<()> {
+    #[cfg(windows)]
+    {
+        let (program, args) = command
+            .split_first()
+            .context("there is no command to run")?;
+        match lokode::sandbox::winbox::run(writable, program, args) {
+            Ok(code) => std::process::exit(code),
+            Err(why) => {
+                eprintln!("lokode confine-exec: {why}");
+                std::process::exit(126);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (writable, command);
+        anyhow::bail!("confine-exec runs on Windows only")
+    }
 }
 
 /// Install, update, remove or list plugins, saying what was done.

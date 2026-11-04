@@ -1156,9 +1156,10 @@ pub async fn start_egress(
         && crate::sandbox::confine::available()
         && !crate::sandbox::confine::cuts_network()
     {
-        warnings.push(
-            "this kernel's Landlock cannot cut the network, so sandboxed commands keep it".into(),
-        );
+        warnings.push(format!(
+            "this system's {} cannot cut the network, so sandboxed commands keep it",
+            crate::sandbox::confine::MECHANISM
+        ));
     }
 }
 

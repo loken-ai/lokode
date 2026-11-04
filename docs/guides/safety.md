@@ -26,7 +26,8 @@
 
 Read [SECURITY.md](../../SECURITY.md) first.
 
-There is no sandbox on Windows, and a command runs with your rights there.
+On Windows a command runs at the low integrity level, so it writes only in the project, the temporary directories and the build caches, whose labels lokode lowers.
+It can still read your files and reach the network.
 On Windows a command runs in the shell of Git for Windows when it is installed, and in PowerShell otherwise.
 The tool tells the model which one it is writing for.
 
