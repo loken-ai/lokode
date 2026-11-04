@@ -18,13 +18,22 @@ use std::sync::Arc;
 
 use super::egress::{Egress, Gate, Lease};
 
+/// A descriptor kept open for the command, and the number it has.
+/// Windows has neither, and nothing is confined there.
+#[cfg(unix)]
+pub(crate) use std::os::fd::{OwnedFd, RawFd};
+#[cfg(not(unix))]
+pub(crate) type OwnedFd = ();
+#[cfg(not(unix))]
+pub(crate) type RawFd = i32;
+
 /// What has to be kept until a confined command has ended.
 ///
 /// The ruleset is needed until the command has been spawned.
 /// The lease is the command's right to the proxy, and it ends with the command.
 #[derive(Default)]
 pub struct Held {
-    _ruleset: Option<std::os::fd::OwnedFd>,
+    _ruleset: Option<OwnedFd>,
     _lease: Option<Lease>,
 }
 
@@ -206,7 +215,8 @@ impl Sandbox {
     }
 
     /// The namespaces the command joins, when its network is cut or filtered by them.
-    fn namespaces(&self) -> Option<[std::os::fd::RawFd; 3]> {
+    #[cfg(unix)]
+    fn namespaces(&self) -> Option<[RawFd; 3]> {
         match self.network {
             Network::Open => None,
             Network::Closed | Network::Proxy | Network::Audit => {
@@ -219,6 +229,7 @@ impl Sandbox {
     ///
     /// A namespace has already cut the network, and an open network has not been cut.
     /// A closed network without a namespace is cut by Landlock.
+    #[cfg(unix)]
     fn tcp_free(&self) -> bool {
         self.network != Network::Closed || self.namespaces().is_some()
     }
@@ -228,7 +239,21 @@ impl Sandbox {
     /// It takes out the variables the command must not see.
     /// It has the command give up what the sandbox does not allow before it runs.
     /// The descriptor returned must outlive the spawn.
-    fn confine(&self, cmd: &mut tokio::process::Command) -> std::io::Result<std::os::fd::OwnedFd> {
+    #[cfg(not(unix))]
+    fn confine(&self, cmd: &mut tokio::process::Command) -> std::io::Result<OwnedFd> {
+        for var in &self.unset {
+            cmd.env_remove(var);
+        }
+        Ok(())
+    }
+
+    /// Confine `cmd` with Landlock, and put it in the network namespace when there is one.
+    ///
+    /// It takes out the variables the command must not see.
+    /// It has the command give up what the sandbox does not allow before it runs.
+    /// The descriptor returned must outlive the spawn.
+    #[cfg(unix)]
+    fn confine(&self, cmd: &mut tokio::process::Command) -> std::io::Result<OwnedFd> {
         for var in &self.unset {
             cmd.env_remove(var);
         }
@@ -629,8 +654,8 @@ pub use linux::{abi, restrict_after_fork, ruleset};
 
 #[cfg(not(target_os = "linux"))]
 mod elsewhere {
+    use super::{OwnedFd, RawFd};
     use std::io;
-    use std::os::fd::{OwnedFd, RawFd};
     use std::path::PathBuf;
 
     pub fn abi() -> Option<u32> {

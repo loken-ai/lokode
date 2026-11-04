@@ -125,9 +125,9 @@ pub(crate) async fn run_shell(
 ) -> (bool, String) {
     use tokio::io::AsyncBufReadExt;
     // Killed when it is stopped or dropped.
-    let child = tokio::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
+    let shell = crate::shell::Shell::current();
+    let child = tokio::process::Command::new(&shell.program)
+        .args(shell.args(command, false))
         .current_dir(root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

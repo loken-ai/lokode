@@ -151,6 +151,7 @@ pub(crate) async fn write_elsewhere(
     std::fs::write(&path, carried)?;
 
     crate::ui::term::restore();
+    #[cfg(unix)]
     let ran = tokio::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(format!("{editor} \"$1\""))
@@ -158,6 +159,16 @@ pub(crate) async fn write_elsewhere(
         .arg(&path)
         .status()
         .await;
+    // The editor is a program, with the arguments it is given, and there is no shell to read it.
+    #[cfg(not(unix))]
+    let ran = {
+        let mut words = editor.split_whitespace();
+        tokio::process::Command::new(words.next().unwrap_or("notepad"))
+            .args(words)
+            .arg(&path)
+            .status()
+            .await
+    };
     // The terminal is taken back whatever the editor did, including failing to start.
     let _ = crate::ui::term::TerminalGuard::new();
     let _ = term.clear();

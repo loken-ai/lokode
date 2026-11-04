@@ -59,6 +59,7 @@ pub mod paths;
 pub mod plugins;
 pub mod sandbox;
 pub mod serve;
+pub mod shell;
 pub mod sound;
 pub mod tools;
 pub mod trust;

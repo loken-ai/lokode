@@ -35,9 +35,18 @@ impl Tool for Bash {
         true
     }
     fn description(&self) -> &str {
-        "Run a shell command. Requires user approval. cwd must be inside project root. It runs \
-         in a sandbox where there is one; outside_sandbox asks the user to run it unconfined, \
-         for a command the sandbox stopped."
+        match crate::shell::Shell::current().dialect {
+            crate::shell::Dialect::Posix => {
+                "Run a shell command. Requires user approval. cwd must be inside project root. It \
+                 runs in a sandbox where there is one; outside_sandbox asks the user to run it \
+                 unconfined, for a command the sandbox stopped."
+            }
+            crate::shell::Dialect::PowerShell => {
+                "Run a PowerShell command. Requires user approval. cwd must be inside project \
+                 root. It runs in a sandbox where there is one; outside_sandbox asks the user to \
+                 run it unconfined, for a command the sandbox stopped."
+            }
+        }
     }
 
     fn args_schema(&self) -> Value {
@@ -106,11 +115,15 @@ impl Tool for Bash {
             gate: std::sync::Arc::new(ctx.clone()),
             origin: format!("bash: {}", a.cmd.lines().next().unwrap_or_default()),
         };
+        let shell = crate::shell::Shell::current();
+        let program = shell.program.to_string_lossy().to_string();
+        let shell_args = shell.args(&a.cmd, true);
+        let shell_args: Vec<&str> = shell_args.iter().map(String::as_str).collect();
         let (mut cmd, _held) = match crate::sandbox::confine::command(
             sandbox.map(|s| s.as_ref()),
             Some(asking),
-            "/bin/sh",
-            &["-lc", &a.cmd],
+            &program,
+            &shell_args,
         ) {
             Ok(built) => built,
             Err(e) => {

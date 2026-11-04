@@ -224,9 +224,15 @@ fn builtin_specs() -> Vec<ServerSpec> {
 /// `PATH`.
 pub fn installed(command: &str) -> bool {
     let runnable = |p: &Path| {
-        use std::os::unix::fs::PermissionsExt;
+        #[cfg(unix)]
+        let executable = |m: &std::fs::Metadata| {
+            use std::os::unix::fs::PermissionsExt;
+            m.permissions().mode() & 0o111 != 0
+        };
+        #[cfg(not(unix))]
+        let executable = |_: &std::fs::Metadata| true;
         p.metadata()
-            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .map(|m| m.is_file() && executable(&m))
             .unwrap_or(false)
     };
     if command.contains('/') {

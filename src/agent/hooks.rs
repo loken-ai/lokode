@@ -161,9 +161,9 @@ pub async fn run(hook: &Hook, event: Event, root: &Path, tool: &str, input: &Val
     let when = event.label();
     let started = std::time::Instant::now();
     let timeout = hook.timeout.map(Duration::from_secs).unwrap_or(TIMEOUT);
-    let mut cmd = Command::new("/bin/sh");
-    cmd.arg("-c")
-        .arg(&hook.command)
+    let shell = crate::shell::Shell::current();
+    let mut cmd = Command::new(&shell.program);
+    cmd.args(shell.args(&hook.command, false))
         .current_dir(root)
         .env("LOKODE_HOOK", when)
         .env("LOKODE_TOOL", tool)
@@ -190,6 +190,7 @@ pub async fn run(hook: &Hook, event: Event, root: &Path, tool: &str, input: &Val
             return failed(format!("the {when} hook could not be started: {e}"));
         }
     };
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let group = child.id();
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(input.to_string().as_bytes()).await;
@@ -381,6 +382,7 @@ mod tests {
     }
 
     /// A hook that outlives its time is stopped, with what it started.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_hook_that_hangs_is_stopped_with_its_children() {
         let dir = tempfile::tempdir().unwrap();

@@ -127,7 +127,10 @@ impl Egress {
         #[cfg(target_os = "linux")]
         let (listener, dns) = (made.listener, made.dns);
         #[cfg(not(target_os = "linux"))]
-        let (listener, dns) = (std::net::TcpListener::bind("127.0.0.1:0")?, None);
+        let (listener, dns) = (
+            std::net::TcpListener::bind("127.0.0.1:0")?,
+            None::<std::net::UdpSocket>,
+        );
         listener.set_nonblocking(true)?;
         let dns = match dns {
             Some(socket) => {
@@ -168,7 +171,7 @@ impl Egress {
 
     /// The user, network and mount namespaces a command joins, in that order, when this system
     /// has them.
-    pub fn namespaces(&self) -> Option<[std::os::fd::RawFd; 3]> {
+    pub fn namespaces(&self) -> Option<[crate::sandbox::confine::RawFd; 3]> {
         #[cfg(target_os = "linux")]
         {
             use std::os::fd::AsRawFd;

@@ -13,6 +13,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 - Shell: tell a failed command which hosts the proxy refused and why.
 - Interface: list in /net the hosts and ports commands reached, and save them to the project.
 - Sounds: play a success or an error sound when a turn, a command, a sub-agent or a question ends.
+- Shell: run commands with Git Bash or PowerShell on Windows.
 
 ### Changed
 
