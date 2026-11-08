@@ -1,3 +1,9 @@
+<!-- site: page slides sound=soft header=lokode class="brand brand-lokode" footer="{number} / {total}" reveal -->
+
+<!-- site: say narration=/lokode/narration/overview-1-1.mp3 caption="lokode is a coding agent that lives in your terminal, and talks to a model on your own machine." mark="A coding agent that runs in your terminal, against a model on your own machine" -->
+<!-- site: say narration=/lokode/narration/overview-1-2.mp3 caption="No account. Nothing leaves the machine. And no editor to adopt." mark="It needs no account, sends no request off the machine and asks you to adopt no editor" -->
+<!-- site: say narration=/lokode/narration/overview-1-3.mp3 caption="It is experimental. Point it at work you can afford to lose." focus="EXPERIMENTAL" -->
+
 # lokode
 
 A coding agent that runs in your terminal, against a model on your own machine.
@@ -16,11 +22,17 @@ lokode --model qwen3-coder:latest --root .
 
 lokode speaks the OpenAI-compatible API and works against [loken](https://github.com/loken-ai/loken), ollama, vLLM, llama.cpp or any other server of that API.
 The default backend is `http://127.0.0.1:11435`.  
-lokode also speaks the Anthropic Messages API and knows [17 providers](docs/guides/configuration.md#which-provider) by name.
+lokode also speaks the Anthropic Messages API and knows [17 providers](https://loken-ai.github.io/lokode/configuration/#which-provider) by name.
 
 Beside its own screen, it serves editors over the Agent Client Protocol (`lokode acp`) and a browser page (`lokode serve`), and a terminal can attach to a session of `lokode serve` (`lokode attach`).
 
 Plugins add commands, agents, skills, hooks, tool servers and language servers, including the plugins written for other coding agents.
+
+<!-- site: slide narration=/lokode/narration/overview-2-0.mp3 caption="What does it do? It reads, searches and edits your files, runs commands in a sandbox, and asks a language server." -->
+<!-- site: say narration=/lokode/narration/overview-2-1.mp3 caption="Every change is a diff. You accept it, or you decline it." focus="a change is a diff to accept or decline" -->
+<!-- site: say narration=/lokode/narration/overview-2-2.mp3 caption="And you can take it back, from a change history of its own, beside your git." focus="a change history of its own" -->
+<!-- site: say narration=/lokode/narration/overview-2-3.mp3 caption="Commands run in a sandbox. They write only in the project, and they cannot read your credentials." focus="cannot read your credentials" -->
+<!-- site: say narration=/lokode/narration/overview-2-4.mp3 caption="17 providers by name, or any server that speaks the OpenAI API." focus="17 providers by name" -->
 
 ## What it does
 
@@ -33,28 +45,30 @@ Rows marked local rely on the model running on your machine.
 | | |
 |---|---|
 | [The screen](#the-screen) | the conversation, a rail with what runs, the plan, the changes, the window and the engine, the status line and the keys in force |
-| [Using it](docs/guides/using.md#using-it) | one line per step, completion on `/` and `@`, steps you point at, unfold and open |
-| [What runs](docs/guides/using.md#what-runs) | what is running, where it is, and stopping one thing while the rest goes on |
-| [Approvals](docs/guides/safety.md#where-it-is-careful) | a change is a diff to accept or decline, asked in the conversation |
-| [Plan and act](docs/guides/agents.md#planning-before-acting) | read without changing anything, then carry it out |
-| [Undo](docs/guides/editing.md#taking-something-back) | a change history of its own, beside your git |
-| [Sessions](docs/guides/editing.md#sessions) | every turn recorded and resumable |
-| [Roles](docs/guides/models.md#one-model-per-kind-of-work) *(local)* | a model per kind of work, a reviewer, and a stronger model when a change fails its check |
-| [Checks](docs/guides/editing.md#changing-a-file) | the language server after every write, or the compiler where there is none |
-| [Navigation](docs/guides/editing.md#asking-the-language-server) | definitions, uses, implementations, callers and outlines from the language server |
-| [Background discovery](docs/guides/models.md#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody waits, kept between sessions |
-| [Speculation](docs/guides/using.md#using-it) *(local)* | the next read guessed while the model is still writing |
-| [The engine](docs/guides/models.md#what-the-engine-measures) *(local)* | what loken measured of each request, its energy and the power of the machine |
-| [Sandbox](docs/guides/safety.md#where-it-is-careful) | the commands it runs write only in the project, cannot read your credentials, and reach the network through a proxy that asks about each host |
-| [Agents](docs/guides/agents.md#handing-work-to-an-agent) | a search or a task handed to a named agent, in a window of its own, in the background and in a copy of the project |
-| [Plans](docs/guides/agents.md#work-of-several-steps) | work of several steps kept as a list |
-| [Hooks](docs/guides/extending.md#hooks) | commands around a tool call and at the end of a turn |
-| [Sounds](docs/guides/extending.md#sounds) | a sound when a turn, an agent or a question ends, for a success or an error |
-| [Commands, skills and plugins](docs/guides/extending.md#commands-written-as-files) | prompts, know-how and extensions kept as files, installed from git or a marketplace |
-| [MCP](docs/guides/extending.md#tools-from-elsewhere) | tools, documents and prompts from another server, signed in to when it asks |
-| [Providers](docs/guides/configuration.md#which-provider) | 17 providers by name, or any server of the OpenAI API |
-| [Editors and browser](docs/guides/interfaces.md#in-an-editor) | `lokode acp` for Zed, JetBrains, Neovim, Emacs and VS Code, `lokode serve` for a page, `lokode attach` for a terminal |
-| [Headless](docs/guides/interfaces.md#without-the-interface) | one prompt, a JSON report, an exit code |
+| [Using it](https://loken-ai.github.io/lokode/using/#using-it) | one line per step, completion on `/` and `@`, steps you point at, unfold and open |
+| [What runs](https://loken-ai.github.io/lokode/using/#what-runs) | what is running, where it is, and stopping one thing while the rest goes on |
+| [Approvals](https://loken-ai.github.io/lokode/safety/#where-it-is-careful) | a change is a diff to accept or decline, asked in the conversation |
+| [Plan and act](https://loken-ai.github.io/lokode/agents/#planning-before-acting) | read without changing anything, then carry it out |
+| [Undo](https://loken-ai.github.io/lokode/editing/#taking-something-back) | a change history of its own, beside your git |
+| [Sessions](https://loken-ai.github.io/lokode/editing/#sessions) | every turn recorded and resumable |
+| [Roles](https://loken-ai.github.io/lokode/models/#one-model-per-kind-of-work) *(local)* | a model per kind of work, a reviewer, and a stronger model when a change fails its check |
+| [Checks](https://loken-ai.github.io/lokode/editing/#changing-a-file) | the language server after every write, or the compiler where there is none |
+| [Navigation](https://loken-ai.github.io/lokode/editing/#asking-the-language-server) | definitions, uses, implementations, callers and outlines from the language server |
+| [Background discovery](https://loken-ai.github.io/lokode/models/#working-it-out-while-you-are-not-waiting) *(local)* | the project worked out while nobody waits, kept between sessions |
+| [Speculation](https://loken-ai.github.io/lokode/using/#using-it) *(local)* | the next read guessed while the model is still writing |
+| [The engine](https://loken-ai.github.io/lokode/models/#what-the-engine-measures) *(local)* | what loken measured of each request, its energy and the power of the machine |
+| [Sandbox](https://loken-ai.github.io/lokode/safety/#where-it-is-careful) | the commands it runs write only in the project, cannot read your credentials, and reach the network through a proxy that asks about each host |
+| [Agents](https://loken-ai.github.io/lokode/agents/#handing-work-to-an-agent) | a search or a task handed to a named agent, in a window of its own, in the background and in a copy of the project |
+| [Plans](https://loken-ai.github.io/lokode/agents/#work-of-several-steps) | work of several steps kept as a list |
+| [Hooks](https://loken-ai.github.io/lokode/extending/#hooks) | commands around a tool call and at the end of a turn |
+| [Sounds](https://loken-ai.github.io/lokode/extending/#sounds) | a sound when a turn, an agent or a question ends, for a success or an error |
+| [Commands, skills and plugins](https://loken-ai.github.io/lokode/extending/#commands-written-as-files) | prompts, know-how and extensions kept as files, installed from git or a marketplace |
+| [MCP](https://loken-ai.github.io/lokode/extending/#tools-from-elsewhere) | tools, documents and prompts from another server, signed in to when it asks |
+| [Providers](https://loken-ai.github.io/lokode/configuration/#which-provider) | 17 providers by name, or any server of the OpenAI API |
+| [Editors and browser](https://loken-ai.github.io/lokode/interfaces/#in-an-editor) | `lokode acp` for Zed, JetBrains, Neovim, Emacs and VS Code, `lokode serve` for a page, `lokode attach` for a terminal |
+| [Headless](https://loken-ai.github.io/lokode/interfaces/#without-the-interface) | one prompt, a JSON report, an exit code |
+
+<!-- site: say narration=/lokode/narration/overview-3-1.mp3 caption="Installing takes one command. Cargo builds it. You need Rust, and a Unix like system." focus="cargo install" mark="cargo install --path ." -->
 
 ## Install
 
@@ -68,13 +82,15 @@ The shell tool runs `/bin/sh`.
 | Optional | What it adds |
 |---|---|
 | ripgrep (`rg`) | a faster `grep`. Without it the built-in walker runs the same search with the same ignore files |
-| a language server | the checks after a write and the navigation tools, for the languages listed in [Asking the language server](docs/guides/editing.md#asking-the-language-server) |
+| a language server | the checks after a write and the navigation tools, for the languages listed in [Asking the language server](https://loken-ai.github.io/lokode/editing/#asking-the-language-server) |
+
+<!-- site: say narration=/lokode/narration/overview-4-1.mp3 caption="Here is a session, in the middle of a turn. The conversation, what runs, the plan, the changes, and how much context is used." focus="A session in the middle of a turn" -->
 
 ## The screen
 
 A session in the middle of a turn, at 120 columns:
 
-<!-- site: replace name=session-120 alt="A lokode session in the middle of a turn" caption="A lokode session in the middle of a turn" -->
+<!-- site: replace src=/lokode/img/session-120-light.png dark=/lokode/img/session-120-dark.png alt="A lokode session in the middle of a turn" caption="A lokode session in the middle of a turn" -->
 <!-- screen:120x32 -->
 ```text
  lokode  /p/demo  main ●2                                                          qwen3-coder  127.0.0.1:11435  native
@@ -122,6 +138,9 @@ The client waits on rx.await forever. I add timeout-secs:                       
 | the status line | the mode, what the turn is doing and for how long, and how full the window is |
 | the line of keys | the keys of what is in front: the input, a list, a page or the step pointed at |
 
+<!-- site: say narration=/lokode/narration/overview-5-1.mp3 caption="To work on lokode, run the tests, clippy, and the format check." focus="cargo test" -->
+<!-- site: say narration=/lokode/narration/overview-5-2.mp3 caption="The rest is in the contributing guide." focus="CONTRIBUTING.md" -->
+
 ## Development
 
 ```sh
@@ -131,6 +150,8 @@ cargo fmt --all --check
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+<!-- site: say narration=/lokode/narration/overview-6-1.mp3 caption="MIT or Apache 2. Your choice." focus="MIT OR Apache-2.0" -->
 
 ## Licence
 

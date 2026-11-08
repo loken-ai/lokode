@@ -11,6 +11,8 @@ cargo fmt --all --check
 CI runs exactly those, on Linux and macOS, plus `cargo deny check` and a build against the declared MSRV.  
 Nothing lands red.
 
+`LOKODE_SITE_DOCS` set to the folder of the guides in the site repository makes `tests/docs.rs` check that every flag and tool is documented.
+
 Every tool has tests.
 The ones that need another program skip themselves when it is missing, so a clean checkout passes.  
 `run_tests` wants a project manifest.
