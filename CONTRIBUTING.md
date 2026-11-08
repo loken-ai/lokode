@@ -8,7 +8,8 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
-CI runs exactly those, on Linux and macOS, plus `cargo deny check` and a build against the declared MSRV.  
+CI runs those with `--all-features`, plus `cargo test --doc`, `cargo doc --no-deps`, `cargo deny check` and a build against the declared MSRV.
+It runs on Linux and macOS, not on Windows.  
 Nothing lands red.
 
 `LOKODE_SITE_DOCS` set to the folder of the guides in the site repository makes `tests/docs.rs` check that every flag and tool is documented.
@@ -80,8 +81,6 @@ Then tests: a nominal case and a refusal, using `src/tools/harness.rs`, which gi
 
 The documentation is built into the site of loken-ai, at https://loken-ai.github.io/lokode/, from the repository `loken-ai/loken-ai.github.io`.  
 It takes the pages of the latest release of lokode.
-
-The guides in `docs/guides` stay readable on GitHub as they are.
 
 ## Reporting things
 

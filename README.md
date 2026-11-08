@@ -39,7 +39,7 @@ Plugins add commands, agents, skills, hooks, tool servers and language servers, 
 lokode reads, searches and edits files under one root, runs commands in a sandbox and asks a language server.  
 `--max-steps` caps the steps of one turn.
 
-Each row opens its guide in `docs/guides`, also published at <https://loken-ai.github.io/lokode/>.
+Each row opens its guide at <https://loken-ai.github.io/lokode/>.
 Rows marked local rely on the model running on your machine.
 
 | | |
@@ -76,8 +76,8 @@ Rows marked local rely on the model running on your machine.
 cargo install --path .     # or cargo build --release, then target/release/lokode
 ```
 
-lokode needs Rust 1.92 or later and a Unix-like system.
-The shell tool runs `/bin/sh`.
+lokode needs Rust 1.92 or later.
+The shell tool runs `/bin/sh` on Linux and macOS, and Git Bash or PowerShell on Windows.
 
 | Optional | What it adds |
 |---|---|

@@ -111,8 +111,8 @@ struct Cli {
     #[arg(long, value_enum)]
     tool_protocol: Option<app::ProtocolChoice>,
 
-    /// How far the commands the agent runs are confined. Linux and macOS. `workspace` when not
-    /// given: writes in the project, the temporary directories and the build caches.
+    /// How far the commands the agent runs are confined. Linux, macOS and Windows, where only writes are
+    /// confined. `workspace` when not given: writes in the project, the temporary directories and the build caches.
     #[arg(long, value_enum)]
     sandbox: Option<lokode::sandbox::confine::Level>,
 

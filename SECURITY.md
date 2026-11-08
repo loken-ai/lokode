@@ -182,7 +182,7 @@ A host you agreed to receives whatever a command sends it, and a service that re
 A connection that names one host and reaches another through shared infrastructure, known as domain fronting, is not detected.
 The detection of large uploads compares with what the project has done before: it catches a sudden flood, and a leak in small pieces stays under it.
 
-**Outside the sandbox, a command is not confined.** It runs `/bin/sh -lc <string>` with your privileges and your environment.
+**Outside the sandbox, a command is not confined.** It runs in the shell of the system, `/bin/sh -lc <string>` on Unix and Git Bash or PowerShell on Windows, with your privileges and your environment.
 `-l` sources your login profile.  
 Approving a command is approving everything that command can do.
 
