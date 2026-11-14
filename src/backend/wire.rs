@@ -228,14 +228,15 @@ pub struct CompletionDetails {
 
 /// What a loken server measured of one request.
 /// A field it could not measure is absent.
+/// Times are milliseconds with a fraction.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct LokenUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub queue_ms: Option<u64>,
+    pub queue_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prefill_ms: Option<u64>,
+    pub prefill_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decode_ms: Option<u64>,
+    pub decode_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub energy: Option<Energy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

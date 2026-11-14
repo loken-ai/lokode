@@ -476,9 +476,9 @@ mod tests {
                 accepted_tokens: 82,
                 rejected_tokens: 18,
                 loken: crate::backend::wire::LokenUsage {
-                    queue_ms: Some(0),
-                    prefill_ms: Some(700),
-                    decode_ms: Some(3100),
+                    queue_ms: Some(0.0),
+                    prefill_ms: Some(700.0),
+                    decode_ms: Some(3100.0),
                     energy: None,
                     kv: Some(crate::backend::wire::Kv {
                         used_tokens: 20_431,

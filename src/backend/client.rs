@@ -750,6 +750,7 @@ mod tests {
 
     /// The measurements a loken server adds to the closing usage are read, each one optional.
     /// The standard speculation counts are read with them.
+    /// Times written as whole numbers are read as well.
     #[test]
     fn a_loken_usage_is_read_off_the_last_chunk() {
         let raw = r#"{"choices":[],"usage":{"prompt_tokens":20431,"completion_tokens":120,
@@ -761,7 +762,7 @@ mod tests {
         let chunk: ChatChunk = serde_json::from_str(raw).expect("a chunk");
         let usage = chunk.usage.expect("a usage");
         let loken = usage.loken.expect("loken measurements");
-        assert_eq!(loken.prefill_ms, Some(840));
+        assert_eq!(loken.prefill_ms, Some(840.0));
         let energy = loken.energy.expect("an energy");
         assert_eq!(energy.share, crate::backend::wire::Share::Work);
         assert_eq!(energy.cpu_joules, None);
@@ -782,6 +783,26 @@ mod tests {
         )
         .expect("a chunk");
         assert!(plain.usage.expect("a usage").loken.is_none());
+    }
+
+    /// The times a loken server sends are milliseconds with a fraction, and they are read
+    /// as sent.
+    #[test]
+    fn a_loken_usage_with_fractional_times_is_read() {
+        let raw = r#"{"choices":[],"usage":{"prompt_tokens":1830,"completion_tokens":64,
+            "loken":{"queue_ms":1.2,"prefill_ms":840.5,"decode_ms":2210.0,
+            "energy":{"joules":95.3,"gpu_joules":80.1,"cpu_joules":15.2,"estimated":false,"share":"work"},
+            "kv":{"used_tokens":1830,"capacity_tokens":32768}}}}"#;
+        let chunk: ChatChunk = serde_json::from_str(raw).expect("a chunk");
+        let loken = chunk
+            .usage
+            .and_then(|u| u.loken)
+            .expect("loken measurements");
+        assert_eq!(loken.queue_ms, Some(1.2));
+        assert_eq!(loken.prefill_ms, Some(840.5));
+        assert_eq!(loken.decode_ms, Some(2210.0));
+        assert_eq!(loken.energy.and_then(|e| e.cpu_joules), Some(15.2));
+        assert_eq!(loken.kv.map(|k| k.used_tokens), Some(1830));
     }
 
     /// The comment that says how far a prompt has been read becomes an event of its own.

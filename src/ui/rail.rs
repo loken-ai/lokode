@@ -302,9 +302,13 @@ impl Rail<'_> {
         }
         if let Some(latest) = &self.engine.latest {
             let l = &latest.loken;
-            let ms = |v: u64| crate::ui::chat::how_long(std::time::Duration::from_millis(v));
+            let ms = |v: f64| {
+                crate::ui::chat::how_long(
+                    std::time::Duration::try_from_secs_f64(v / 1e3).unwrap_or_default(),
+                )
+            };
             let mut times = Vec::new();
-            if let Some(q) = l.queue_ms.filter(|q| *q > 0) {
+            if let Some(q) = l.queue_ms.filter(|q| *q > 0.0) {
                 times.push(format!("wait {}", ms(q)));
             }
             if let Some(p) = l.prefill_ms {
