@@ -4,6 +4,8 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-15
+
 ### Added
 
 - Shell: filter the network of commands through a proxy that asks about each host and port.
