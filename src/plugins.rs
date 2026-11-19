@@ -835,11 +835,16 @@ mod tests {
             std::fs::write(source.join("plugin.toml"), toml).unwrap();
             for args in [
                 vec!["add", "-A"],
+                // Hooks and signing set in the user's configuration do not apply.
                 vec![
                     "-c",
                     "user.name=t",
                     "-c",
                     "user.email=t@t",
+                    "-c",
+                    "core.hooksPath=.git/hooks",
+                    "-c",
+                    "commit.gpgSign=false",
                     "commit",
                     "-qm",
                     message,

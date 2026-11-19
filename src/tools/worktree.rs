@@ -907,9 +907,17 @@ impl Tool for TakeWork {
 mod tests {
     use super::*;
 
+    /// Git in `dir`, with an identity of its own.
+    /// Hooks and signing set in the user's configuration do not apply.
     fn run(dir: &Path, args: &[&str]) {
         let ok = std::process::Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args([
+                "-c",
+                "core.hooksPath=.git/hooks",
+                "-c",
+                "commit.gpgSign=false",
+            ])
             .args(args)
             .current_dir(dir)
             .output()
