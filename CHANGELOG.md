@@ -6,6 +6,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Fixed
 
+- Tools: keep the change history when git sets hooks or signing.
 - Tools: show the ends of a long file read_file reads without a range.
 - Tools: run a tool call the model left in its reasoning.
 - Backend: report an error the server sends inside the stream.

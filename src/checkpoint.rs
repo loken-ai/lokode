@@ -258,6 +258,14 @@ impl Checkpoints {
 
     fn base(&self) -> Command {
         let mut cmd = Command::new("git");
+        // The hooks are looked for in the history's own directory, which holds none that run.
+        // A hooks path the user set for their own repositories never applies here.
+        let mut hooks = std::ffi::OsString::from("core.hooksPath=");
+        hooks.push(self.git_dir.join("hooks"));
+        cmd.arg("-c")
+            .arg(hooks)
+            // A commit here is never signed, so it never waits on a key.
+            .args(["-c", "commit.gpgSign=false"]);
         cmd.env("GIT_DIR", &self.git_dir)
             .env("GIT_WORK_TREE", &self.root)
             // A fixed identity is used, so committing never depends on the user's configuration.
@@ -545,6 +553,38 @@ mod tests {
             "ref: refs/heads/main\n",
             "the project's own repo was disturbed"
         );
+    }
+
+    /// A hooks path and commit signing set outside lokode do not stop a snapshot.
+    /// The settings are written into the history's own configuration, which the user's global
+    /// one is read beside.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hooks_and_signing_set_elsewhere_do_not_stop_a_snapshot() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fixture();
+        let root = f.root.path().canonicalize().unwrap();
+        write(&root, "a.txt", "one\n");
+        let cp = f.open().await;
+
+        let hooks = f.store.path().join("refusing-hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\necho refused >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = f.store.path().join("history").join("config");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str(&format!(
+            "[core]\n\thooksPath = {}\n[commit]\n\tgpgSign = true\n",
+            hooks.display()
+        ));
+        std::fs::write(&config, text).unwrap();
+
+        write(&root, "a.txt", "two\n");
+        assert!(matches!(
+            cp.snapshot("edit_file", 1).await.unwrap(),
+            Snapshot::Recorded(_)
+        ));
     }
 
     #[test]

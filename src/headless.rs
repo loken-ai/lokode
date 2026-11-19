@@ -121,9 +121,10 @@ pub async fn run(
         ..
     } = boot::boot(&cfg).await?;
 
-    if let Some(why) = &checkpoint_error {
+    let checkpoint_notice = checkpoint_error.as_ref().map(|why| {
         tracing::warn!(%why, "running without a change history");
-    }
+        format!("no change history for this session: {why}")
+    });
 
     let mut blocked = false;
     // Answering from the policy rather than from a person.
@@ -198,6 +199,13 @@ pub async fn run(
     // instructions came from, what was capped.
     // The report carries these.
     // A caller can learn that its window was settled at something other than what it asked for.
+    if let Some(notice) = checkpoint_notice {
+        if text_output {
+            eprintln!("· {notice}");
+        }
+        report.notices.push(notice);
+    }
+
     for notice in &instruction_notes {
         tracing::info!(%notice, "settled");
         if text_output {
