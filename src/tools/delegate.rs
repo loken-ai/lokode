@@ -323,6 +323,7 @@ impl Tool for Delegate {
                 allow_fallback: elsewhere,
                 shared_protocol: None,
                 delegated: true,
+                steps_by_progress: false,
             },
             // The caller's context, so its approvals, its cancellation and its root are
             // the sub-session's too.

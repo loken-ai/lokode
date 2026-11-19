@@ -55,8 +55,8 @@ pub struct ToolCtx {
     pub max_output_chars: usize,
     /// Characters a read of a whole file returns before it shows only the file's ends.
     ///
-    /// Derived from the session's budget and its step limit, so a turn that reads a file each
-    /// step still fits the window.
+    /// Derived from the session's budget and the steps a turn is expected to take, so a turn
+    /// that reads a file each step still fits the window for that many steps.
     pub whole_read_chars: usize,
     /// Cancelled when the user abandons the turn this tool call belongs to.
     ///

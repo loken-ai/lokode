@@ -517,6 +517,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             allow_fallback: cfg.tool_protocol == ProtocolChoice::Auto,
             shared_protocol: Some(protocol_cell.clone()),
             delegated: false,
+            steps_by_progress: !cfg.max_steps_was_set,
         },
         ctx,
         checkpoints: checkpoints.clone(),

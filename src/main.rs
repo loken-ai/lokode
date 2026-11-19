@@ -63,7 +63,9 @@ struct Cli {
     #[arg(long)]
     no_grammar: bool,
 
-    /// Maximum agent loop iterations per user turn.
+    /// Stop each turn at this many steps.
+    /// Unset, a turn goes on while it changes files, and stops after as many steps without a
+    /// change as its first change took.
     #[arg(long)]
     max_steps: Option<usize>,
 
@@ -482,6 +484,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
                 .max_steps
                 .or(file.limits.max_steps)
                 .unwrap_or(default::MAX_STEPS),
+            max_steps_was_set: cli.max_steps.or(file.limits.max_steps).is_some(),
             context_was_set: cli.context_tokens.or(file.limits.context_tokens).is_some(),
             context_tokens: cli
                 .context_tokens
@@ -960,7 +963,10 @@ fn print_config(cfg: &Resolved) {
     println!("  backend-kind       {}", a.backend_kind.label());
     println!("  tool-protocol      {:?}", a.tool_protocol);
     println!("  grammar            {}", a.grammar_enabled);
-    println!("  max-steps          {}", a.max_steps);
+    match a.max_steps_was_set {
+        true => println!("  max-steps          {}", a.max_steps),
+        false => println!("  max-steps          unset: a turn ends by its progress"),
+    }
     println!("  context-tokens     {}", a.context_tokens);
     println!("  max-answer-tokens  {}", a.max_answer_tokens);
     println!("  transcripts        {}", a.transcripts);

@@ -108,14 +108,16 @@ pub fn tool_output_chars(context_tokens: usize, reserve_tokens: usize) -> usize 
     context_tokens.saturating_sub(reserve_tokens) * CHARS_PER_TOKEN / 4
 }
 
-/// What a read of a whole file may return: the history's budget shared among the steps of
-/// a turn.
+/// What a read of a whole file may return: the history's budget shared among the steps a
+/// turn is expected to take.
 ///
 /// The budget is in characters at the measured ratio, so it follows the window and the
 /// tokenizer.
-/// A turn that reads one whole file a step reaches its step limit before it fills the window.
-pub fn whole_read_chars(budget_chars: usize, max_steps: usize) -> usize {
-    budget_chars / max_steps.max(1)
+/// The expected steps are the stated step limit, or its default when the turn ends by its
+/// progress.
+/// A turn that reads one whole file a step takes that many steps before it fills the window.
+pub fn whole_read_chars(budget_chars: usize, expected_steps: usize) -> usize {
+    budget_chars / expected_steps.max(1)
 }
 
 /// What a reply's token count said about the request that produced it.
@@ -393,6 +395,25 @@ impl Session {
             )),
             false => Observed::Quiet,
         }
+    }
+
+    /// Whether compacting now would cut into the messages from `from` on.
+    ///
+    /// Compaction drops whole earlier turns first, down to a share of the budget.
+    /// Only what is still over that share costs the messages from `from` on.
+    pub fn would_cut_from(&self, from: usize) -> bool {
+        if self.budget_chars == 0 || self.size_chars() <= self.budget_chars {
+            return false;
+        }
+        let target = (self.budget_chars as f64 * COMPACT_TO) as usize;
+        let kept: usize = self
+            .history
+            .iter()
+            .take(1)
+            .chain(self.history.iter().skip(from.max(1)))
+            .map(|m| m.content.len() + m.role.len())
+            .sum();
+        kept > target
     }
 
     /// Drop the oldest steps until the history is comfortably inside the budget, and
@@ -849,6 +870,27 @@ mod context_tests {
             .iter()
             .any(|(k, _)| k.contains("standing instructions")));
         assert!(rows.windows(2).all(|w| w[0].1 >= w[1].1));
+    }
+
+    /// Compaction cuts into a turn only when dropping the turns before it is not enough.
+    #[test]
+    fn a_turn_is_cut_only_when_earlier_turns_do_not_make_room() {
+        // 1000 tokens less 200 reserved: a budget of about 2900 characters.
+        let mut s = Session::new("sys".into(), 1000, 200);
+        s.push(Message::user("earlier"));
+        s.push(Message::tool("old".repeat(800), "c0"));
+        let from = s.history.len();
+        s.push(Message::user("now"));
+        s.push(Message::tool("new".repeat(200), "c1"));
+        assert!(s.size_chars() > s.budget_chars());
+        // Dropping the earlier turn makes room.
+        assert!(!s.would_cut_from(from));
+        s.push(Message::tool("new".repeat(500), "c2"));
+        // The turn alone is over what compaction keeps.
+        assert!(s.would_cut_from(from));
+        // Within the budget, nothing is cut.
+        let small = Session::new("sys".into(), 1000, 200);
+        assert!(!small.would_cut_from(1));
     }
 
     /// Asked for early, compaction does what a full window would have made it do.

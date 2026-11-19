@@ -703,6 +703,13 @@ pub struct AgentConfig {
     /// Its question is taken as written: no file named in it is attached and the project is not
     /// searched for it.
     pub delegated: bool,
+    /// Whether a turn ends by its progress rather than at `max_steps`.
+    ///
+    /// True when nobody stated a step limit.
+    /// The turn then stops after as many steps without a change as it took to make its first one,
+    /// or when its own steps no longer fit the window.
+    /// `max_steps` stays the number of steps a turn is expected to take.
+    pub steps_by_progress: bool,
 }
 
 /// What one turn did, for the line that closes it.
@@ -730,6 +737,10 @@ pub struct TurnTally {
     pub turn_end: Option<Vec<crate::agent::hooks::Ran>>,
     /// Whether the model was asked to make again a call it left in its reasoning.
     pub restated: bool,
+    /// How many steps the turn took to its first change, once it has made one.
+    pub first_change: Option<usize>,
+    /// The step of the turn's last change, counted from one.
+    pub last_change: usize,
 }
 
 impl TurnTally {
@@ -1850,18 +1861,24 @@ impl Agent {
                 text = format!("{text}\n\n{}", found.text);
             }
         }
+        // Kept to find the ask again after earlier turns are compacted away.
+        let ask = text.clone();
         self.session.push(Message::user(text));
 
         let turn_schema = build_turn_schema(&self.registry);
         let validator = Validator::new(&turn_schema).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        for step in 0..self.cfg.max_steps {
+        for step in 0.. {
             // One build per step: a step that writes 3 files is one change, and asking 3 times
             // costs 3 builds to learn the same thing.
             self.checked_this_step
                 .store(false, std::sync::atomic::Ordering::Relaxed);
             if cancel.is_cancelled() {
                 self.abandon(&events, "interrupted").await;
+                return Ok(());
+            }
+            if let Some(why) = self.out_of_steps(step) {
+                self.stop_on_steps(&events, why).await;
                 return Ok(());
             }
             // Before every call, not once per turn: a single tool result can be larger than
@@ -1876,6 +1893,25 @@ impl Agent {
             }
             let _ = events.send(AgentEvent::Phase(Phase::Preparing)).await;
             self.carry_tasks().await;
+            // A turn left to its progress stops before compaction would cut its own steps.
+            if self.cfg.steps_by_progress {
+                let from = self
+                    .session
+                    .history
+                    .iter()
+                    .rposition(|m| m.role == "user" && m.content == ask)
+                    .unwrap_or(1);
+                if self.session.would_cut_from(from) {
+                    self.stop_on_steps(
+                        &events,
+                        format!(
+                            "stopped after {step} steps: the turn no longer fits the context window"
+                        ),
+                    )
+                    .await;
+                    return Ok(());
+                }
+            }
             let dropped = self.session.compact();
             if dropped > 0 && !self.cfg.hooks.compact.is_empty() {
                 use crate::agent::hooks::{run_all, said, Event};
@@ -2221,6 +2257,8 @@ impl Agent {
             // the same question every step will do it until the step limit.
             let mut called = 0usize;
             let mut fruitless = 0usize;
+            // A file changed with no new error from its check.
+            let mut changed = false;
             // Read-only calls in a run go together.
             // A turn that reads 3 files would otherwise wait for 3 round trips, one after another.
             // None of the calls can see what the others did.
@@ -2422,6 +2460,7 @@ impl Agent {
                     if handed_on {
                         for path in changed_paths(&result.content) {
                             self.this_turn.touched(&path);
+                            changed = true;
                         }
                         self.repeats.clear();
                         self.record_change(&call.name, &events).await;
@@ -2438,8 +2477,9 @@ impl Agent {
                         }
                     }
                     if mutating && !result.is_error {
-                        for path in changed_paths(&result.content) {
-                            self.this_turn.touched(&path);
+                        let paths = changed_paths(&result.content);
+                        for path in &paths {
+                            self.this_turn.touched(path);
                         }
                         record.after.wrote = true;
                         // The objective signal of whether the model needs a higher rung.
@@ -2449,6 +2489,7 @@ impl Agent {
                             Some((crate::lsp::check::Outcome::Passed, _)) => Some(true),
                             _ => None,
                         };
+                        changed |= !paths.is_empty() && record.after.check_passed != Some(false);
                         // What fixed this before, and what this is fixing now.
                         // A complaint is held until a change makes it go away, and the pair is what
                         // the next occurrence arrives with.
@@ -2467,6 +2508,10 @@ impl Agent {
                 self.barren += 1;
             } else {
                 self.barren = 0;
+            }
+            if changed {
+                self.this_turn.first_change.get_or_insert(step + 1);
+                self.this_turn.last_change = step + 1;
             }
             self.reconsider_model(&record, &events).await;
             let barren = self.barren;
@@ -2504,16 +2549,35 @@ impl Agent {
                 return Ok(());
             }
         }
+        unreachable!("the step loop ends only by returning")
+    }
 
-        let _ = events
-            .send(AgentEvent::Notice(format!(
-                "stopped after {} steps (max_steps)",
-                self.cfg.max_steps
-            )))
+    /// Why the turn stops before its step `step`, counted from 0, when the step count stops it.
+    ///
+    /// A stated limit stops the turn at its value.
+    /// Otherwise the turn stops after as many steps without a change as it took to make its
+    /// first change.
+    /// A turn that has changed nothing yet is stopped by the window and by the rules for a turn
+    /// that gets nowhere.
+    fn out_of_steps(&self, step: usize) -> Option<String> {
+        if !self.cfg.steps_by_progress {
+            return (step >= self.cfg.max_steps)
+                .then(|| format!("stopped after {step} steps (max_steps)"));
+        }
+        let allowance = self.this_turn.first_change?;
+        let without = step - self.this_turn.last_change;
+        (without >= allowance).then(|| {
+            format!(
+                "stopped after {step} steps: {without} without a change, as many as the \
+                 first change took"
+            )
+        })
+    }
+
+    async fn stop_on_steps(&mut self, events: &mpsc::Sender<AgentEvent>, why: String) {
+        let _ = events.send(AgentEvent::Notice(why)).await;
+        self.end_turn(events, Some(crate::sound::Outcome::Error))
             .await;
-        self.end_turn(&events, Some(crate::sound::Outcome::Error))
-            .await;
-        Ok(())
     }
 
     /// Raise or lower the model from what the last step actually did.
@@ -3795,6 +3859,7 @@ mod tests {
                 allow_fallback: true,
                 shared_protocol: None,
                 delegated: false,
+                steps_by_progress: false,
             },
             ctx: h.ctx.clone(),
             checkpoints: None,
@@ -3922,6 +3987,150 @@ mod tests {
             events.iter().any(|e| matches!(e, AgentEvent::Notice(s)
                 if s.contains("backend error") && s.contains("STREAMING PREFILL: out of memory"))),
             "the error was not reported: {events:?}"
+        );
+    }
+
+    /// A step that calls one tool.
+    fn tool_step(id: &str, name: &str, args: Value) -> String {
+        let chunk = serde_json::json!({"choices": [{"delta": {"tool_calls": [{"index": 0,
+            "id": id, "function": {"name": name, "arguments": args.to_string()}}]}}]})
+        .to_string();
+        sse(&[
+            &chunk,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ])
+    }
+
+    fn answer_step(text: &str) -> String {
+        let chunk = serde_json::json!({"choices": [{"delta": {"content": text}}]}).to_string();
+        sse(&[
+            &chunk,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ])
+    }
+
+    fn writes(n: usize) -> Vec<String> {
+        (0..n)
+            .map(|i| {
+                tool_step(
+                    &format!("w{i}"),
+                    "write_file",
+                    serde_json::json!({"path": format!("f{i}.txt"), "content": "x"}),
+                )
+            })
+            .collect()
+    }
+
+    fn stopped(events: &[AgentEvent]) -> Option<&String> {
+        events.iter().find_map(|e| match e {
+            AgentEvent::Notice(s) if s.starts_with("stopped") => Some(s),
+            _ => None,
+        })
+    }
+
+    /// A turn left to its progress goes on past the expected steps while it changes files.
+    #[tokio::test]
+    async fn a_turn_that_changes_files_goes_on_past_the_expected_steps() {
+        let h = Harness::new(Answer::Yes);
+        let mut script = writes(18);
+        script.push(answer_step("done"));
+        let backend = fake_backend(script).await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.session.set_window(131_072, 4096);
+        agent.cfg.max_steps = 16;
+        agent.cfg.steps_by_progress = true;
+        let events = drive(&mut agent, "write the files").await;
+        assert_eq!(stopped(&events), None);
+        assert_eq!(backend.seen.lock().unwrap().len(), 19);
+        assert!(h.root.join("f17.txt").exists());
+    }
+
+    /// A turn left to its progress stops after as many steps without a change as its first
+    /// change took.
+    #[tokio::test]
+    async fn a_turn_without_a_change_for_its_allowance_stops() {
+        let h = Harness::new(Answer::Yes);
+        for i in 1..=6 {
+            h.write(&format!("r{i}.txt"), "text");
+        }
+        let read = |i: usize| {
+            tool_step(
+                &format!("r{i}"),
+                "read_file",
+                serde_json::json!({"path": format!("r{i}.txt")}),
+            )
+        };
+        let script = vec![
+            read(1),
+            read(2),
+            writes(1).remove(0),
+            read(3),
+            read(4),
+            read(5),
+            read(6),
+            answer_step("done"),
+        ];
+        let backend = fake_backend(script).await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.session.set_window(131_072, 4096);
+        agent.cfg.max_steps = 16;
+        agent.cfg.steps_by_progress = true;
+        let events = drive(&mut agent, "look and write").await;
+        let why = stopped(&events).expect("the turn was not stopped");
+        assert!(
+            why.starts_with("stopped after 6 steps: 3 without a change"),
+            "{why}"
+        );
+        assert_eq!(backend.seen.lock().unwrap().len(), 6);
+    }
+
+    /// A stated step limit stops the turn at its value, changes or not.
+    #[tokio::test]
+    async fn a_stated_step_limit_stops_the_turn_at_its_value() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(writes(6)).await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.session.set_window(131_072, 4096);
+        agent.cfg.max_steps = 4;
+        agent.cfg.steps_by_progress = false;
+        let events = drive(&mut agent, "write the files").await;
+        assert_eq!(
+            stopped(&events).map(String::as_str),
+            Some("stopped after 4 steps (max_steps)")
+        );
+        assert_eq!(backend.seen.lock().unwrap().len(), 4);
+    }
+
+    /// A turn left to its progress stops before compaction would cut its own steps.
+    #[tokio::test]
+    async fn a_turn_that_outgrows_the_window_stops_before_it_is_cut() {
+        let h = Harness::new(Answer::Yes);
+        let line = "y".repeat(100);
+        let body: String = (0..40).map(|_| format!("{line}\n")).collect();
+        let mut script = Vec::new();
+        for i in 0..12 {
+            h.write(&format!("big{i}.txt"), &body);
+            script.push(tool_step(
+                &format!("b{i}"),
+                "read_file",
+                serde_json::json!({"path": format!("big{i}.txt"), "start_line": 1, "end_line": 40}),
+            ));
+        }
+        let backend = fake_backend(script).await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        // A budget of the system message and about 6000 characters more.
+        let tokens = (agent.session.size_chars() + 6000) * 10 / 36 + 1024;
+        agent.session.set_window(tokens, 1024);
+        agent.cfg.max_steps = 16;
+        agent.cfg.steps_by_progress = true;
+        let events = drive(&mut agent, "read them all").await;
+        let why = stopped(&events).expect("the turn was not stopped");
+        assert!(why.contains("no longer fits the context window"), "{why}");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Notice(s) if s.starts_with("context full"))),
+            "the turn's steps were cut: {events:?}"
         );
     }
 

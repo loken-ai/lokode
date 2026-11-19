@@ -38,7 +38,8 @@ pub struct Status {
     /// That puts the key that opens it on the line of keys.
     pub rail_offered: bool,
     pub step: usize,
-    pub max_steps: usize,
+    /// The stated step limit, or `None` for a turn that ends by its progress.
+    pub max_steps: Option<usize>,
     pub busy: bool,
     /// Whether there is something in the input, which changes what leaving means.
     pub typing: bool,
@@ -162,7 +163,10 @@ impl Status {
         }
         if self.busy {
             spans.push(Span::styled(
-                format!("  step {}/{}", self.step, self.max_steps),
+                match self.max_steps {
+                    Some(max) => format!("  step {}/{max}", self.step),
+                    None => format!("  step {}", self.step),
+                },
                 theme().dim,
             ));
         }
@@ -394,7 +398,7 @@ mod tests {
             hand_running: false,
             pointed_stoppable: false,
             step: 2,
-            max_steps: 16,
+            max_steps: Some(16),
             busy,
             phase: phase.map(str::to_string),
             in_phase,

@@ -26,6 +26,11 @@ pub struct AppConfig {
     pub headers: Vec<(String, String)>,
     pub grammar_enabled: bool,
     pub max_steps: usize,
+    /// Whether the step limit was stated.
+    /// A stated limit stops a turn at its value.
+    /// Otherwise a turn ends by its progress, and the limit is the number of steps it is
+    /// expected to take.
+    pub max_steps_was_set: bool,
     pub context_tokens: usize,
     pub max_answer_tokens: usize,
     /// Hosts `web_fetch` may reach even though they resolve to a private address.

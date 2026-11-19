@@ -300,7 +300,7 @@ pub async fn run(
                 }
                 // A step limit or a backend error reaches the caller as a notice.
                 // Neither is a run that did what was asked.
-                if s.contains("max_steps") || s.contains("backend error") {
+                if s.starts_with("stopped after") || s.contains("backend error") {
                     report.ok = false;
                 }
                 report.notices.push(s);

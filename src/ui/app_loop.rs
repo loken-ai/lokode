@@ -602,8 +602,15 @@ async fn run_ui(
             state.shown_progress = Some(progress);
         }
         term::begin_frame();
-        let drawn =
-            term.draw(|f| crate::ui::view::draw(f, &mut state, &input, &cfg.root, cfg.max_steps));
+        let drawn = term.draw(|f| {
+            crate::ui::view::draw(
+                f,
+                &mut state,
+                &input,
+                &cfg.root,
+                cfg.max_steps_was_set.then_some(cfg.max_steps),
+            )
+        });
         term::end_frame();
         drawn?;
 

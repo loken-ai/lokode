@@ -4,6 +4,10 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+### Changed
+
+- Interface: end a turn by its progress when no step limit is set.
+
 ### Fixed
 
 - Backend: send the guess of the next read after the step's first token.

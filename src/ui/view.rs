@@ -19,7 +19,7 @@ pub(crate) fn draw(
     state: &mut UiState,
     input: &TextArea,
     root: &Path,
-    max_steps: usize,
+    max_steps: Option<usize>,
 ) {
     // No borders anywhere.
     // They cost 4 columns and 2 lines, and they land in every selection made with the mouse.
@@ -568,7 +568,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("a test terminal");
         let input = TextArea::default();
         terminal
-            .draw(|f| draw(f, state, &input, Path::new("/p/demo"), 16))
+            .draw(|f| draw(f, state, &input, Path::new("/p/demo"), Some(16)))
             .expect("a frame");
         let buffer = terminal.backend().buffer();
         (0..height)
@@ -1127,7 +1127,7 @@ mod tests {
                 Terminal::new(TestBackend::new(scene.width, scene.height)).expect("a terminal");
             let input = crate::ui::input::fresh_input(scene.typed);
             terminal
-                .draw(|f| draw(f, &mut scene.state, &input, Path::new("/p/demo"), 16))
+                .draw(|f| draw(f, &mut scene.state, &input, Path::new("/p/demo"), Some(16)))
                 .expect("a frame");
             let buffer = terminal.backend().buffer();
             let mut rows = Vec::new();

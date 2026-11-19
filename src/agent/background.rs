@@ -232,6 +232,7 @@ impl Discovery {
                 allow_fallback: false,
                 shared_protocol: None,
                 delegated: false,
+                steps_by_progress: false,
             },
             ctx: self.ctx.clone(),
             checkpoints: None,
