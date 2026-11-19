@@ -6,6 +6,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Fixed
 
+- Tools: run a tool call the model left in its reasoning.
 - Backend: report an error the server sends inside the stream.
 
 ## [0.5.0] - 2026-11-15

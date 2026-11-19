@@ -8,7 +8,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::protocol::{
-    CallAccumulator, ModelTurn, ResolvedCall, ToolProtocol, TurnEnvelope,
+    calls_in_reasoning, looks_like_a_call, CallAccumulator, ModelTurn, ResolvedCall, ToolProtocol,
+    TurnEnvelope,
 };
 use crate::agent::session::Session;
 use crate::backend::client::{ChunkStream, StreamEvent, UNSUPPORTED_NATIVE_TOOLS};
@@ -619,12 +620,29 @@ fn names_word(text: &str, word: &str) -> bool {
     })
 }
 
+/// The reasoning of an answer that said nothing and called nothing, unless it was cut off.
+/// A server that put the whole answer in the reasoning left the model's calls there.
+fn stranded_reasoning(c: &Completion) -> Option<&str> {
+    (c.text.trim().is_empty()
+        && c.calls.is_empty()
+        && c.finish_reason.as_deref() != Some("length")
+        && !c.reasoning.trim().is_empty())
+    .then_some(c.reasoning.as_str())
+}
+
+/// What the model is told when its reasoning holds a call that could not be read.
+const RESTATE_CALL: &str = "Your answer was empty. The tool call you wrote is in your \
+                            reasoning, where it is not read as a call. Make the call again \
+                            as a tool call.";
+
 /// One model response, with whatever the server said about how it ended.
 #[derive(Default)]
 struct Completion {
     text: String,
     /// Native tool-call fragments, still to be reassembled.
     calls: CallAccumulator,
+    /// The model's scratchpad, kept to recover a call written there instead of in the answer.
+    reasoning: String,
     /// `"length"` means the answer was cut off rather than finished.
     finish_reason: Option<String>,
     usage: Option<Usage>,
@@ -701,6 +719,8 @@ pub struct TurnTally {
     pub proofs_refused: u8,
     /// What the turn-end hooks said at the answer, once they let it end.
     pub turn_end: Option<Vec<crate::agent::hooks::Ran>>,
+    /// Whether the model was asked to make again a call it left in its reasoning.
+    pub restated: bool,
 }
 
 impl TurnTally {
@@ -2108,6 +2128,20 @@ impl Agent {
             self.record_assistant_turn(&turn)?;
 
             if turn.calls.is_empty() {
+                // A call left in the reasoning that could not be read is asked for again, once.
+                if turn.stranded && !self.this_turn.restated {
+                    self.this_turn.restated = true;
+                    let _ = events
+                        .send(AgentEvent::Notice(
+                            "the model wrote a tool call in its reasoning that could not be \
+                             read; asking it to make the call"
+                                .into(),
+                        ))
+                        .await;
+                    self.session.push(Message::user(RESTATE_CALL));
+                    self.close_step(record);
+                    continue;
+                }
                 // A question about the project, answered without opening the project.
                 //
                 // The loop ends a turn the moment the model stops calling tools, which takes the
@@ -2991,6 +3025,7 @@ impl Agent {
         cancel: &CancellationToken,
         events: &mpsc::Sender<AgentEvent>,
     ) -> Result<ModelTurn> {
+        let stranded = stranded_reasoning(&completion).map(str::to_string);
         match self.cfg.protocol {
             ToolProtocol::Native => {
                 let mut calls = Vec::new();
@@ -3009,15 +3044,48 @@ impl Agent {
                         arguments,
                     });
                 }
+                if let Some(reasoning) = stranded.as_deref() {
+                    calls = self.calls_from_reasoning(reasoning, events).await;
+                }
                 Ok(ModelTurn {
+                    stranded: calls.is_empty()
+                        && stranded.as_deref().is_some_and(looks_like_a_call),
                     text: completion.text,
                     calls,
                 })
             }
             ToolProtocol::Envelope => {
-                let envelope = self
-                    .parse_with_repair(&completion.text, schema, validator, cancel, events)
-                    .await?;
+                // An envelope written in the reasoning is read as the answer when it is valid
+                // as it stands.
+                // It is never sent to repair: the reasoning holds prose a repair would turn into
+                // an answer.
+                let in_reasoning = stranded
+                    .as_deref()
+                    .and_then(|r| repair::tolerant_parse(r).ok())
+                    .filter(|v| validator.is_valid(v))
+                    .and_then(|v| serde_json::from_value::<TurnEnvelope>(v).ok())
+                    .filter(|e| !e.tool_calls.is_empty());
+                let envelope = match in_reasoning {
+                    Some(envelope) => {
+                        self.say_calls_were_in_reasoning(events).await;
+                        envelope
+                    }
+                    None => {
+                        let calls = match stranded.as_deref() {
+                            Some(reasoning) => self.calls_from_reasoning(reasoning, events).await,
+                            None => Vec::new(),
+                        };
+                        if !calls.is_empty() {
+                            return Ok(ModelTurn {
+                                text: String::new(),
+                                calls,
+                                stranded: false,
+                            });
+                        }
+                        self.parse_with_repair(&completion.text, schema, validator, cancel, events)
+                            .await?
+                    }
+                };
                 Ok(ModelTurn {
                     text: envelope.assistant_text,
                     calls: envelope
@@ -3029,9 +3097,42 @@ impl Agent {
                             arguments: tc.arguments,
                         })
                         .collect(),
+                    stranded: false,
                 })
             }
         }
+    }
+
+    /// The calls written in `reasoning`, each with an id of its own.
+    /// The person is told when there are any.
+    async fn calls_from_reasoning(
+        &self,
+        reasoning: &str,
+        events: &mpsc::Sender<AgentEvent>,
+    ) -> Vec<ResolvedCall> {
+        let calls: Vec<ResolvedCall> = calls_in_reasoning(reasoning, |name| {
+            self.registry.get(name).map(|t| t.args_schema())
+        })
+        .into_iter()
+        .map(|(name, arguments)| ResolvedCall {
+            id: uuid::Uuid::new_v4().to_string(),
+            name,
+            arguments,
+        })
+        .collect();
+        if !calls.is_empty() {
+            self.say_calls_were_in_reasoning(events).await;
+        }
+        calls
+    }
+
+    async fn say_calls_were_in_reasoning(&self, events: &mpsc::Sender<AgentEvent>) {
+        tracing::warn!("the answer was empty and its reasoning held the tool calls");
+        let _ = events
+            .send(AgentEvent::Notice(
+                "the model wrote its tool calls in its reasoning; they are run as calls".into(),
+            ))
+            .await;
     }
 
     /// Put the assistant's turn into the history in the form the protocol expects to see it again.
@@ -3164,6 +3265,7 @@ impl Agent {
                         thinking = true;
                         let _ = events.send(AgentEvent::Phase(Phase::Thinking)).await;
                     }
+                    out.reasoning.push_str(&p);
                     let _ = events.send(AgentEvent::Reasoning(p)).await;
                 }
                 StreamEvent::Call(delta) => out.calls.push(delta),
@@ -3777,6 +3879,88 @@ mod tests {
                 if s.contains("backend error") && s.contains("STREAMING PREFILL: out of memory"))),
             "the error was not reported: {events:?}"
         );
+    }
+
+    /// A call the server put in the reasoning, with an empty answer, is run as a call.
+    #[tokio::test]
+    async fn a_call_left_in_the_reasoning_is_run() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![
+            sse(&[
+                r#"{"choices":[{"delta":{"reasoning_content":"Let me look.\n<tool_call>\n<function=list_dir>\n<parameter=path>\n.\n</parameter>\n</function>\n</tool_call>"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"done"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "list the files").await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ToolCall { name, .. } if name == "list_dir")),
+            "the call was not run: {events:?}"
+        );
+        let sent = backend.seen.lock().unwrap();
+        assert_eq!(
+            sent.len(),
+            2,
+            "the turn ended before the call's result was sent"
+        );
+        let last = sent[1]["messages"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["role"], "tool", "{last}");
+    }
+
+    /// The envelope protocol's object written in the reasoning is read as the answer.
+    #[tokio::test]
+    async fn an_envelope_left_in_the_reasoning_is_read() {
+        let h = Harness::new(Answer::Yes);
+        let envelope = serde_json::json!({
+            "assistant_text": "looking",
+            "tool_calls": [{"name": "list_dir", "arguments": {"path": "."}}],
+        })
+        .to_string();
+        let chunk = serde_json::json!({"choices": [{"delta": {"reasoning_content": envelope}}]})
+            .to_string();
+        let backend = fake_backend(vec![
+            sse(&[
+                &chunk,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+            sse(&[
+                r#"{"choices":[{"delta":{"content":"{\"assistant_text\":\"done\",\"tool_calls\":[]}"}}]}"#,
+                r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            ]),
+        ])
+        .await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Envelope);
+        let events = drive(&mut agent, "list the files").await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ToolCall { name, .. } if name == "list_dir")),
+            "the call was not run: {events:?}"
+        );
+    }
+
+    /// A call in the reasoning that cannot be read is asked for again, once.
+    #[tokio::test]
+    async fn an_unreadable_call_in_the_reasoning_is_asked_for_again() {
+        let h = Harness::new(Answer::Yes);
+        let stranded = sse(&[
+            r#"{"choices":[{"delta":{"reasoning_content":"<tool_call>\n<function=list_files>\n</function>\n</tool_call>"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ]);
+        let backend = fake_backend(vec![stranded.clone(), stranded]).await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "list the files").await;
+        let sent = backend.seen.lock().unwrap();
+        assert_eq!(sent.len(), 2, "asked again not once: {events:?}");
+        let last = sent[1]["messages"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["content"], RESTATE_CALL);
     }
 
     /// Planning is long and ends in acting, so the model acting will use is asked for while the

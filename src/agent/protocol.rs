@@ -81,6 +81,8 @@ impl Default for SharedProtocol {
 pub struct ModelTurn {
     pub text: String,
     pub calls: Vec<ResolvedCall>,
+    /// The answer was empty and its reasoning holds what looks like a call that could not be read.
+    pub stranded: bool,
 }
 
 /// One call, with its arguments parsed and its identity settled.
@@ -166,10 +168,192 @@ impl CallAccumulator {
     }
 }
 
+/// The tool calls written as text inside a model's reasoning, in the order written.
+///
+/// 2 syntaxes are read:
+/// - `<function=NAME>` with `<parameter=KEY>VALUE</parameter>` children;
+/// - a JSON object with `name` and `arguments` between `<tool_call>` and `</tool_call>`.
+///
+/// `schema_of` gives the argument schema of a tool, and `None` for a tool that does not exist.
+/// A call to a tool that does not exist is left out.
+/// A parameter whose schema type is not `string` is read as JSON when it parses.
+pub fn calls_in_reasoning(
+    text: &str,
+    schema_of: impl Fn(&str) -> Option<Value>,
+) -> Vec<(String, Value)> {
+    let mut calls = Vec::new();
+    let mut rest = text;
+    while let Some(start) = next_call(rest) {
+        rest = &rest[start..];
+        let (call, used) = if rest.starts_with(FUNCTION_OPEN) {
+            function_call(rest, &schema_of)
+        } else {
+            json_call(rest)
+        };
+        if let Some((name, arguments)) = call {
+            if schema_of(&name).is_some() {
+                calls.push((name, arguments));
+            }
+        }
+        rest = &rest[used.max(1)..];
+    }
+    calls
+}
+
+/// Whether `text` holds the opening of a tool call in one of the syntaxes a model writes.
+pub fn looks_like_a_call(text: &str) -> bool {
+    text.contains(FUNCTION_OPEN) || text.contains(TOOL_CALL_OPEN) || text.contains("\"tool_calls\"")
+}
+
+const FUNCTION_OPEN: &str = "<function=";
+const TOOL_CALL_OPEN: &str = "<tool_call>";
+
+/// Where the next call opens: a `<function=` tag, or a `<tool_call>` tag followed by JSON.
+fn next_call(text: &str) -> Option<usize> {
+    let function = text.find(FUNCTION_OPEN);
+    let json = text.match_indices(TOOL_CALL_OPEN).find_map(|(i, tag)| {
+        text[i + tag.len()..]
+            .trim_start()
+            .starts_with('{')
+            .then_some(i)
+    });
+    match (function, json) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// One `<function=NAME>` call at the start of `text`, and the bytes it spans.
+/// A missing closing tag ends the call at the end of the text.
+fn function_call(
+    text: &str,
+    schema_of: &impl Fn(&str) -> Option<Value>,
+) -> (Option<(String, Value)>, usize) {
+    let Some(name_end) = text.find('>') else {
+        return (None, text.len());
+    };
+    let name = text[FUNCTION_OPEN.len()..name_end].trim().to_string();
+    let body_end = text[name_end..]
+        .find("</function>")
+        .map_or(text.len(), |i| name_end + i);
+    let body = &text[name_end + 1..body_end];
+    let used = (body_end + "</function>".len()).min(text.len());
+    let schema = schema_of(&name).unwrap_or(Value::Null);
+    let mut arguments = serde_json::Map::new();
+    let mut params = body;
+    while let Some(open) = params.find("<parameter=") {
+        params = &params[open + "<parameter=".len()..];
+        let Some(key_end) = params.find('>') else {
+            break;
+        };
+        let key = params[..key_end].trim().to_string();
+        params = &params[key_end + 1..];
+        let value_end = params
+            .find("</parameter>")
+            .or_else(|| params.find("<parameter="))
+            .unwrap_or(params.len());
+        let raw = params[..value_end]
+            .strip_prefix('\n')
+            .unwrap_or(&params[..value_end]);
+        let raw = raw.strip_suffix('\n').unwrap_or(raw);
+        let typed = schema["properties"][&key]["type"].as_str() != Some("string");
+        let value = typed
+            .then(|| serde_json::from_str::<Value>(raw.trim()).ok())
+            .flatten()
+            .unwrap_or_else(|| Value::String(raw.to_string()));
+        arguments.insert(key, value);
+        params = &params[value_end..];
+    }
+    (Some((name, Value::Object(arguments))), used)
+}
+
+/// One `<tool_call>{"name": ..., "arguments": ...}</tool_call>` at the start of `text`, and the
+/// bytes it spans.
+/// Arguments sent as a string of JSON are parsed.
+fn json_call(text: &str) -> (Option<(String, Value)>, usize) {
+    let body_start = TOOL_CALL_OPEN.len();
+    let body_end = text[body_start..]
+        .find("</tool_call>")
+        .map_or(text.len(), |i| body_start + i);
+    let used = (body_end + "</tool_call>".len()).min(text.len());
+    let Ok(v) = serde_json::from_str::<Value>(text[body_start..body_end].trim()) else {
+        return (None, used);
+    };
+    let Some(name) = v["name"].as_str() else {
+        return (None, used);
+    };
+    let arguments = match &v["arguments"] {
+        Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
+        Value::Null => Value::Object(Default::default()),
+        other => other.clone(),
+    };
+    (Some((name.to_string(), arguments)), used)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backend::wire::{FunctionDelta, ToolCallDelta};
+
+    fn schema_of(name: &str) -> Option<Value> {
+        match name {
+            "glob" => Some(serde_json::json!({"properties": {"pattern": {"type": "string"}}})),
+            "read_file" => Some(serde_json::json!({"properties": {
+                "path": {"type": "string"}, "start_line": {"type": "integer"}}})),
+            _ => None,
+        }
+    }
+
+    /// A call written in the `<function=` syntax inside reasoning is read with its arguments.
+    /// A parameter typed as a number in the schema is read as one.
+    #[test]
+    fn a_function_call_in_reasoning_is_read() {
+        let text = "Let me look first.\n\n<tool_call>\n<function=glob>\n<parameter=pattern>\n\
+                    runs/**/*.json\n</parameter>\n</function>\n</tool_call>\n\
+                    <tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n\
+                    <parameter=start_line>\n12\n</parameter>\n</function>\n</tool_call>";
+        let calls = calls_in_reasoning(text, schema_of);
+        assert_eq!(
+            calls,
+            vec![
+                (
+                    "glob".to_string(),
+                    serde_json::json!({"pattern": "runs/**/*.json"})
+                ),
+                (
+                    "read_file".to_string(),
+                    serde_json::json!({"path": "a.rs", "start_line": 12})
+                ),
+            ]
+        );
+    }
+
+    /// A JSON call between `<tool_call>` tags is read, its arguments given as an object or as a
+    /// string of JSON.
+    #[test]
+    fn a_json_call_in_reasoning_is_read() {
+        let text = r#"<tool_call>{"name": "glob", "arguments": {"pattern": "*.rs"}}</tool_call>
+            <tool_call>{"name": "read_file", "arguments": "{\"path\": \"b.rs\"}"}</tool_call>"#;
+        let calls = calls_in_reasoning(text, schema_of);
+        assert_eq!(
+            calls,
+            vec![
+                ("glob".to_string(), serde_json::json!({"pattern": "*.rs"})),
+                ("read_file".to_string(), serde_json::json!({"path": "b.rs"})),
+            ]
+        );
+    }
+
+    /// Prose that names a tag, and a call to a tool that does not exist, give no call.
+    #[test]
+    fn prose_and_unknown_tools_give_no_call() {
+        assert!(calls_in_reasoning("I could use <tool_call> later.", schema_of).is_empty());
+        assert!(calls_in_reasoning(
+            "<function=delete_all>\n<parameter=path>\n/\n</parameter>\n</function>",
+            schema_of
+        )
+        .is_empty());
+    }
 
     fn frag(
         index: usize,
