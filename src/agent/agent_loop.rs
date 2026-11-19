@@ -3761,6 +3761,24 @@ mod tests {
         );
     }
 
+    /// An error the server sends inside the stream ends the turn as a backend error.
+    /// The notice carries the server's own message.
+    #[tokio::test]
+    async fn an_error_inside_the_stream_is_a_backend_error() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![sse(&[
+            r#"{"error":{"message":"STREAMING PREFILL: out of memory","type":"server_error"}}"#,
+        ])])
+        .await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "hello").await;
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::Notice(s)
+                if s.contains("backend error") && s.contains("STREAMING PREFILL: out of memory"))),
+            "the error was not reported: {events:?}"
+        );
+    }
+
     /// Planning is long and ends in acting, so the model acting will use is asked for while the
     /// plan is being written.
     /// The request goes out and the turn does not wait on it: warming that delayed anything would

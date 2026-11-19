@@ -4,6 +4,10 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Backend: report an error the server sends inside the stream.
+
 ## [0.5.0] - 2026-11-15
 
 ### Added

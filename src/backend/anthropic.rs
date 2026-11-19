@@ -181,6 +181,9 @@ struct Event {
     usage: Option<AnthropicUsage>,
     #[serde(default)]
     message: Option<MessageStart>,
+    /// Present on an `error` event, which a server sends when it fails during the answer.
+    #[serde(default)]
+    error: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -369,6 +372,9 @@ impl Provider for AnthropicProvider {
                     vec![Ok(crate::backend::client::prefill_of(&event.data))]
                 }
                 Ok(event) => match serde_json::from_str::<Event>(&event.data) {
+                    Ok(Event {
+                        error: Some(error), ..
+                    }) => vec![Err(crate::backend::client::stream_failure(&error))],
                     Ok(parsed) => {
                         let events = events_of(parsed);
                         for e in &events {
@@ -439,6 +445,19 @@ mod tests {
             reason: true,
             purpose: crate::backend::meter::Purpose::Step,
         }
+    }
+
+    /// An `error` event carries the server's message to the stream's error.
+    #[test]
+    fn an_error_event_keeps_the_server_message() {
+        let e: Event = serde_json::from_str(
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        )
+        .expect("an event");
+        let error = e.error.expect("an error");
+        assert!(crate::backend::client::stream_failure(&error)
+            .to_string()
+            .ends_with(": Overloaded"));
     }
 
     /// The system message is history[0], and compaction rests on that invariant.

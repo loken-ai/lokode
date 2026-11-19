@@ -206,6 +206,9 @@ impl BackendClient {
 
         let body: serde_json::Value =
             serde_json::from_str(&text).with_context(|| "decoding chat completion response")?;
+        if let Some(error) = body.get("error").filter(|e| !e.is_null()) {
+            return Err(stream_failure(error));
+        }
         if let Ok(usage) = serde_json::from_value::<Usage>(body["usage"].clone()) {
             ledger().record(purpose, &usage);
         }
@@ -320,6 +323,9 @@ impl BackendClient {
                     Vec::new()
                 }
                 Ok(event) => match serde_json::from_str::<ChatChunk>(&event.data) {
+                    Ok(ChatChunk {
+                        error: Some(error), ..
+                    }) => vec![Err(stream_failure(&error))],
                     Ok(c) => {
                         let events = events_of(c, &mut think);
                         for e in &events {
@@ -414,6 +420,21 @@ pub(crate) fn prefill_of(data: &str) -> StreamEvent {
         },
         Err(_) => StreamEvent::Alive,
     }
+}
+
+/// The error a server sent inside the stream, with its own message.
+/// The message is read from an object's `message`, or taken as the string sent.
+/// Any other shape is quoted whole.
+pub(crate) fn stream_failure(error: &serde_json::Value) -> anyhow::Error {
+    let message = match error {
+        serde_json::Value::String(s) => s.clone(),
+        other => other
+            .get("message")
+            .and_then(|m| m.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| other.to_string()),
+    };
+    anyhow!("the server failed during the answer: {message}")
 }
 
 /// Everything one chunk has to say.
@@ -803,6 +824,29 @@ mod tests {
         assert_eq!(loken.decode_ms, Some(2210.0));
         assert_eq!(loken.energy.and_then(|e| e.cpu_joules), Some(15.2));
         assert_eq!(loken.kv.map(|k| k.used_tokens), Some(1830));
+    }
+
+    /// An error sent inside the stream keeps the server's message, whatever its shape.
+    #[test]
+    fn an_error_chunk_keeps_the_server_message() {
+        let chunk: ChatChunk = serde_json::from_str(
+            r#"{"error":{"message":"STREAMING PREFILL: out of memory","type":"server_error"}}"#,
+        )
+        .expect("a chunk");
+        let error = chunk.error.expect("an error");
+        assert!(stream_failure(&error)
+            .to_string()
+            .ends_with(": STREAMING PREFILL: out of memory"));
+        let bare = serde_json::json!("model unloaded");
+        assert!(stream_failure(&bare)
+            .to_string()
+            .ends_with(": model unloaded"));
+        let odd = serde_json::json!({"code": 500});
+        assert!(stream_failure(&odd).to_string().contains(r#"{"code":500}"#));
+        // An ordinary chunk carries none.
+        let plain: ChatChunk =
+            serde_json::from_str(r#"{"choices":[],"error":null}"#).expect("a chunk");
+        assert!(plain.error.is_none());
     }
 
     /// The comment that says how far a prompt has been read becomes an event of its own.

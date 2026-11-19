@@ -180,6 +180,10 @@ pub struct ChatChunk {
     /// Present on the final chunk when the server was asked for it.
     #[serde(default)]
     pub usage: Option<Usage>,
+    /// What a server that failed during the answer sends in place of a chunk.
+    /// An object with a `message`, or a bare string.
+    #[serde(default)]
+    pub error: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
