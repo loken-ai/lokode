@@ -147,6 +147,11 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             cfg.context_tokens,
             cfg.max_answer_tokens,
         ),
+        // Set from the session's budget at the start of each step.
+        whole_read_chars: crate::agent::session::tool_output_chars(
+            cfg.context_tokens,
+            cfg.max_answer_tokens,
+        ),
         // Replaced with the turn's own token at the start of each turn.
         // This stands in for the window before the first one arrives.
         cancel: shutdown.child_token(),

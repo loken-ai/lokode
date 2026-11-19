@@ -108,6 +108,16 @@ pub fn tool_output_chars(context_tokens: usize, reserve_tokens: usize) -> usize 
     context_tokens.saturating_sub(reserve_tokens) * CHARS_PER_TOKEN / 4
 }
 
+/// What a read of a whole file may return: the history's budget shared among the steps of
+/// a turn.
+///
+/// The budget is in characters at the measured ratio, so it follows the window and the
+/// tokenizer.
+/// A turn that reads one whole file a step reaches its step limit before it fills the window.
+pub fn whole_read_chars(budget_chars: usize, max_steps: usize) -> usize {
+    budget_chars / max_steps.max(1)
+}
+
 /// What a reply's token count said about the request that produced it.
 ///
 /// The count is the only thing a backend says about how it read the prompt.

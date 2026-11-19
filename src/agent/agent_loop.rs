@@ -1921,6 +1921,11 @@ impl Agent {
                 after: Default::default(),
             };
             self.adopt_served_window(&events).await;
+            self.ctx.whole_read_chars = crate::agent::session::whole_read_chars(
+                self.session.budget_chars(),
+                self.cfg.max_steps,
+            )
+            .min(self.ctx.max_output_chars);
             // Sent every step rather than at the end of the turn: a window filling up is something
             // to see while there is still time to compact, not afterwards.
             let _ = events

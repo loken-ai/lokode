@@ -31,7 +31,8 @@ impl Tool for ReadFile {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Read a text file. Optional 1-indexed inclusive start_line/end_line."
+        "Read a text file. Optional 1-indexed inclusive start_line/end_line. Without them, a \
+         long file comes back as its first and last lines with its line count."
     }
 
     fn args_schema(&self) -> Value {
@@ -75,6 +76,13 @@ impl Tool for ReadFile {
             }
         }
 
+        // A read without a range shows the file's ends when the whole would not fit the step's
+        // share of the window.
+        let body = if a.start_line.is_none() && a.end_line.is_none() {
+            text::ends_of(body, ctx.whole_read_chars)
+        } else {
+            body
+        };
         Ok(ToolOutput::ok(ctx.clamp(body)))
     }
 }
@@ -218,6 +226,47 @@ mod tests {
         assert!(out.is_error, "{out:?}");
         assert!(out.content.contains("src/brew.rs"), "{}", out.content);
         assert!(out.content.contains("there is one at"), "{}", out.content);
+    }
+
+    /// A read without a range of a file longer than the step's share shows the file's ends.
+    /// A read with a range returns the range whole.
+    #[tokio::test]
+    async fn a_whole_read_of_a_long_file_shows_its_ends() {
+        let mut h = Harness::new(Answer::Yes);
+        let text: String = (1..=500)
+            .map(|n| format!("\"field_{n}\": {n},\n"))
+            .collect();
+        h.write("record.json", &text);
+        h.ctx.whole_read_chars = 2000;
+        let whole = ReadFile
+            .run(&h.ctx, serde_json::json!({"path": "record.json"}))
+            .await
+            .unwrap();
+        assert!(!whole.is_error, "{whole:?}");
+        assert!(whole.content.len() <= 2200, "{}", whole.content.len());
+        assert!(
+            whole.content.contains("of 500 left out"),
+            "{}",
+            whole.content
+        );
+        assert!(
+            whole.content.contains("\"field_1\": 1,"),
+            "{}",
+            whole.content
+        );
+        assert!(
+            whole.content.contains("\"field_500\": 500,"),
+            "{}",
+            whole.content
+        );
+        let range = ReadFile
+            .run(
+                &h.ctx,
+                serde_json::json!({"path": "record.json", "start_line": 200, "end_line": 300}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(range.content.lines().count(), 101, "{}", range.content);
     }
 
     /// A name nothing in the project has gets the refusal alone.

@@ -141,6 +141,40 @@ pub fn number_window(text: &str, start: Option<usize>, end: Option<usize>) -> St
     number_from(&window.join("\n"), first)
 }
 
+/// A numbered file cut to its first and last lines when it is longer than `limit`
+/// characters.
+///
+/// Each end takes half of the limit, in whole lines.
+/// The note between them gives the lines left out, the line count and how to read the rest.
+/// A file that fits is returned as it is.
+pub fn ends_of(numbered: String, limit: usize) -> String {
+    if numbered.len() <= limit {
+        return numbered;
+    }
+    let lines: Vec<&str> = numbered.lines().collect();
+    let total = lines.len();
+    let half = limit / 2;
+    let fit = |iter: &mut dyn Iterator<Item = &&str>| {
+        let mut used = 0;
+        iter.take_while(|l| {
+            used += l.len() + 1;
+            used <= half
+        })
+        .count()
+    };
+    let head = fit(&mut lines.iter());
+    let tail = fit(&mut lines.iter().rev()).min(total - head);
+    let mut out = lines[..head].join("\n");
+    out.push_str(&format!(
+        "\nLines {} to {} of {total} left out to fit the context window: \
+         read them with start_line and end_line.\n",
+        head + 1,
+        total - tail
+    ));
+    out.push_str(&lines[total - tail..].join("\n"));
+    out
+}
+
 fn number_from(text: &str, first: usize) -> String {
     text.lines()
         .enumerate()
@@ -153,6 +187,22 @@ fn number_from(text: &str, first: usize) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// A numbered file longer than the limit keeps its first and last lines and says which
+    /// lines are left out and how to read them.
+    #[test]
+    fn a_long_file_shows_its_ends() {
+        let text: String = (1..=100).map(|n| format!("line {n}\n")).collect();
+        let numbered = number_window(&text, None, None);
+        let view = ends_of(numbered.clone(), 400);
+        assert!(view.len() < numbered.len(), "{view}");
+        assert!(view.starts_with("    1 | line 1\n"), "{view}");
+        assert!(view.ends_with("  100 | line 100"), "{view}");
+        assert!(view.contains("of 100 left out"), "{view}");
+        assert!(view.contains("start_line and end_line"), "{view}");
+        // A file that fits is left whole.
+        assert_eq!(ends_of(numbered.clone(), numbered.len()), numbered);
+    }
 
     #[test]
     fn a_window_of_text_is_numbered_from_its_first_line() {
