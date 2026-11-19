@@ -78,7 +78,7 @@ impl Harness {
             approval: tx,
             session_approvals: Arc::new(SessionApprovals::new()),
             max_output_chars: 64 * 1024,
-            whole_read_chars: 64 * 1024,
+            step_share_chars: 64 * 1024,
             cancel: CancellationToken::new(),
             http: crate::tools::registry::tool_http_client().expect("http client"),
             allow_hosts: Arc::new(Default::default()),

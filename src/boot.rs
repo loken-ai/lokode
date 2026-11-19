@@ -148,7 +148,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
             cfg.max_answer_tokens,
         ),
         // Set from the session's budget at the start of each step.
-        whole_read_chars: crate::agent::session::tool_output_chars(
+        step_share_chars: crate::agent::session::tool_output_chars(
             cfg.context_tokens,
             cfg.max_answer_tokens,
         ),

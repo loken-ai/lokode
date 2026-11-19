@@ -119,10 +119,11 @@ impl Tool for RunTests {
             Err(e) => return Ok(ToolOutput::err(format!("could not wait for it: {e}"))),
         };
 
+        let (out, err) = crate::tools::bash::ends_of_streams(ctx, out, err);
         let mut report = format!("[{label}] exit: {code}\n");
-        report.push_str(&ctx.clamp(out));
+        report.push_str(&out);
         report.push('\n');
-        report.push_str(&ctx.clamp(err));
+        report.push_str(&err);
         if let Some(sandbox) = ctx.sandbox.as_ref().filter(|_| code != 0) {
             report.push_str(&format!("\n{}", sandbox.note()));
             for line in held.turned_away() {

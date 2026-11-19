@@ -79,7 +79,11 @@ impl Tool for ReadFile {
         // A read without a range shows the file's ends when the whole would not fit the step's
         // share of the window.
         let body = if a.start_line.is_none() && a.end_line.is_none() {
-            text::ends_of(body, ctx.whole_read_chars)
+            text::ends_of(
+                body,
+                ctx.step_share_chars,
+                "read them with start_line and end_line.",
+            )
         } else {
             body
         };
@@ -237,7 +241,7 @@ mod tests {
             .map(|n| format!("\"field_{n}\": {n},\n"))
             .collect();
         h.write("record.json", &text);
-        h.ctx.whole_read_chars = 2000;
+        h.ctx.step_share_chars = 2000;
         let whole = ReadFile
             .run(&h.ctx, serde_json::json!({"path": "record.json"}))
             .await

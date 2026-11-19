@@ -1966,7 +1966,7 @@ impl Agent {
                 after: Default::default(),
             };
             self.adopt_served_window(&events).await;
-            self.ctx.whole_read_chars = crate::agent::session::whole_read_chars(
+            self.ctx.step_share_chars = crate::agent::session::step_share_chars(
                 self.session.budget_chars(),
                 self.cfg.max_steps,
             )

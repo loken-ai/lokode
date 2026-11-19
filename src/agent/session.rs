@@ -108,15 +108,15 @@ pub fn tool_output_chars(context_tokens: usize, reserve_tokens: usize) -> usize 
     context_tokens.saturating_sub(reserve_tokens) * CHARS_PER_TOKEN / 4
 }
 
-/// What a read of a whole file may return: the history's budget shared among the steps a
-/// turn is expected to take.
+/// What a whole file or a command's output may give one step: the history's budget shared
+/// among the steps a turn is expected to take.
 ///
 /// The budget is in characters at the measured ratio, so it follows the window and the
 /// tokenizer.
 /// The expected steps are the stated step limit, or its default when the turn ends by its
 /// progress.
 /// A turn that reads one whole file a step takes that many steps before it fills the window.
-pub fn whole_read_chars(budget_chars: usize, expected_steps: usize) -> usize {
+pub fn step_share_chars(budget_chars: usize, expected_steps: usize) -> usize {
     budget_chars / expected_steps.max(1)
 }
 

@@ -141,17 +141,18 @@ pub fn number_window(text: &str, start: Option<usize>, end: Option<usize>) -> St
     number_from(&window.join("\n"), first)
 }
 
-/// A numbered file cut to its first and last lines when it is longer than `limit`
-/// characters.
+/// `text` cut to its first and last lines when it is longer than `limit` characters.
 ///
 /// Each end takes half of the limit, in whole lines.
-/// The note between them gives the lines left out, the line count and how to read the rest.
-/// A file that fits is returned as it is.
-pub fn ends_of(numbered: String, limit: usize) -> String {
-    if numbered.len() <= limit {
-        return numbered;
+/// The note between them gives the lines left out, the line count, and `rest`, which says how
+/// to see them.
+/// Text with no line short enough for an end is cut by characters instead.
+/// Text that fits is returned as it is.
+pub fn ends_of(text: String, limit: usize, rest: &str) -> String {
+    if text.len() <= limit {
+        return text;
     }
-    let lines: Vec<&str> = numbered.lines().collect();
+    let lines: Vec<&str> = text.lines().collect();
     let total = lines.len();
     let half = limit / 2;
     let fit = |iter: &mut dyn Iterator<Item = &&str>| {
@@ -164,10 +165,25 @@ pub fn ends_of(numbered: String, limit: usize) -> String {
     };
     let head = fit(&mut lines.iter());
     let tail = fit(&mut lines.iter().rev()).min(total - head);
+    if head + tail == 0 {
+        let cut = (0..=half)
+            .rev()
+            .find(|&i| text.is_char_boundary(i))
+            .unwrap_or(0);
+        let from = (text.len() - half..=text.len())
+            .find(|&i| text.is_char_boundary(i))
+            .unwrap_or(text.len());
+        return format!(
+            "{}\nCharacters {} to {from} of {} left out to fit the context window: {rest}\n{}",
+            &text[..cut],
+            cut + 1,
+            text.len(),
+            &text[from..]
+        );
+    }
     let mut out = lines[..head].join("\n");
     out.push_str(&format!(
-        "\nLines {} to {} of {total} left out to fit the context window: \
-         read them with start_line and end_line.\n",
+        "\nLines {} to {} of {total} left out to fit the context window: {rest}\n",
         head + 1,
         total - tail
     ));
@@ -194,14 +210,27 @@ mod tests {
     fn a_long_file_shows_its_ends() {
         let text: String = (1..=100).map(|n| format!("line {n}\n")).collect();
         let numbered = number_window(&text, None, None);
-        let view = ends_of(numbered.clone(), 400);
+        let view = ends_of(numbered.clone(), 400, "ask for a range.");
         assert!(view.len() < numbered.len(), "{view}");
         assert!(view.starts_with("    1 | line 1\n"), "{view}");
         assert!(view.ends_with("  100 | line 100"), "{view}");
         assert!(view.contains("of 100 left out"), "{view}");
-        assert!(view.contains("start_line and end_line"), "{view}");
+        assert!(view.contains("ask for a range."), "{view}");
         // A file that fits is left whole.
-        assert_eq!(ends_of(numbered.clone(), numbered.len()), numbered);
+        assert_eq!(ends_of(numbered.clone(), numbered.len(), ""), numbered);
+    }
+
+    /// Text with no line short enough for an end keeps its first and last characters.
+    #[test]
+    fn one_long_line_shows_its_ends_by_characters() {
+        let text = format!("{}{}", "a".repeat(500), "z".repeat(500));
+        let view = ends_of(text, 100, "filter it.");
+        assert!(view.starts_with(&"a".repeat(50)), "{view}");
+        assert!(view.ends_with(&"z".repeat(50)), "{view}");
+        assert!(
+            view.contains("Characters 51 to 950 of 1000 left out"),
+            "{view}"
+        );
     }
 
     #[test]

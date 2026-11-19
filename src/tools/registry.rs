@@ -53,11 +53,12 @@ pub struct ToolCtx {
     ///
     /// Derived from the session's budget, so a result fits the window.
     pub max_output_chars: usize,
-    /// Characters a read of a whole file returns before it shows only the file's ends.
+    /// Characters a whole file or a command's output gives one step before only its ends are
+    /// shown.
     ///
     /// Derived from the session's budget and the steps a turn is expected to take, so a turn
-    /// that reads a file each step still fits the window for that many steps.
-    pub whole_read_chars: usize,
+    /// that reads a file or runs a command each step still fits the window for that many steps.
+    pub step_share_chars: usize,
     /// Cancelled when the user abandons the turn this tool call belongs to.
     ///
     /// A tool that can wait, on a subprocess or on a socket, must race its work against this.

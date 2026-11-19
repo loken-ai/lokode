@@ -180,12 +180,13 @@ impl Tool for Bash {
                 _ => crate::sound::Outcome::Error,
             },
         );
+        let (out, err) = ends_of_streams(ctx, out, err);
         let mut report = String::new();
         report.push_str(&format!("exit: {code}\n"));
         report.push_str("stdout:\n");
-        report.push_str(&ctx.clamp(out));
+        report.push_str(&out);
         report.push_str("\nstderr:\n");
-        report.push_str(&ctx.clamp(err));
+        report.push_str(&err);
         if let Some(sandbox) = sandbox.filter(|_| code != 0) {
             report.push_str(&format!("\n{}", sandbox.note()));
             for line in _held.turned_away() {
@@ -264,6 +265,34 @@ mod tests {
         succeeded(&out);
         assert!(out.content.contains("exit: 3"), "{}", out.content);
         assert!(out.content.contains("hello"), "{}", out.content);
+    }
+
+    /// Output longer than the step's share keeps the status, the first lines and the last
+    /// lines of each stream.
+    #[tokio::test]
+    async fn long_output_keeps_its_status_and_its_ends() {
+        let mut h = Harness::new(Answer::Yes);
+        h.ctx.step_share_chars = 2000;
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": "seq 1 20000; echo 'error: the last word' >&2; exit 2"}),
+            )
+            .await;
+        succeeded(&out);
+        assert!(out.content.len() < 2400, "{}", out.content.len());
+        assert!(
+            out.content.starts_with("exit: 2\nstdout:\n1\n2\n"),
+            "{}",
+            out.content
+        );
+        assert!(out.content.contains("\n20000\n"), "{}", out.content);
+        assert!(out.content.contains("of 20000 left out"), "{}", out.content);
+        assert!(
+            out.content.contains("error: the last word"),
+            "{}",
+            out.content
+        );
     }
 
     #[tokio::test]
@@ -756,6 +785,33 @@ mod tests {
             out.content
         );
     }
+}
+
+/// What a command printed, cut to the step's share of the window.
+///
+/// Each stream that does not fit keeps its first and last lines, where a command says what it
+/// started and how it ended.
+/// The streams share the bound: one shorter than half of it leaves the rest to the other.
+///
+/// Shared with the test runner.
+pub(crate) fn ends_of_streams(ctx: &ToolCtx, out: String, err: String) -> (String, String) {
+    const RERUN: &str = "run the command again through grep, head or tail to see them.";
+    let share = ctx.step_share_chars;
+    let half = share / 2;
+    let (o, e) = (out.len(), err.len());
+    let (o_limit, e_limit) = if o + e <= share {
+        (o, e)
+    } else if e <= half {
+        (share - e, e)
+    } else if o <= half {
+        (o, share - o)
+    } else {
+        (half, share - half)
+    };
+    (
+        crate::tools::text::ends_of(out, o_limit, RERUN),
+        crate::tools::text::ends_of(err, e_limit, RERUN),
+    )
 }
 
 /// Read one of a child's streams to the end, showing each line as it arrives.

@@ -414,7 +414,7 @@ mod tests {
             approval: tx,
             session_approvals: Arc::new(SessionApprovals::new()),
             max_output_chars: 4096,
-            whole_read_chars: 4096,
+            step_share_chars: 4096,
             cancel: tokio_util::sync::CancellationToken::new(),
             http: crate::tools::registry::tool_http_client().unwrap(),
             allow_hosts: Arc::new(allow.iter().map(|s| s.to_string()).collect()),
