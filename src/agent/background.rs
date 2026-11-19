@@ -9,9 +9,8 @@
 //! What it found is written into the digest.
 //! The queue and the digest both outlive the session, so the work is never repeated.
 //!
-//! 3 rules hold it in place.
+//! 2 rules hold it in place.
 //! It runs only while nothing else does.
-//! It asks the server at a priority that yields.
 //! It changes nothing: it reads, and it writes one sentence into a file of sentences.
 
 use std::sync::Arc;

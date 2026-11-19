@@ -362,6 +362,10 @@ type Guessing = (
 
 /// Everything a guess needs, owned, so it can be abandoned without holding the turn.
 struct Guess {
+    /// Cancelled when the step's answer has begun to arrive.
+    /// The guess is sent after it.
+    /// A server that serves one request at a time then reads the step's prompt first.
+    begun: CancellationToken,
     backend: Arc<dyn crate::backend::provider::Provider>,
     registry: Arc<Registry>,
     ctx: crate::tools::registry::ToolCtx,
@@ -385,6 +389,11 @@ impl Guess {
             .collect();
         if names.is_empty() {
             return None;
+        }
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return None,
+            _ = self.begun.cancelled() => {}
         }
         let req = TurnRequest {
             model: self.model.clone(),
@@ -924,7 +933,7 @@ pub struct Agent {
     pub history: crate::agent::history::ModelHistory,
     /// What fixed a complaint here before, so the same one does not cost the same steps twice.
     pub repairs: crate::agent::repairs::Repairs,
-    /// The same backend at a priority that yields, for work nobody is waiting on.
+    /// A second client of the same backend, for work nobody is waiting on.
     pub background: Option<Arc<dyn crate::backend::provider::Provider>>,
     /// The model this session was on before a failed check raised it, and how many clean steps have
     /// passed since.
@@ -1939,8 +1948,14 @@ impl Agent {
             //
             // Abandoned the moment the answer arrives.
             // A guess that has not landed first is never something the turn waits on.
-            let guessing = self.start_guess(&cancel);
-            let mut attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+            //
+            // Sent once the step's first piece of answer has arrived, so the server reads the
+            // step's prompt before the guess's.
+            let begun = CancellationToken::new();
+            let guessing = self.start_guess(&cancel, &begun);
+            let mut attempt = self
+                .stream_one(&turn_schema, &cancel, &events, &begun)
+                .await;
             if let Some((handle, stop)) = guessing {
                 stop.cancel();
                 if let Ok(Some((key, out))) = handle.await {
@@ -1985,7 +2000,9 @@ impl Agent {
                         .await;
                     let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
                     let asked_at = std::time::Instant::now();
-                    attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+                    attempt = self
+                        .stream_one(&turn_schema, &cancel, &events, &begun)
+                        .await;
                     record.after.model_ms += asked_at.elapsed().as_millis() as u64;
                     self.spend.model_ms += asked_at.elapsed().as_millis() as u64;
                 }
@@ -2012,7 +2029,9 @@ impl Agent {
                     .await;
                 let _ = events.send(AgentEvent::Phase(Phase::Waiting)).await;
                 let asked_at = std::time::Instant::now();
-                attempt = self.stream_one(&turn_schema, &cancel, &events).await;
+                attempt = self
+                    .stream_one(&turn_schema, &cancel, &events, &begun)
+                    .await;
                 record.after.model_ms += asked_at.elapsed().as_millis() as u64;
                 self.spend.model_ms += asked_at.elapsed().as_millis() as u64;
             }
@@ -2604,12 +2623,16 @@ impl Agent {
     ///
     /// Read-only by construction.
     /// A guess that would change something is dropped rather than run.
-    fn start_guess(&self, cancel: &CancellationToken) -> Option<Guessing> {
+    /// The guess is asked once `begun` is cancelled, and never before.
+    fn start_guess(
+        &self,
+        cancel: &CancellationToken,
+        begun: &CancellationToken,
+    ) -> Option<Guessing> {
         let model = self.cfg.guess_with.clone()?;
         let stop = cancel.child_token();
         let asked = Guess {
-            // At a priority that yields: a guess must never be in front of the answer the person is
-            // waiting for, and the cluster can put it on another node.
+            begun: begun.clone(),
             backend: self
                 .background
                 .clone()
@@ -3183,11 +3206,13 @@ impl Agent {
         Ok(())
     }
 
+    /// `begun` is cancelled when the first piece of the answer arrives.
     async fn stream_one(
         &self,
         schema: &Value,
         cancel: &CancellationToken,
         events: &mpsc::Sender<AgentEvent>,
+        begun: &CancellationToken,
     ) -> Result<Completion> {
         let native = self.cfg.protocol == ToolProtocol::Native;
         // The grammar constrains the envelope.
@@ -3249,7 +3274,14 @@ impl Agent {
             };
             // Something arrived, so the server is at work: from here a silence is a stall.
             patience = STREAM_IDLE_TIMEOUT;
-            match next? {
+            let next = next?;
+            if matches!(
+                next,
+                StreamEvent::Delta(_) | StreamEvent::Reasoning(_) | StreamEvent::Call(_)
+            ) {
+                begun.cancel();
+            }
+            match next {
                 StreamEvent::Alive => {}
                 StreamEvent::Prefill { done, total } => {
                     let _ = events.send(AgentEvent::Prefill { done, total }).await;
@@ -3773,6 +3805,13 @@ mod tests {
         (agent, steer_tx)
     }
 
+    /// A step whose answer has begun to arrive, so a guess is sent at once.
+    fn begun() -> CancellationToken {
+        let begun = CancellationToken::new();
+        begun.cancel();
+        begun
+    }
+
     async fn drive(agent: &mut Agent, prompt: &str) -> Vec<AgentEvent> {
         agent
             .collect_turn(prompt.into(), CancellationToken::new())
@@ -3884,6 +3923,95 @@ mod tests {
                 if s.contains("backend error") && s.contains("STREAMING PREFILL: out of memory"))),
             "the error was not reported: {events:?}"
         );
+    }
+
+    /// The guess of the next read reaches the server only after the step's first piece of
+    /// answer has left it.
+    #[tokio::test]
+    async fn the_guess_waits_for_the_steps_first_token() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let log: StdArc<Mutex<Vec<&'static str>>> = Default::default();
+        let order = log.clone();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let order = order.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let n = sock.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                        let text = String::from_utf8_lossy(&buf);
+                        let Some(head) = text.find("\r\n\r\n") else {
+                            continue;
+                        };
+                        let len: usize = text
+                            .lines()
+                            .find_map(|l| {
+                                l.to_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .map(str::to_string)
+                            })
+                            .and_then(|v| v.trim().parse().ok())
+                            .unwrap_or(0);
+                        if buf.len() >= head + 4 + len {
+                            break;
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&buf).into_owned();
+                    if text.starts_with("GET ") {
+                        let body = r#"{"object":"list","data":[]}"#;
+                        let _ = sock
+                            .write_all(
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                                    body.len()
+                                )
+                                .as_bytes(),
+                            )
+                            .await;
+                    } else if text.contains("guessing which single") {
+                        order.lock().unwrap().push("guess asked");
+                        let _ = sock.write_all(json_reply("{}").as_bytes()).await;
+                    } else {
+                        // The step: the prompt is read for a while before the first token.
+                        let _ = sock
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n: loken-prefill {\"done\": 1, \"total\": 2}\n\n",
+                            )
+                            .await;
+                        let _ = sock.flush().await;
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        order.lock().unwrap().push("first token");
+                        let _ = sock
+                            .write_all(
+                                b"data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n\
+                                  data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+                                  data: [DONE]\n\n",
+                            )
+                            .await;
+                    }
+                    let _ = sock.flush().await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        let backend = FakeBackend {
+            url: format!("http://127.0.0.1:{port}"),
+            seen: Default::default(),
+        };
+        let h = Harness::new(Answer::Yes);
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        agent.cfg.guess_with = Some("test".into());
+        drive(&mut agent, "hello").await;
+        let order = log.lock().unwrap().clone();
+        assert_eq!(order.first(), Some(&"first token"), "{order:?}");
     }
 
     /// A call the server put in the reasoning, with an empty answer, is run as a call.
@@ -4812,7 +4940,7 @@ mod tests {
 
         agent.cfg.guess_with = Some("test".into());
         let (handle, _stop) = agent
-            .start_guess(&CancellationToken::new())
+            .start_guess(&CancellationToken::new(), &begun())
             .expect("speculation is on");
         let (key, out) = handle.await.unwrap().expect("the guess was not made");
         assert!(out.content.contains("forty two"), "{out:?}");
@@ -4836,7 +4964,7 @@ mod tests {
 
         agent.cfg.guess_with = Some("test".into());
         let (handle, _stop) = agent
-            .start_guess(&CancellationToken::new())
+            .start_guess(&CancellationToken::new(), &begun())
             .expect("speculation is on");
         assert!(handle.await.unwrap().is_none());
         assert_eq!(h.read("a.txt"), "one");
@@ -4854,7 +4982,7 @@ mod tests {
         agent.session.push(Message::user("have a look"));
         agent.cfg.guess_with = Some("test".into());
         let (handle, _stop) = agent
-            .start_guess(&CancellationToken::new())
+            .start_guess(&CancellationToken::new(), &begun())
             .expect("speculation is on");
         assert!(handle.await.unwrap().is_none());
     }

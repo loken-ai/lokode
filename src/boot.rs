@@ -445,7 +445,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     let registry = Arc::new(registry);
 
     let digest = Arc::new(tokio::sync::Mutex::new(digest));
-    // Its own client, whose requests say they should yield, and the tools that read.
+    // Its own client, and the tools that read.
     // A background turn that cannot read the project cannot find anything out about it.
     // None of the tools changes anything or asks the user anything.
     let discovery = cfg
@@ -553,20 +553,12 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
     })
 }
 
-/// A second client whose requests say they should yield to the user's.
-///
-/// The background work shares a machine with the turn a person is waiting on.
-/// It asks to be scheduled behind it.
-/// A server that does not schedule by priority ignores an unknown header.
-/// The work still happens, without the courtesy.
-/// Only the OpenAI-compatible client carries the header.
-///
 /// Which model guesses the next read, or `None` for a session that does not guess.
 ///
 /// Only against a backend on this machine or this network.
 /// A hosted endpoint bills for a guess the same as for an answer.
 /// The model is the one the project names for searching, or the one already answering.
-/// The request goes out at a priority that yields.
+/// The guess is sent once the step's answer has begun to arrive.
 fn guess_model(cfg: &AppConfig, answering: &str) -> Option<String> {
     if !cfg.speculate || !crate::config::backend_is_nearby(&cfg.backend_url) {
         return None;
@@ -579,6 +571,7 @@ fn guess_model(cfg: &AppConfig, answering: &str) -> Option<String> {
     )
 }
 
+/// A second client for the work beside the turn, with the configured headers.
 fn background_provider(cfg: &AppConfig) -> Result<Arc<dyn crate::backend::provider::Provider>> {
     if cfg.backend_kind == crate::config::BackendKind::Anthropic {
         return provider_for(cfg);
