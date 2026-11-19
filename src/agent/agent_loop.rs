@@ -410,7 +410,7 @@ impl Guess {
             tools: None,
             grammar: None,
             max_tokens: 160,
-            temperature: 0.0,
+            temperature: Some(0.0),
             user: Some(format!("{}-guess", self.session)),
             reason: false,
             purpose: crate::backend::meter::Purpose::Guess,
@@ -2789,7 +2789,7 @@ impl Agent {
             tools: None,
             grammar: None,
             max_tokens: 120,
-            temperature: 0.0,
+            temperature: Some(0.0),
             user: Some(format!("{}-review", self.session.id)),
             reason: false,
             purpose: crate::backend::meter::Purpose::Review,
@@ -3299,7 +3299,8 @@ impl Agent {
             tools: native.then(|| tool_specs(&self.registry)),
             grammar,
             max_tokens: self.cfg.max_answer_tokens as u32,
-            temperature: 0.2,
+            // The model's own sampling, as the server applies it when none is asked for.
+            temperature: None,
             user: Some(self.session.id.clone()),
             reason: true,
             purpose: crate::backend::meter::Purpose::Step,
@@ -3442,7 +3443,7 @@ impl Agent {
                 tools: None,
                 grammar: self.backend.capabilities().grammar.then(|| schema.clone()),
                 max_tokens: 4096,
-                temperature: 0.0,
+                temperature: Some(0.0),
                 user: Some(format!("{}-repair", self.session.id)),
                 reason: true,
                 purpose: crate::backend::meter::Purpose::Repair,
@@ -3970,6 +3971,22 @@ mod tests {
                 .any(|e| matches!(e, AgentEvent::Notice(s) if s.contains("notes.md"))),
             "the user was not told what went with the question: {events:?}"
         );
+    }
+
+    /// A step asks for no temperature, so the server applies the model's own sampling.
+    #[tokio::test]
+    async fn a_step_leaves_the_sampling_to_the_model() {
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![sse(&[
+            r#"{"choices":[{"delta":{"content":"hi"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ])])
+        .await;
+        let mut agent = agent_for(&h, &backend, ToolProtocol::Native);
+        drive(&mut agent, "hello").await;
+        let sent = backend.seen.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].get("temperature").is_none(), "{}", sent[0]);
     }
 
     /// An error the server sends inside the stream ends the turn as a backend error.

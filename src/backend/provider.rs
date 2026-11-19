@@ -33,7 +33,8 @@ pub struct TurnRequest {
     /// A provider that reports no grammar support is never handed one.
     pub grammar: Option<Value>,
     pub max_tokens: u32,
-    pub temperature: f32,
+    /// `None` leaves the sampling to the server, which applies what the model recommends.
+    pub temperature: Option<f32>,
     /// The session id, passed where a backend can use it to key its own caches.
     pub user: Option<String>,
     /// Whether the model may reason before it answers.

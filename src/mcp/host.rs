@@ -316,7 +316,7 @@ impl Host {
         let temperature = params
             .get("temperature")
             .and_then(|t| t.as_f64())
-            .unwrap_or(0.0) as f32;
+            .map(|t| t as f32);
         let text = self
             .backend
             .complete(TurnRequest {

@@ -142,10 +142,12 @@ pub fn render(req: &TurnRequest, stream: bool) -> Value {
         "model": req.model,
         // Required here, and a request without it is rejected.
         "max_tokens": req.max_tokens,
-        "temperature": req.temperature,
         "messages": messages,
         "stream": stream,
     });
+    if let Some(t) = req.temperature {
+        body["temperature"] = json!(t);
+    }
     if let Some(s) = system {
         body["system"] = json!(s);
     }
@@ -440,11 +442,21 @@ mod tests {
             tools: None,
             grammar: None,
             max_tokens: 1024,
-            temperature: 0.2,
+            temperature: None,
             user: None,
             reason: true,
             purpose: crate::backend::meter::Purpose::Step,
         }
+    }
+
+    /// A temperature is sent only when one is asked for.
+    #[test]
+    fn a_temperature_is_sent_only_when_asked_for() {
+        let body = render(&req(vec![Message::user("hello")]), true);
+        assert!(body.get("temperature").is_none(), "{body}");
+        let mut asked = req(vec![Message::user("hello")]);
+        asked.temperature = Some(0.0);
+        assert_eq!(render(&asked, true)["temperature"], 0.0);
     }
 
     /// An `error` event carries the server's message to the stream's error.

@@ -10,6 +10,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Fixed
 
+- Backend: leave a step's sampling to the model.
 - Backend: send the guess of the next read after the step's first token.
 - Tools: keep the change history when git sets hooks or signing.
 - Tools: show the ends of a long file read_file reads without a range.

@@ -55,7 +55,7 @@ pub async fn ignores_native_tools(
         }]),
         grammar: None,
         max_tokens: 32,
-        temperature: 0.0,
+        temperature: Some(0.0),
         user: None,
         // A readiness check answers in a few tokens.
         // A reasoning model would spend them thinking.

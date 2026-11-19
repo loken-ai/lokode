@@ -737,7 +737,7 @@ impl Reviewer {
             tools: None,
             grammar: None,
             max_tokens: CHECK_TOKENS,
-            temperature: 0.0,
+            temperature: Some(0.0),
             user: Some(format!("{}-coherence", self.session)),
             reason: false,
             purpose: crate::backend::meter::Purpose::Review,
