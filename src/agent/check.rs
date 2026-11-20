@@ -87,7 +87,8 @@ pub fn cargo_options(command: &str) -> Option<Vec<String>> {
 /// under it, followed by a line number.
 /// A failure that names no such place comes from outside the project's files.
 fn names_a_project_place(root: &Path, text: &str) -> bool {
-    text.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ','))
+    without_escapes(text)
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ','))
         .filter_map(|word| {
             let at = word.find([':', '('])?;
             let (path, place) = word.split_at(at);
@@ -103,6 +104,28 @@ fn names_a_project_place(root: &Path, text: &str) -> bool {
             };
             full.starts_with(root) && full.is_file()
         })
+}
+
+/// The text without its terminal escape sequences.
+///
+/// A tool that colours its output puts escapes around the places it names.
+fn without_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.next() == Some('[') {
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// What to run to find out whether the project still builds, and what to call it.
@@ -248,6 +271,16 @@ mod tests {
     fn a_project_with_nothing_to_ask_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         assert!(narrowest(dir.path(), &["a.txt".to_string()], &[]).is_none());
+    }
+
+    /// A place named in coloured output is still a place of the project.
+    #[test]
+    fn a_coloured_place_is_still_a_place() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+        let text = "\u{1b}[0m\u{1b}[1m\u{1b}[38;5;12m--> \u{1b}[0msrc/main.rs:1:13\u{1b}[0m";
+        assert!(names_a_project_place(dir.path(), text));
     }
 
     #[tokio::test]

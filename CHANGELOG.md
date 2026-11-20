@@ -4,6 +4,10 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Tools: read the places a coloured build output names after a write.
+
 ## [0.5.1] - 2026-11-20
 
 ### Changed
