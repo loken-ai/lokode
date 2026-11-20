@@ -10,6 +10,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Fixed
 
+- Backend: read the server's keep-alive comments line by line.
 - Tools: show the ends of a long command output, where its errors are.
 - Backend: leave a step's sampling to the model.
 - Backend: send the guess of the next read after the step's first token.

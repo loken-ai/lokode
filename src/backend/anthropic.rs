@@ -357,15 +357,7 @@ impl Provider for AnthropicProvider {
         }
 
         let purpose = req.purpose;
-        let sse = resp
-            .bytes_stream()
-            .map(|chunk| {
-                chunk.map(|b| match crate::backend::client::comment_event(&b) {
-                    Some(event) => event.into(),
-                    None => b,
-                })
-            })
-            .eventsource();
+        let sse = crate::backend::client::with_comment_events(resp.bytes_stream()).eventsource();
         let mapped = sse.flat_map(move |ev| {
             let events: Vec<Result<StreamEvent>> = match ev {
                 Err(e) => vec![Err(anyhow!("sse: {e}"))],

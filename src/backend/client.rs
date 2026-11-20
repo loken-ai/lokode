@@ -294,15 +294,7 @@ impl BackendClient {
         // A keep-alive is an SSE comment, which an event parser drops.
         // It is turned into an event of its own.
         // That tells the caller that a server reading a long prompt is working.
-        let sse = resp
-            .bytes_stream()
-            .map(|chunk| {
-                chunk.map(|b| match comment_event(&b) {
-                    Some(event) => event.into(),
-                    None => b,
-                })
-            })
-            .eventsource();
+        let sse = with_comment_events(resp.bytes_stream()).eventsource();
         // One chunk can carry several things at once.
         // It can carry a piece of prose, fragments of more than one tool call, and the reason
         // generation ended.
@@ -375,35 +367,103 @@ impl BackendClient {
     }
 }
 
-/// Whether `chunk` holds nothing but SSE comment lines.
-fn is_keep_alive(chunk: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(chunk);
-    let mut lines = text.lines().filter(|l| !l.is_empty()).peekable();
-    lines.peek().is_some() && lines.all(|l| l.starts_with(':'))
-}
-
 /// The marker a loken server puts on the comment that says how far it has read a prompt.
 const PREFILL_COMMENT: &str = "loken-prefill";
 
-/// A chunk of comments alone, as the event it stands for, which an event parser would
-/// otherwise drop.
-/// That is the last progress of a prompt being read when there is one, a keep-alive when not.
-/// `None` for a chunk that carries anything else.
-pub(crate) fn comment_event(chunk: &[u8]) -> Option<Vec<u8>> {
-    if !is_keep_alive(chunk) {
-        return None;
-    }
-    let text = String::from_utf8_lossy(chunk);
-    let progress = text.lines().rev().find_map(|l| {
-        l.strip_prefix(':')?
-            .trim_start()
-            .strip_prefix(PREFILL_COMMENT)
-            .map(str::trim)
-    });
-    Some(match progress {
+/// An SSE comment line, without its terminator, as the event it stands for.
+/// That is the progress of a prompt being read when it says so, a keep-alive when not.
+fn comment_event(line: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(line);
+    let progress = text
+        .strip_prefix(':')
+        .map(str::trim_start)
+        .and_then(|t| t.strip_prefix(PREFILL_COMMENT))
+        .map(str::trim);
+    match progress {
         Some(json) => format!("event: prefill\ndata: {json}\n\n").into_bytes(),
         None => b"event: alive\ndata: {}\n\n".to_vec(),
-    })
+    }
+}
+
+/// The lines of an SSE byte stream, with each comment between events turned into an event.
+///
+/// An event parser drops comments.
+/// A server reading a long prompt says it is at work in comments.
+///
+/// Lines are cut at their terminator, whatever the transport chunks.
+/// A line is a comment only when `:` opens the line.
+/// A comment inside an event is dropped, as the format says.
+#[derive(Default)]
+struct CommentLines {
+    pending: Vec<u8>,
+    /// Whether a line of an event has been read since the last empty line.
+    in_event: bool,
+}
+
+impl CommentLines {
+    /// The complete lines of `chunk` and what came before it, rewritten.
+    /// A line not yet ended waits for the next chunk.
+    fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+        self.pending.extend_from_slice(chunk);
+        let mut out = Vec::new();
+        let mut start = 0;
+        while let Some(at) = self.pending[start..]
+            .iter()
+            .position(|&b| b == b'\n' || b == b'\r')
+        {
+            let end = start + at;
+            // A carriage return at the end of what has arrived may open a CRLF.
+            let ending = match (self.pending[end], self.pending.get(end + 1)) {
+                (b'\r', Some(b'\n')) => 2,
+                (b'\r', None) => break,
+                _ => 1,
+            };
+            let line = &self.pending[start..end];
+            let next = end + ending;
+            if line.is_empty() {
+                self.in_event = false;
+                out.extend_from_slice(&self.pending[start..next]);
+            } else if line[0] == b':' {
+                if !self.in_event {
+                    out.extend(comment_event(line));
+                }
+            } else {
+                self.in_event = true;
+                out.extend_from_slice(&self.pending[start..next]);
+            }
+            start = next;
+        }
+        self.pending.drain(..start);
+        out
+    }
+}
+
+/// `inner` with its comment lines turned into events, line by line across chunks.
+/// What is left without a terminator at the end is passed on as it came.
+pub(crate) fn with_comment_events<S, B, E>(inner: S) -> impl Stream<Item = Result<Vec<u8>, E>>
+where
+    S: Stream<Item = Result<B, E>> + Unpin,
+    B: AsRef<[u8]>,
+{
+    futures::stream::unfold(
+        (inner, CommentLines::default(), false),
+        |(mut inner, mut lines, ended)| async move {
+            if ended {
+                return None;
+            }
+            match inner.next().await {
+                Some(Ok(b)) => {
+                    let out = lines.push(b.as_ref());
+                    Some((Ok(out), (inner, lines, false)))
+                }
+                Some(Err(e)) => Some((Err(e), (inner, lines, false))),
+                None => {
+                    let rest = std::mem::take(&mut lines.pending);
+                    Some((Ok(rest), (inner, lines, true)))
+                }
+            }
+        },
+    )
 }
 
 /// The progress a prefill event reports, or a keep-alive when it does not parse.
@@ -674,15 +734,50 @@ impl BackendClient {
 
 #[cfg(test)]
 mod tests {
-    /// A chunk of comments alone is a keep-alive.
-    /// One that carries data, or nothing, is not.
+    /// The events of `chunks` read through the comment rewrite and the event parser.
+    fn events_of_chunks(chunks: Vec<Vec<u8>>) -> Vec<(String, String)> {
+        let inner = futures::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+        let events = with_comment_events(inner).eventsource();
+        futures::executor::block_on(events.map(|e| e.expect("an event")).collect::<Vec<_>>())
+            .into_iter()
+            .map(|e| (e.event, e.data))
+            .collect()
+    }
+
+    /// A stream cut anywhere by the transport gives the same events.
+    /// A data line cut before a colon stays a data line.
     #[test]
-    fn a_comment_only_chunk_is_a_keep_alive() {
-        assert!(super::is_keep_alive(b":\n\n"));
-        assert!(super::is_keep_alive(b": keep-alive\n\n:\n\n"));
-        assert!(!super::is_keep_alive(b"data: {}\n\n"));
-        assert!(!super::is_keep_alive(b":\n\ndata: {}\n\n"));
-        assert!(!super::is_keep_alive(b""));
+    fn a_stream_cut_anywhere_gives_the_same_events() {
+        let body: &[u8] = b": loken-prefill {\"done\": 1, \"total\": 2}\n\n\
+            data: {\"usage\":{\"loken\":{\"energy\":{\"joules\":1.5}}}}\n\n\
+            : keep-alive\r\n\r\n\
+            data: [DONE]\n\n";
+        let whole = events_of_chunks(vec![body.to_vec()]);
+        assert_eq!(
+            whole,
+            vec![
+                ("prefill".into(), r#"{"done": 1, "total": 2}"#.into()),
+                (
+                    "message".into(),
+                    r#"{"usage":{"loken":{"energy":{"joules":1.5}}}}"#.into()
+                ),
+                ("alive".into(), "{}".into()),
+                ("message".into(), "[DONE]".into()),
+            ]
+        );
+        for at in 0..=body.len() {
+            let cut = events_of_chunks(vec![body[..at].to_vec(), body[at..].to_vec()]);
+            assert_eq!(cut, whole, "cut at byte {at}");
+        }
+        let bytes = events_of_chunks(body.iter().map(|b| vec![*b]).collect());
+        assert_eq!(bytes, whole, "a byte a chunk");
+    }
+
+    /// A comment inside an event is dropped and the event is kept whole.
+    #[test]
+    fn a_comment_inside_an_event_is_dropped() {
+        let events = events_of_chunks(vec![b"data: a\n: note\ndata: b\n\n".to_vec()]);
+        assert_eq!(events, vec![("message".into(), "a\nb".into())]);
     }
 
     /// A question beside the turn asks the server for as little reasoning as it allows.
@@ -851,11 +946,9 @@ mod tests {
 
     /// The comment that says how far a prompt has been read becomes an event of its own.
     /// Any other comment is a keep-alive.
-    /// A chunk with data is left alone.
     #[test]
     fn a_prefill_comment_is_an_event_of_its_own() {
-        let event = comment_event(b": loken-prefill {\"done\": 8192, \"total\": 20431}\n\n")
-            .expect("a comment chunk");
+        let event = comment_event(b": loken-prefill {\"done\": 8192, \"total\": 20431}");
         let text = String::from_utf8(event).expect("text");
         assert!(text.starts_with("event: prefill\n"), "{text}");
         let data = text
@@ -870,10 +963,8 @@ mod tests {
                 total: 20431
             }
         ));
-        let alive = String::from_utf8(comment_event(b": keep-alive\n\n").expect("a comment"))
-            .expect("text");
+        let alive = String::from_utf8(comment_event(b": keep-alive")).expect("text");
         assert!(alive.starts_with("event: alive\n"), "{alive}");
-        assert!(comment_event(b"data: {}\n\n").is_none());
         assert!(matches!(prefill_of("not json"), StreamEvent::Alive));
     }
 }
