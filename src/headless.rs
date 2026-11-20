@@ -298,9 +298,7 @@ pub async fn run(
                 if text_output {
                     eprintln!("· {s}");
                 }
-                // A step limit or a backend error reaches the caller as a notice.
-                // Neither is a run that did what was asked.
-                if s.starts_with("stopped after") || s.contains("backend error") {
+                if fails_the_run(&s) {
                     report.ok = false;
                 }
                 report.notices.push(s);
@@ -380,9 +378,28 @@ fn one_line(s: &str) -> String {
     format!("{}…", &flat[..cut])
 }
 
+/// Whether a notice means the run did not do what was asked.
+///
+/// A turn the agent stopped and a backend error both reach the caller as notices.
+fn fails_the_run(notice: &str) -> bool {
+    notice.starts_with("stopped") || notice.contains("backend error")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every stop of a turn fails the run, a turn that got nowhere as much as a step limit.
+    #[test]
+    fn a_stopped_turn_fails_the_run() {
+        assert!(fails_the_run(
+            "stopped: 3 steps in a row that got nowhere (last: read_file). Say what to do \
+             differently."
+        ));
+        assert!(fails_the_run("stopped after 4 steps (max_steps)"));
+        assert!(fails_the_run("backend error: connection refused"));
+        assert!(!fails_the_run("tool calls travel as the native"));
+    }
 
     #[test]
     fn refusing_everything_is_the_default_shape() {

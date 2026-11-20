@@ -10,6 +10,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Fixed
 
+- Interface: fail a headless run whose turn stopped getting nowhere.
 - Tools: offer submit_plan only while planning.
 - Tools: read numbers and booleans a model wrote as strings.
 - Interface: follow up an answer cut at the token limit instead of ending the turn.
