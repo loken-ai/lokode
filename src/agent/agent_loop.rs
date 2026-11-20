@@ -648,8 +648,9 @@ const RESTATE_CALL: &str = "Your answer was empty. The tool call you wrote is in
 const CUT_ANSWER: &str = "Your answer was cut at the token limit, so nothing in it was \
                           carried out. Do not write a file's content in your answer. Change an \
                           existing file with edit_file or edit_lines, a few lines at a time. \
-                          Write a new file with write_file, in several parts if it is long. \
-                          Keep the answer short.";
+                          Write a new file with write_file, a long one in several calls: \
+                          the first part, then each next part with append true. Keep the \
+                          answer short.";
 
 /// How the model is told to change files, so that no answer has to hold a whole file.
 const EDIT_IN_PLACE: &str = "An answer is cut at its token limit. Change an existing file \
@@ -2641,7 +2642,8 @@ impl Agent {
     /// The turn has shown that a whole file does not fit in one answer.
     /// An existing file changes by edits from then on.
     fn whole_rewrite_after_cut(&self, call: &ResolvedCall) -> Option<String> {
-        if !self.this_turn.cut_resumed || call.name != "write_file" {
+        let appends = call.arguments.get("append").and_then(|v| v.as_bool()) == Some(true);
+        if !self.this_turn.cut_resumed || call.name != "write_file" || appends {
             return None;
         }
         let path = call.arguments.get("path")?.as_str()?;

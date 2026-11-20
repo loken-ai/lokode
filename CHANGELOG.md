@@ -4,6 +4,10 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+### Added
+
+- Tools: write a long new file in several calls with write_file's append.
+
 ### Changed
 
 - Tools: apply an edit whose text differs from the file only by spaces, and show the closest lines of a missing one.

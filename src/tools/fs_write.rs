@@ -143,6 +143,9 @@ pub(crate) fn find(file: &str, old: &str) -> Found {
 struct WriteFileArgs {
     path: PathBuf,
     content: String,
+    /// Add `content` at the end of the file instead of replacing it.
+    #[serde(default)]
+    append: bool,
 }
 
 #[async_trait]
@@ -155,8 +158,9 @@ impl Tool for WriteFile {
     }
     fn description(&self) -> &str {
         "Create a file, or replace one whole. Everything not in `content` is gone: to \
-         change part of a file that already exists, use edit_file or edit_lines. Requires \
-         user approval."
+         change part of a file that already exists, use edit_file or edit_lines. With \
+         `append` true, `content` is added at the end of the file instead, so a long new \
+         file is written in several calls. Requires user approval."
     }
 
     fn args_schema(&self) -> Value {
@@ -164,7 +168,8 @@ impl Tool for WriteFile {
             "type": "object",
             "properties": {
                 "path":    {"type": "string"},
-                "content": {"type": "string"}
+                "content": {"type": "string"},
+                "append":  {"type": "boolean"}
             },
             "required": ["path", "content"],
             "additionalProperties": false
@@ -191,7 +196,11 @@ impl Tool for WriteFile {
                 ctx.short(&target)
             )));
         }
-        let diff = unified_diff(&before, &a.content, &ctx.short(&target));
+        let after = match a.append {
+            true => format!("{before}{}", a.content),
+            false => a.content.clone(),
+        };
+        let diff = unified_diff(&before, &after, &ctx.short(&target));
 
         if let Err(why) = ctx.may_write(&target) {
             return Ok(ToolOutput::err(why));
@@ -203,7 +212,7 @@ impl Tool for WriteFile {
                     "write_file {}  ({} → {} bytes){}",
                     ctx.short(&target),
                     before.len(),
-                    a.content.len(),
+                    after.len(),
                     losses(&diff)
                 ),
                 diff_preview: Some(diff.clone()),
@@ -218,13 +227,13 @@ impl Tool for WriteFile {
             Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
         }
 
-        ctx.write_text(&target, &a.content).await?;
-        ctx.note_content(&target, a.content.as_bytes());
+        ctx.write_text(&target, &after).await?;
+        ctx.note_content(&target, after.as_bytes());
 
         Ok(ToolOutput::ok(format!(
             "wrote {} ({} bytes)\n{}",
             ctx.short(&target),
-            a.content.len(),
+            after.len(),
             preview(&diff)
         )))
     }
@@ -1019,6 +1028,17 @@ mod tests {
             .await;
         succeeded(&out);
         assert_eq!(h.read("src/a.rs"), "second");
+    }
+
+    /// With `append`, a long file is written in several calls, each adding to the end.
+    #[tokio::test]
+    async fn write_file_appends_in_parts() {
+        let h = Harness::new(Answer::Yes);
+        for (part, append) in [("fn a() {}\n", false), ("fn b() {}\n", true)] {
+            let args = json!({"path": "src/a.rs", "content": part, "append": append});
+            succeeded(&h.run(&WriteFile, args).await);
+        }
+        assert_eq!(h.read("src/a.rs"), "fn a() {}\nfn b() {}\n");
     }
 
     #[tokio::test]
