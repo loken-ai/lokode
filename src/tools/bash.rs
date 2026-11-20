@@ -299,6 +299,17 @@ mod tests {
     }
 
     /// A command that outlives its time is stopped with what it started.
+    /// A command is the first process the system kills when memory runs out, not the session.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_command_is_killed_before_the_session_when_memory_runs_out() {
+        let mut cmd = tokio::process::Command::new("cat");
+        cmd.arg("/proc/self/oom_score_adj");
+        own_group(&mut cmd);
+        let out = cmd.output().await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "1000");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn a_command_that_times_out_is_stopped_with_its_children() {
@@ -815,9 +826,27 @@ mod tests {
 
 /// Start the command as the leader of a process group of its own.
 /// What it starts joins that group, so stopping the group stops all of it.
+///
+/// On Linux the command, and what it starts, is also the first process the system kills when
+/// memory runs out, so the session that started it outlives it.
 pub(crate) fn own_group(cmd: &mut tokio::process::Command) {
     #[cfg(unix)]
     cmd.process_group(0);
+    #[cfg(target_os = "linux")]
+    // SAFETY: the closure runs in the child between fork and exec, and calls only open, write and
+    // close, which are async-signal-safe, on constant data.
+    unsafe {
+        cmd.pre_exec(|| {
+            // The kernel's largest adjustment: this process is killed before any other.
+            const FIRST_TO_GO: &[u8] = b"1000";
+            let fd = libc::open(c"/proc/self/oom_score_adj".as_ptr(), libc::O_WRONLY);
+            if fd >= 0 {
+                libc::write(fd, FIRST_TO_GO.as_ptr().cast(), FIRST_TO_GO.len());
+                libc::close(fd);
+            }
+            Ok(())
+        });
+    }
     #[cfg(not(unix))]
     let _ = cmd;
 }
