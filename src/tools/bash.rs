@@ -135,6 +135,7 @@ impl Tool for Bash {
         // Abandoning the turn drops the future, and nobody is left to read the output.
         // The command is killed with it so that it does not keep running.
         cmd.kill_on_drop(true);
+        own_group(&mut cmd);
         cmd.current_dir(&cwd);
 
         // Output is read as it comes rather than at the end.
@@ -147,6 +148,7 @@ impl Tool for Bash {
             Ok(c) => c,
             Err(e) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
         };
+        let mut group = Group::of(&child);
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let collect = async {
@@ -168,6 +170,7 @@ impl Tool for Bash {
                 }
             },
         };
+        group.ended();
         let code = match status {
             Ok(s) => s.code().unwrap_or(-1),
             Err(e) => return Ok(ToolOutput::err(format!("could not wait for it: {e}"))),
@@ -293,6 +296,29 @@ mod tests {
             "{}",
             out.content
         );
+    }
+
+    /// A command that outlives its time is stopped with what it started.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_that_times_out_is_stopped_with_its_children() {
+        let h = Harness::new(Answer::Yes);
+        let out = h
+            .run(
+                &Bash,
+                json!({"cmd": "sleep 30 & echo $! > child.pid; wait", "timeout_s": 1}),
+            )
+            .await;
+        assert!(out.is_error, "{out:?}");
+        let pid: i32 = std::fs::read_to_string(h.root.join("child.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // SAFETY: signal 0 only asks whether the process is there.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(!alive, "the command's child {pid} outlived it");
     }
 
     #[tokio::test]
@@ -784,6 +810,46 @@ mod tests {
             "{}",
             out.content
         );
+    }
+}
+
+/// Start the command as the leader of a process group of its own.
+/// What it starts joins that group, so stopping the group stops all of it.
+pub(crate) fn own_group(cmd: &mut tokio::process::Command) {
+    #[cfg(unix)]
+    cmd.process_group(0);
+    #[cfg(not(unix))]
+    let _ = cmd;
+}
+
+/// The process group of a running command, killed whole when this is dropped before the
+/// command ended.
+///
+/// A timeout, a cancel or an abandoned turn drops it while the command runs.
+/// The processes the command started are killed with it, and none is left holding a lock.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) struct Group(Option<u32>);
+
+impl Group {
+    pub(crate) fn of(child: &tokio::process::Child) -> Self {
+        Self(child.id())
+    }
+
+    /// The command ended by itself, and what it left running is its own business.
+    pub(crate) fn ended(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.0 {
+            // SAFETY: a plain signal to the group the command leads.
+            unsafe {
+                libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+            }
+        }
     }
 }
 

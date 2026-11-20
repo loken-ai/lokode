@@ -86,6 +86,7 @@ impl Tool for RunTests {
         // A test suite is the longest thing this agent starts.
         // Abandoning the turn has to take the suite with it.
         cmd.kill_on_drop(true);
+        crate::tools::bash::own_group(&mut cmd);
         cmd.current_dir(&ctx.root);
         // The line that names the failing test arrives long before the end of the suite.
         // Read as it comes, like the shell.
@@ -96,6 +97,7 @@ impl Tool for RunTests {
             Ok(c) => c,
             Err(e) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
         };
+        let mut group = crate::tools::bash::Group::of(&child);
         // Kept until the suite has ended: the lease is its right to the network.
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
@@ -114,6 +116,7 @@ impl Tool for RunTests {
                 Err(_) => return Ok(ToolOutput::err(format!("timed out after {TIMEOUT_S}s"))),
             },
         };
+        group.ended();
         let code = match status {
             Ok(s) => s.code().unwrap_or(-1),
             Err(e) => return Ok(ToolOutput::err(format!("could not wait for it: {e}"))),
