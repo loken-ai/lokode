@@ -4,6 +4,10 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+### Changed
+
+- Tools: stop copying build options from the model's cargo commands into the check after a write.
+
 ### Fixed
 
 - Interface: count a first run of a command as progress when no step limit is set.

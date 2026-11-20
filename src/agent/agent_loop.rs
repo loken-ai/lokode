@@ -2468,14 +2468,6 @@ impl Agent {
                             origin,
                         })
                         .await;
-                    // A command that succeeded says which options build here.
-                    if call.name == "bash" && result.content.starts_with("exit: 0\n") {
-                        if let (Some(cmd), Ok(mut check)) =
-                            (call.arguments["cmd"].as_str(), self.check.lock())
-                        {
-                            check.learn(cmd);
-                        }
-                    }
                     let prefix = if result.is_error { "[error] " } else { "" };
                     self.session.push(Message::tool(
                         format!("{prefix}{}", result.content),

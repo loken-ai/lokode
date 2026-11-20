@@ -29,58 +29,8 @@ const TIMEOUT: Duration = Duration::from_secs(45);
 /// What a session has learned about checking its project.
 #[derive(Debug, Default)]
 pub struct Memory {
-    /// The options of the last cargo command that succeeded and chose what is built.
-    cargo_options: Vec<String>,
     /// The check last found failing for a reason outside the project's files, as it was run.
     outside: Option<Vec<String>>,
-}
-
-impl Memory {
-    /// Take the options of a command line that succeeded, when it runs cargo.
-    pub fn learn(&mut self, command: &str) {
-        if let Some(options) = cargo_options(command) {
-            self.cargo_options = options;
-        }
-    }
-}
-
-/// The options of the last cargo invocation in `command` that choose what is built.
-/// `None` when the command runs no cargo.
-pub fn cargo_options(command: &str) -> Option<Vec<String>> {
-    const SEPARATORS: [&str; 4] = ["&&", "||", ";", "|"];
-    const FLAGS: [&str; 3] = ["--no-default-features", "--all-features", "--workspace"];
-    const VALUED: [&str; 6] = [
-        "--features",
-        "-F",
-        "--package",
-        "-p",
-        "--manifest-path",
-        "--target",
-    ];
-    let words: Vec<&str> = command.split_whitespace().collect();
-    let start = words
-        .iter()
-        .rposition(|w| *w == "cargo" || w.ends_with("/cargo"))?;
-    let mut options = Vec::new();
-    let mut rest = words[start + 1..]
-        .iter()
-        .map(|w| w.trim_end_matches(';'))
-        .take_while(|w| !SEPARATORS.contains(w));
-    while let Some(word) = rest.next() {
-        if FLAGS.contains(&word) {
-            options.push(word.to_string());
-        } else if VALUED.contains(&word) {
-            if let Some(value) = rest.next() {
-                options.push(word.to_string());
-                options.push(value.trim_matches(['"', '\'']).to_string());
-            }
-        } else if let Some((flag, _)) = word.split_once('=') {
-            if VALUED.contains(&flag) {
-                options.push(word.replace(['"', '\''], ""));
-            }
-        }
-    }
-    Some(options)
 }
 
 /// Whether `text` places something in a file of the project at `root`: a path that exists
@@ -129,16 +79,10 @@ fn without_escapes(text: &str) -> String {
 }
 
 /// What to run to find out whether the project still builds, and what to call it.
-fn narrowest(
-    root: &Path,
-    paths: &[String],
-    cargo: &[String],
-) -> Option<(&'static str, Vec<String>, &'static str)> {
+fn narrowest(root: &Path, paths: &[String]) -> Option<(&'static str, Vec<String>, &'static str)> {
     let owned = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     if root.join("Cargo.toml").exists() {
-        let mut args = owned(&["check", "--quiet"]);
-        args.extend(cargo.iter().cloned());
-        return Some(("cargo", args, "cargo check"));
+        return Some(("cargo", owned(&["check", "--quiet"]), "cargo check"));
     }
     if root.join("tsconfig.json").exists() {
         return Some(("npx", owned(&["tsc", "--noEmit"]), "tsc"));
@@ -170,11 +114,7 @@ pub async fn run(
     paths: &[String],
     memory: &std::sync::Mutex<Memory>,
 ) -> Option<Verdict> {
-    let cargo = memory
-        .lock()
-        .map(|m| m.cargo_options.clone())
-        .unwrap_or_default();
-    let (program, args, label) = narrowest(root, paths, &cargo)?;
+    let (program, args, label) = narrowest(root, paths)?;
     let outside = memory
         .lock()
         .map(|m| m.outside.as_ref() == Some(&args))
@@ -248,7 +188,7 @@ mod tests {
     fn a_rust_project_is_asked_to_compile_and_not_to_test() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
-        let (program, args, label) = narrowest(dir.path(), &[], &[]).unwrap();
+        let (program, args, label) = narrowest(dir.path(), &[]).unwrap();
         assert_eq!(program, "cargo");
         assert!(args.contains(&"check".to_string()), "{args:?}");
         assert!(!args.contains(&"test".to_string()), "{args:?}");
@@ -261,7 +201,7 @@ mod tests {
     fn python_is_asked_about_the_files_that_changed() {
         let dir = tempfile::tempdir().unwrap();
         let paths = vec!["a.py".to_string(), "notes.md".to_string()];
-        let (program, args, _) = narrowest(dir.path(), &paths, &[]).unwrap();
+        let (program, args, _) = narrowest(dir.path(), &paths).unwrap();
         assert_eq!(program, "python3");
         assert!(args.contains(&"a.py".to_string()), "{args:?}");
         assert!(!args.contains(&"notes.md".to_string()), "{args:?}");
@@ -270,7 +210,7 @@ mod tests {
     #[test]
     fn a_project_with_nothing_to_ask_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(narrowest(dir.path(), &["a.txt".to_string()], &[]).is_none());
+        assert!(narrowest(dir.path(), &["a.txt".to_string()]).is_none());
     }
 
     /// A place named in coloured output is still a place of the project.
@@ -303,31 +243,6 @@ mod tests {
         };
         assert!(report.starts_with("cargo check"), "{report}");
         assert!(report.contains("not_a_thing"), "{report}");
-    }
-
-    /// The options that choose what is built are taken from a cargo command line, and the rest
-    /// is left.
-    #[test]
-    fn a_cargo_command_gives_the_options_that_choose_what_is_built() {
-        assert_eq!(
-            cargo_options(
-                "cd x && cargo test -j 8 --no-default-features --features cpu --lib name && echo ok"
-            ),
-            Some(vec![
-                "--no-default-features".to_string(),
-                "--features".to_string(),
-                "cpu".to_string()
-            ])
-        );
-        assert_eq!(
-            cargo_options("cargo +stable build --features='a,b' -p core"),
-            Some(vec![
-                "--features=a,b".to_string(),
-                "-p".to_string(),
-                "core".to_string()
-            ])
-        );
-        assert_eq!(cargo_options("ls -la"), None);
     }
 
     /// A failure placed in a file of the project is the project's.
