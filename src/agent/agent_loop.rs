@@ -915,6 +915,8 @@ pub struct Agent {
     /// Whether the compiler has already been asked about this step.
     /// Shared rather than owned because the calls of one run are dispatched together.
     pub checked_this_step: std::sync::atomic::AtomicBool,
+    /// What the session has learned about checking the project after a write.
+    pub check: std::sync::Mutex<crate::agent::check::Memory>,
     /// Whether this turn has already been asked to go and look.
     /// Once: a nudge that repeats is an argument.
     pub nudged: bool,
@@ -2410,6 +2412,14 @@ impl Agent {
                             origin,
                         })
                         .await;
+                    // A command that succeeded says which options build here.
+                    if call.name == "bash" && result.content.starts_with("exit: 0\n") {
+                        if let (Some(cmd), Ok(mut check)) =
+                            (call.arguments["cmd"].as_str(), self.check.lock())
+                        {
+                            check.learn(cmd);
+                        }
+                    }
                     let prefix = if result.is_error { "[error] " } else { "" };
                     self.session.push(Message::tool(
                         format!("{prefix}{}", result.content),
@@ -2852,7 +2862,7 @@ impl Agent {
         {
             return unchecked.map(|why| Verdict::NotChecked { why });
         }
-        match crate::agent::check::run(&self.ctx.root, &written).await {
+        match crate::agent::check::run(&self.ctx.root, &written, &self.check).await {
             Some(verdict) => Some(verdict),
             None => unchecked.map(|why| Verdict::NotChecked { why }),
         }
@@ -3817,6 +3827,7 @@ mod tests {
             repairs: Default::default(),
             background: None,
             checked_this_step: Default::default(),
+            check: Default::default(),
             nudged: false,
             window_in_use: 0,
             barren: Default::default(),

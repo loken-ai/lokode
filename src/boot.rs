@@ -476,6 +476,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         repairs: crate::agent::repairs::Repairs::open(crate::paths::state_dir(), &cfg.root),
         background: background_provider(cfg).ok(),
         checked_this_step: Default::default(),
+        check: Default::default(),
         nudged: false,
         window_in_use: context_tokens,
         barren: Default::default(),

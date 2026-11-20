@@ -192,6 +192,7 @@ impl Discovery {
             repairs: Default::default(),
             background: None,
             checked_this_step: Default::default(),
+            check: Default::default(),
             nudged: false,
             window_in_use: 0,
             barren: Default::default(),
