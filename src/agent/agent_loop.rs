@@ -644,6 +644,12 @@ const RESTATE_CALL: &str = "Your answer was empty. The tool call you wrote is in
                             reasoning, where it is not read as a call. Make the call again \
                             as a tool call.";
 
+/// What the model is told when its answer was cut at the token limit with no call in it.
+const CUT_ANSWER: &str = "Your answer was cut at the token limit, so nothing in it was \
+                          carried out. Do not write a file's content in your answer: write it \
+                          with write_file, in several parts if it is long, and keep the \
+                          answer short.";
+
 /// One model response, with whatever the server said about how it ended.
 #[derive(Default)]
 struct Completion {
@@ -737,6 +743,8 @@ pub struct TurnTally {
     pub turn_end: Option<Vec<crate::agent::hooks::Ran>>,
     /// Whether the model was asked to make again a call it left in its reasoning.
     pub restated: bool,
+    /// Whether the model was asked to carry out what an answer cut at the token limit held.
+    pub cut_resumed: bool,
     /// How many steps the turn took to its first change, once it has made one.
     pub first_change: Option<usize>,
     /// The step of the turn's last change, counted from one.
@@ -2190,6 +2198,34 @@ impl Agent {
             self.record_assistant_turn(&turn)?;
 
             if turn.calls.is_empty() {
+                // An answer cut at the token limit carried nothing out.
+                // The model is asked once to do the work with its tools, and a second cut ends the
+                // turn as a failure.
+                if record.after.finish_reason.as_deref() == Some("length") {
+                    if self.this_turn.cut_resumed {
+                        self.close_step(record);
+                        self.stop_on_steps(
+                            &events,
+                            format!(
+                                "stopped after {} steps: the answer was cut at the token limit \
+                                 again",
+                                step + 1
+                            ),
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                    self.this_turn.cut_resumed = true;
+                    let _ = events
+                        .send(AgentEvent::Notice(
+                            "asking the model to carry out with its tools what the cut answer held"
+                                .into(),
+                        ))
+                        .await;
+                    self.session.push(Message::user(CUT_ANSWER));
+                    self.close_step(record);
+                    continue;
+                }
                 // A call left in the reasoning that could not be read is asked for again, once.
                 if turn.stranded && !self.this_turn.restated {
                     self.this_turn.restated = true;
@@ -4249,6 +4285,48 @@ mod tests {
         drive(&mut agent, "hello").await;
         let order = log.lock().unwrap().clone();
         assert_eq!(order.first(), Some(&"first token"), "{order:?}");
+    }
+
+    /// An answer cut at the token limit with no call in it is followed by a request to do the
+    /// work with the tools.
+    /// A second cut ends the turn as stopped.
+    #[tokio::test]
+    async fn an_answer_cut_at_the_limit_is_followed_up() {
+        let cut = sse(&[
+            r#"{"choices":[{"delta":{"content":"Here is the file:\nfn main() {"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"length"}]}"#,
+        ]);
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![
+            cut.clone(),
+            tool_step(
+                "w",
+                "write_file",
+                serde_json::json!({"path": "main.rs", "content": "fn main() {}\n"}),
+            ),
+            answer_step("written"),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "write main.rs").await;
+        assert_eq!(stopped(&events), None, "{events:?}");
+        assert!(h.root.join("main.rs").exists());
+        {
+            let sent = backend.seen.lock().unwrap();
+            assert_eq!(sent.len(), 3);
+            let last = sent[1]["messages"].as_array().unwrap().last().unwrap();
+            assert_eq!(last["content"], CUT_ANSWER);
+        }
+
+        let h = Harness::new(Answer::Yes);
+        let backend = fake_backend(vec![cut.clone(), cut]).await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        let events = drive(&mut agent, "write main.rs").await;
+        let why = stopped(&events).expect("the turn was not stopped");
+        assert!(
+            why.starts_with("stopped after 2 steps: the answer was cut"),
+            "{why}"
+        );
     }
 
     /// A call the server put in the reasoning, with an empty answer, is run as a call.

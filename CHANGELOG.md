@@ -10,6 +10,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Fixed
 
+- Interface: follow up an answer cut at the token limit instead of ending the turn.
 - Shell: stop what a command started when it times out or is cancelled.
 - Tools: say when the check after a write fails outside the change.
 - Backend: read the server's keep-alive comments line by line.
