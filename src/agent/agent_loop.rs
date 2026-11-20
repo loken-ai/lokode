@@ -646,9 +646,15 @@ const RESTATE_CALL: &str = "Your answer was empty. The tool call you wrote is in
 
 /// What the model is told when its answer was cut at the token limit with no call in it.
 const CUT_ANSWER: &str = "Your answer was cut at the token limit, so nothing in it was \
-                          carried out. Do not write a file's content in your answer: write it \
-                          with write_file, in several parts if it is long, and keep the \
-                          answer short.";
+                          carried out. Do not write a file's content in your answer. Change an \
+                          existing file with edit_file or edit_lines, a few lines at a time. \
+                          Write a new file with write_file, in several parts if it is long. \
+                          Keep the answer short.";
+
+/// How the model is told to change files, so that no answer has to hold a whole file.
+const EDIT_IN_PLACE: &str = "An answer is cut at its token limit. Change an existing file \
+                             with edit_file or edit_lines, a few lines at a time, never by \
+                             writing the whole file again.";
 
 /// One model response, with whatever the server said about how it ended.
 #[derive(Default)]
@@ -1047,6 +1053,7 @@ impl Agent {
                 "You are a local-first code agent driving a TUI on the user's machine.\n\
                  Call the tools you have been given to inspect and change the project.\n\
                  Stop calling tools when the task is finished or when you only need to talk.\n\
+                 {EDIT_IN_PLACE}\n\
                  {NEVER_ASK}\n\n\
                  {}",
                 tool_manifest(reg, planning)
@@ -1057,6 +1064,7 @@ impl Agent {
                    {{ \"assistant_text\": \"<prose to user>\", \"tool_calls\": [ {{ \"name\": <tool>, \"arguments\": {{...}} }} ] }}\n\
                  Emit zero tool_calls when the task is finished or when you only need to talk.\n\
                  Tool results will be returned to you as role=tool messages on the next turn.\n\
+                 {EDIT_IN_PLACE}\n\
                  {NEVER_ASK}\n\n\
                  {}",
                 tool_manifest(reg, planning)
@@ -2404,6 +2412,10 @@ impl Agent {
                         )));
                         continue;
                     }
+                    if let Some(why) = self.whole_rewrite_after_cut(call) {
+                        plan.push(Err((ToolOutput::err(why), Origin::Withheld)));
+                        continue;
+                    }
                     let key = repeat_key(call);
                     let reads = !self
                         .registry
@@ -2633,6 +2645,23 @@ impl Agent {
             format!(
                 "stopped after {step} steps: {without} without a change or a new read, as many \
                  as the first change took"
+            )
+        })
+    }
+
+    /// Why a write of a whole existing file is refused, once an answer of the turn was cut.
+    ///
+    /// The turn has shown that a whole file does not fit in one answer.
+    /// An existing file changes by edits from then on.
+    fn whole_rewrite_after_cut(&self, call: &ResolvedCall) -> Option<String> {
+        if !self.this_turn.cut_resumed || call.name != "write_file" {
+            return None;
+        }
+        let path = call.arguments.get("path")?.as_str()?;
+        self.ctx.root.join(path).is_file().then(|| {
+            format!(
+                "not run: {path} exists and an answer of this turn was cut at the token limit. \
+                 Change it with edit_file or edit_lines, a few lines at a time."
             )
         })
     }
@@ -4378,6 +4407,42 @@ mod tests {
         assert!(
             why.starts_with("stopped after 2 steps: the answer was cut"),
             "{why}"
+        );
+    }
+
+    /// After a cut answer, an existing file is not written whole again: the call is refused.
+    #[tokio::test]
+    async fn after_a_cut_an_existing_file_is_edited_not_rewritten() {
+        let cut = sse(&[
+            r#"{"choices":[{"delta":{"content":"Here is the file:\nfn main() {"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"length"}]}"#,
+        ]);
+        let h = Harness::new(Answer::Yes);
+        h.write("main.rs", "fn main() {}\n");
+        let backend = fake_backend(vec![
+            cut,
+            tool_step(
+                "w",
+                "write_file",
+                serde_json::json!({"path": "main.rs", "content": "fn main() { run(); }\n"}),
+            ),
+            answer_step("done"),
+        ])
+        .await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        drive(&mut agent, "rewrite main.rs").await;
+        assert_eq!(
+            std::fs::read_to_string(h.root.join("main.rs")).unwrap(),
+            "fn main() {}\n"
+        );
+        let sent = backend.seen.lock().unwrap();
+        let last = sent[2]["messages"].as_array().unwrap().last().unwrap();
+        assert!(
+            last["content"]
+                .as_str()
+                .unwrap()
+                .contains("not run: main.rs exists"),
+            "{last}"
         );
     }
 
