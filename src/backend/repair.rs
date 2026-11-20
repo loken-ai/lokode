@@ -149,6 +149,51 @@ pub fn tolerant_parse(raw: &str) -> Result<Value> {
     bail!("could not parse model output as JSON")
 }
 
+/// Read the arguments a model wrote as strings where the schema wants a boolean or a number
+/// as what the schema wants.
+///
+/// `"False"` for a boolean and `"120"` for an integer are the slips meant.
+/// A string that reads as neither is left for the tool to refuse.
+pub fn coerce_to_schema(args: &mut Value, schema: &Value) {
+    let (Some(args), Some(properties)) = (args.as_object_mut(), schema["properties"].as_object())
+    else {
+        return;
+    };
+    for (key, value) in args.iter_mut() {
+        let Some(text) = value.as_str().map(str::trim) else {
+            continue;
+        };
+        let wanted = properties.get(key).map(|p| &p["type"]);
+        let wants = |kind: &str| match wanted {
+            Some(Value::String(t)) => t == kind,
+            Some(Value::Array(ts)) => ts.iter().any(|t| t == kind),
+            _ => false,
+        };
+        if wants("string") {
+            continue;
+        }
+        let read = if wants("boolean") {
+            match text.to_ascii_lowercase().as_str() {
+                "true" => Some(Value::Bool(true)),
+                "false" => Some(Value::Bool(false)),
+                _ => None,
+            }
+        } else if wants("integer") {
+            text.parse::<i64>().ok().map(Value::from)
+        } else if wants("number") {
+            text.parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map(Value::Number)
+        } else {
+            None
+        };
+        if let Some(read) = read {
+            *value = read;
+        }
+    }
+}
+
 /// Compose the repair prompt to send back to the model.
 pub fn repair_prompt(error: &str, raw_output: &str) -> String {
     format!(
@@ -210,5 +255,30 @@ mod tests {
     fn string_with_braces_doesnt_confuse_extractor() {
         let v = tolerant_parse(r#"{"s": "a {fake} brace"}"#).unwrap();
         assert_eq!(v["s"], "a {fake} brace");
+    }
+
+    /// Booleans and numbers written as strings are read as the schema wants them.
+    /// Strings the schema wants, and strings that read as nothing, are left.
+    #[test]
+    fn strings_are_read_as_the_schema_wants() {
+        let schema = serde_json::json!({"properties": {
+            "flag": {"type": "boolean"},
+            "count": {"type": "integer"},
+            "ratio": {"type": ["number", "null"]},
+            "name": {"type": "string"},
+        }});
+        let mut args = serde_json::json!({
+            "flag": "False", "count": "120", "ratio": "0.5", "name": "true", "other": "1"
+        });
+        coerce_to_schema(&mut args, &schema);
+        assert_eq!(
+            args,
+            serde_json::json!({
+                "flag": false, "count": 120, "ratio": 0.5, "name": "true", "other": "1"
+            })
+        );
+        let mut odd = serde_json::json!({"flag": "maybe", "count": "many"});
+        coerce_to_schema(&mut odd, &schema);
+        assert_eq!(odd, serde_json::json!({"flag": "maybe", "count": "many"}));
     }
 }

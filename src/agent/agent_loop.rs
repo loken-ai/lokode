@@ -3522,6 +3522,7 @@ impl Agent {
                 None => format!("no tool called '{name}'"),
             });
         };
+        repair::coerce_to_schema(&mut args, &tool.args_schema());
         // Refused here rather than at the approval prompt: planning is a question about what would
         // happen, and answering it must not depend on somebody declining 15 times.
         // The refusal names the mode so the model plans instead of retrying, and reads as this
@@ -4326,6 +4327,27 @@ mod tests {
         assert!(
             why.starts_with("stopped after 2 steps: the answer was cut"),
             "{why}"
+        );
+    }
+
+    /// Numbers and booleans written as strings are read as the tool's schema wants them.
+    #[tokio::test]
+    async fn a_number_written_as_a_string_is_read_as_one() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.txt", "one\ntwo\nthree\n");
+        let backend = fake_backend(Vec::new()).await;
+        let agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        let out = agent
+            .dispatch_tool(
+                "1",
+                "read_file",
+                serde_json::json!({"path": "a.txt", "start_line": "2", "end_line": " 2 "}),
+            )
+            .await;
+        assert!(!out.is_error, "{out:?}");
+        assert!(
+            out.content.contains("two") && !out.content.contains("one"),
+            "{out:?}"
         );
     }
 
