@@ -719,7 +719,7 @@ pub struct AgentConfig {
     ///
     /// True when nobody stated a step limit.
     /// The turn then stops after as many steps without progress as it took to make its first
-    /// change, a change or a first read being progress,
+    /// change, a change or a first call being progress,
     /// or when its own steps no longer fit the window.
     /// `max_steps` stays the number of steps a turn is expected to take.
     pub steps_by_progress: bool,
@@ -756,9 +756,9 @@ pub struct TurnTally {
     pub first_change: Option<usize>,
     /// The step of the turn's last change, counted from one.
     pub last_change: usize,
-    /// The step of the turn's last change or first read of something, counted from one.
+    /// The step of the turn's last change or first call of something, counted from one.
     pub last_progress: usize,
-    /// Every read-only call this turn has asked for, by its arguments.
+    /// Every call this turn has asked for, by its name and arguments.
     pub asked: std::collections::HashSet<String>,
 }
 
@@ -2417,12 +2417,7 @@ impl Agent {
                         continue;
                     }
                     let key = repeat_key(call);
-                    let reads = !self
-                        .registry
-                        .get(&call.name)
-                        .map(|t| t.mutates())
-                        .unwrap_or(true);
-                    explored |= reads && self.this_turn.asked.insert(key.clone());
+                    explored |= self.this_turn.asked.insert(key.clone());
                     if let Some(known) = self.repeats.get(&key) {
                         // Handed what it was about to ask for, or told it is going in circles: the
                         // same answer, and only one of them is true.
@@ -2631,7 +2626,7 @@ impl Agent {
     /// A stated limit stops the turn at its value.
     /// Otherwise the turn stops after as many steps without progress as it took to make its
     /// first change.
-    /// A step makes progress when it changes a file or reads something the turn has not read.
+    /// A step makes progress when it changes a file or makes a call the turn has not made.
     /// A turn that has changed nothing yet is stopped by the window and by the rules for a turn
     /// that gets nowhere.
     fn out_of_steps(&self, step: usize) -> Option<String> {
@@ -2643,8 +2638,8 @@ impl Agent {
         let without = step - self.this_turn.last_progress;
         (without >= allowance).then(|| {
             format!(
-                "stopped after {step} steps: {without} without a change or a new read, as many \
-                 as the first change took"
+                "stopped after {step} steps: {without} without a change or a new call, as \
+                 many as the first change took"
             )
         })
     }
@@ -4156,7 +4151,7 @@ mod tests {
         assert!(h.root.join("f17.txt").exists());
     }
 
-    /// A turn left to its progress stops after as many steps without a change or a new read as
+    /// A turn left to its progress stops after as many steps without a change or a new call as
     /// its first change took.
     #[tokio::test]
     async fn a_turn_without_a_change_for_its_allowance_stops() {
@@ -4189,13 +4184,13 @@ mod tests {
         let events = drive(&mut agent, "look and write").await;
         let why = stopped(&events).expect("the turn was not stopped");
         assert!(
-            why.starts_with("stopped after 6 steps: 3 without a change or a new read"),
+            why.starts_with("stopped after 6 steps: 3 without a change or a new call"),
             "{why}"
         );
         assert_eq!(backend.seen.lock().unwrap().len(), 6);
     }
 
-    /// Reading what the turn has not read yet is progress: the turn goes on after its change.
+    /// A call the turn has not made yet is progress: the turn goes on after its change.
     #[tokio::test]
     async fn a_turn_that_reads_new_files_after_its_change_goes_on() {
         let h = Harness::new(Answer::Yes);
@@ -4227,6 +4222,36 @@ mod tests {
         let events = drive(&mut agent, "look and write").await;
         assert_eq!(stopped(&events), None);
         assert_eq!(backend.seen.lock().unwrap().len(), 8);
+    }
+
+    /// A command the turn has not run yet is progress, as a first read is.
+    #[tokio::test]
+    async fn a_turn_that_runs_new_commands_after_its_change_goes_on() {
+        let h = Harness::new(Answer::Yes);
+        h.write("r1.txt", "text");
+        let run = |i: usize| {
+            tool_step(
+                &format!("b{i}"),
+                "bash",
+                serde_json::json!({"cmd": format!("echo {i}")}),
+            )
+        };
+        let script = vec![
+            tool_step("r1", "read_file", serde_json::json!({"path": "r1.txt"})),
+            writes(1).remove(0),
+            run(1),
+            run(2),
+            run(3),
+            answer_step("done"),
+        ];
+        let backend = fake_backend(script).await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.session.set_window(131_072, 4096);
+        agent.cfg.max_steps = 16;
+        agent.cfg.steps_by_progress = true;
+        let events = drive(&mut agent, "write and check").await;
+        assert_eq!(stopped(&events), None);
+        assert_eq!(backend.seen.lock().unwrap().len(), 6);
     }
 
     /// A stated step limit stops the turn at its value, changes or not.

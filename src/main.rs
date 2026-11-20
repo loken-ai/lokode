@@ -64,8 +64,8 @@ struct Cli {
     no_grammar: bool,
 
     /// Stop each turn at this many steps.
-    /// Unset, a turn goes on while it changes files or reads new ones, and stops after as many
-    /// steps without either as its first change took.
+    /// Unset, a turn goes on while it changes files or makes calls it has not made, and stops
+    /// after as many steps without either as its first change took.
     #[arg(long)]
     max_steps: Option<usize>,
 

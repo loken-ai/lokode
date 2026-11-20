@@ -24,7 +24,7 @@ Plugins add commands, agents, skills, hooks, tool servers and language servers, 
 ## What it does
 
 lokode reads, searches and edits files under one root, runs commands in a sandbox and asks a language server.  
-Without `--max-steps`, a turn goes on while it changes files or reads new ones.  
+Without `--max-steps`, a turn goes on while it changes files or makes calls it has not made.  
 It stops after as many steps without either as its first change took, or when its own steps no longer fit the window.  
 `--max-steps` stops each turn at that many steps.
 

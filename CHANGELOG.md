@@ -6,6 +6,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Fixed
 
+- Interface: count a first run of a command as progress when no step limit is set.
 - Tools: read the places a coloured build output names after a write.
 
 ## [0.5.1] - 2026-11-20
