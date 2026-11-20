@@ -6,6 +6,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Changed
 
+- Tools: apply an edit whose text differs from the file only by spaces, and show the closest lines of a missing one.
 - Tools: stop copying build options from the model's cargo commands into the check after a write.
 
 ### Fixed

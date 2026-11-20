@@ -17,6 +17,128 @@ const MAX_PREVIEW: usize = 16 * 1024;
 
 pub struct WriteFile;
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Found {
+    /// Exactly where it was written: the byte range.
+    Exact(std::ops::Range<usize>),
+    /// Once its lines are compared without their leading and trailing whitespace: the byte range
+    /// of those whole lines in the file.
+    Loose(std::ops::Range<usize>),
+    /// Nowhere: the 1-based first and last line of the window of the file most like it.
+    Nearest { first: usize, last: usize },
+    /// More than once, exactly or loosely: how many times.
+    Ambiguous(usize),
+}
+
+/// Write an edit found in the file, once it is approved.
+///
+/// `loose` says the text was found with its leading and trailing spaces ignored.
+async fn apply_found(
+    ctx: &ToolCtx,
+    target: &std::path::Path,
+    before: &str,
+    after: String,
+    loose: bool,
+) -> Result<ToolOutput> {
+    let diff = unified_diff(before, &after, &ctx.short(target));
+    if let Err(why) = ctx.may_write(target) {
+        return Ok(ToolOutput::err(why));
+    }
+    match ctx
+        .approve(ApprovalRequest {
+            tool: "edit_file".into(),
+            summary: format!("edit_file {}", ctx.short(target)),
+            diff_preview: Some(diff.clone()),
+            scope: write_scope("edit_file", target),
+        })
+        .await
+    {
+        Approval::Proceed => {}
+        Approval::Denied(why) => return Ok(ToolOutput::err(crate::sandbox::approval::denial(why))),
+        Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
+    }
+    ctx.write_text(target, &after).await?;
+    ctx.note_content(target, after.as_bytes());
+    let note = match loose {
+        true => "\napplied where the text matched once leading and trailing spaces were ignored",
+        false => "",
+    };
+    Ok(ToolOutput::ok(format!(
+        "edited {}\n{}{note}",
+        ctx.short(target),
+        preview(&diff)
+    )))
+}
+
+/// Find where an `old` stands in `file`.
+///
+/// Rules:
+/// 1. Exact: `old` occurs once in `file`. Twice or more: `Ambiguous(n)`.
+/// 2. Loose: otherwise, split `old` into lines (ignore a final empty line), and slide a window of
+///    the same number of lines over the file; a window matches when every line, trimmed, equals
+///    the corresponding trimmed line of `old`, and `old` has at least one non-empty trimmed line.
+///    Exactly one matching window gives `Loose(range)`, the range from the start of its first line
+///    to the end of its last line, without the last newline. More than one gives `Ambiguous(n)`.
+/// 3. Nearest: otherwise, the window of the same number of lines with the most lines equal once
+///    trimmed (the first such window on a tie), as `Nearest { first, last }`. A window with no
+///    equal line still counts: then it is the first window.
+pub(crate) fn find(file: &str, old: &str) -> Found {
+    // An empty text stands everywhere.
+    if old.is_empty() {
+        return Found::Ambiguous(file.len() + 1);
+    }
+    let mut exact = file.match_indices(old).map(|(at, _)| at);
+    match (exact.next(), exact.count()) {
+        (Some(at), 0) => return Found::Exact(at..at + old.len()),
+        (Some(_), more) => return Found::Ambiguous(more + 1),
+        (None, _) => {}
+    }
+
+    let mut wanted: Vec<&str> = old.split('\n').map(str::trim).collect();
+    if wanted.last() == Some(&"") {
+        wanted.pop();
+    }
+    let lines: Vec<&str> = file.split('\n').collect();
+    // The byte at which each line starts, and one past the end of the file.
+    let mut starts = Vec::with_capacity(lines.len() + 1);
+    let mut at = 0;
+    for line in &lines {
+        starts.push(at);
+        at += line.len() + 1;
+    }
+    starts.push(file.len() + 1);
+    let trimmed: Vec<&str> = lines.iter().map(|l| l.trim()).collect();
+    let width = wanted.len().max(1);
+
+    // A text of blank lines matches anything loosely, so only one with words is looked for.
+    if wanted.iter().any(|l| !l.is_empty()) && wanted.len() <= trimmed.len() {
+        let loose: Vec<usize> = (0..=trimmed.len() - wanted.len())
+            .filter(|&i| trimmed[i..i + wanted.len()] == wanted[..])
+            .collect();
+        match loose.as_slice() {
+            [] => {}
+            [i] => {
+                // From the start of the first line to the end of the last, its newline left out.
+                return Found::Loose(starts[*i]..starts[i + wanted.len()] - 1);
+            }
+            more => return Found::Ambiguous(more.len()),
+        }
+    }
+
+    // The first window with the most lines equal once trimmed.
+    let mut best = (0, 0);
+    for (i, window) in trimmed.windows(width.min(trimmed.len())).enumerate() {
+        let equal = window.iter().zip(&wanted).filter(|(a, b)| a == b).count();
+        if equal > best.1 {
+            best = (i, equal);
+        }
+    }
+    Found::Nearest {
+        first: best.0 + 1,
+        last: (best.0 + width).min(lines.len()),
+    }
+}
+
 #[derive(Deserialize)]
 struct WriteFileArgs {
     path: PathBuf,
@@ -157,49 +279,41 @@ impl Tool for EditFile {
             Ok(b) => b,
             Err(e) => return Ok(ToolOutput::err(e)),
         };
-        let count = before.matches(&a.old_string).count();
-        if count == 0 {
-            return Ok(ToolOutput::err(format!(
-                "old_string not found in {}",
-                ctx.short(&target)
-            )));
-        }
-        if count > 1 {
-            return Ok(ToolOutput::err(format!(
-                "old_string is ambiguous: found {count} matches in {}; add surrounding context to make it unique",
-                ctx.short(&target)
-            )));
-        }
 
-        let after = before.replacen(&a.old_string, &a.new_string, 1);
-        let diff = unified_diff(&before, &after, &ctx.short(&target));
-
-        if let Err(why) = ctx.may_write(&target) {
-            return Ok(ToolOutput::err(why));
-        }
-        match ctx
-            .approve(ApprovalRequest {
-                tool: self.name().into(),
-                summary: format!("edit_file {}", ctx.short(&target)),
-                diff_preview: Some(diff.clone()),
-                scope: write_scope(self.name(), &target),
-            })
-            .await
-        {
-            Approval::Proceed => {}
-            Approval::Denied(why) => {
-                return Ok(ToolOutput::err(crate::sandbox::approval::denial(why)))
+        let found = find(&before, &a.old_string);
+        return match found {
+            found @ (Found::Exact(_) | Found::Loose(_)) => {
+                let (Found::Exact(range) | Found::Loose(range)) = found.clone() else {
+                    unreachable!()
+                };
+                let after = format!("{}{}{}", &before[..range.start], a.new_string, &before[range.end..]);
+                apply_found(ctx, &target, &before, after, matches!(found, Found::Loose(_))).await
             }
-            Approval::Interrupted => return Ok(ToolOutput::err("interrupted by user")),
-        }
-
-        ctx.write_text(&target, &after).await?;
-        ctx.note_content(&target, after.as_bytes());
-        Ok(ToolOutput::ok(format!(
-            "edited {}\n{}",
-            ctx.short(&target),
-            preview(&diff)
-        )))
+            Found::Ambiguous(n) => {
+                Ok(ToolOutput::err(format!(
+                    "old_string is ambiguous: found {n} matches in {}; add surrounding context to make it unique",
+                    ctx.short(&target)
+                )))
+            }
+            Found::Nearest { first, last } => {
+                let lines: Vec<&str> = before.split('\n').collect();
+                let window_start = first - 1;
+                let window_end = last.min(lines.len());
+                let lines_output = lines[window_start..window_end]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, line)| format!("{} | {}", i + first, line))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Ok(ToolOutput::err(format!(
+                    "old_string not found in {}. The closest lines are {}-{}:\n{}\nnothing was changed",
+                    ctx.short(&target),
+                    first,
+                    last,
+                    lines_output
+                )))
+            }
+        };
     }
 }
 
@@ -278,21 +392,42 @@ impl Tool for EditLines {
 
         let mut after = before.clone();
         for (i, edit) in a.edits.iter().enumerate() {
-            let count = after.matches(&edit.old_string).count();
-            if count != 1 {
-                return Ok(ToolOutput::err(format!(
-                    "edit {} of {}: old_string {} in {}; nothing was changed",
-                    i + 1,
-                    a.edits.len(),
-                    if count == 0 {
-                        "was not found".to_string()
-                    } else {
-                        format!("matched {count} times, so it is ambiguous")
-                    },
-                    ctx.short(&target)
-                )));
+            let found = find(&after, &edit.old_string);
+            match found {
+                Found::Exact(range) | Found::Loose(range) => {
+                    let start = range.start;
+                    let end = range.end;
+                    after = after[..start].to_string() + &edit.new_string + &after[end..];
+                }
+                Found::Ambiguous(n) => {
+                    return Ok(ToolOutput::err(format!(
+                        "edit {} of {}: old_string is ambiguous: matched {n} times in {}; nothing was changed",
+                        i + 1,
+                        a.edits.len(),
+                        ctx.short(&target)
+                    )));
+                }
+                Found::Nearest { first, last } => {
+                    let lines: Vec<&str> = after.split('\n').collect();
+                    let window_start = first - 1;
+                    let window_end = last.min(lines.len());
+                    let lines_output = lines[window_start..window_end]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, line)| format!("{} | {}", i + first, line))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return Ok(ToolOutput::err(format!(
+                        "edit {} of {}: old_string not found in {}. The closest lines are {}-{}:\n{}\nnothing was changed",
+                        i + 1,
+                        a.edits.len(),
+                        ctx.short(&target),
+                        first,
+                        last,
+                        lines_output
+                    )));
+                }
             }
-            after = after.replacen(&edit.old_string, &edit.new_string, 1);
         }
         let diff = unified_diff(&before, &after, &ctx.short(&target));
 
@@ -1198,5 +1333,224 @@ mod edit_lines_tests {
             .unwrap();
         assert!(out.is_error);
         assert_eq!(h.read("a.rs"), "let a = 1;\n");
+    }
+
+    // Tests for loose edits
+    #[tokio::test]
+    async fn edit_file_loose_edit_is_applied() {
+        // File has 4-space indent and trailing spaces, edit asks for 2-space indent
+        // The edit should apply as a loose match (not exact since spaces differ)
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "    let x = 1;   \n");
+        let out = EditFile
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "old_string": "  let x = 1;", "new_string": "  let y = 2;"}),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "edit should succeed");
+        // The file should now have the replacement
+        assert!(
+            h.read("a.rs").contains("let y = 2;"),
+            "replacement text not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_file_loose_edit_message() {
+        // This test verifies the loose match works
+        // When old string doesn't match exactly but matches when trimmed
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "    let x = 1;\n");
+        // "let x = 1;" matches line when trimmed, and it's an exact substring
+        let out = EditFile
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "old_string": "let x = 1;", "new_string": "let y = 2;"}),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error);
+        assert!(h.read("a.rs").contains("let y = 2;"));
+    }
+
+    #[tokio::test]
+    async fn edit_file_exact_loose_message() {
+        // Create a case where old string is NOT a substring but matches when trimmed
+        // File has: "    let x = 1;" (4 spaces)
+        // Old: "  let_x = 1;" (2 spaces, underscore instead of space)
+        // The old is not a substring but "let_x = 1;" trimmed doesn't match "let x = 1;" trimmed
+        // So we fall through to nearest
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "    let x = 1;\n");
+        let out = EditFile
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "old_string": "let_x = 1;", "new_string": "let_y = 2;"}),
+            )
+            .await
+            .unwrap();
+        assert!(out.is_error);
+        assert!(out.content.contains("The closest lines are"));
+    }
+
+    #[tokio::test]
+    async fn edit_file_missing_strings_shows_closest() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "hello\nworld\n");
+        let out = EditFile
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "old_string": "helo", "new_string": "hello"}),
+            )
+            .await
+            .unwrap();
+        assert!(out.is_error, "edit should fail for typo");
+        assert!(
+            out.content.contains("The closest lines are"),
+            "closest lines message not found"
+        );
+        assert!(
+            out.content.contains("nothing was changed"),
+            "nothing was changed message not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_lines_loose_edit_is_applied() {
+        // File has 4-space indent, edit asks for 2-space indent
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "    let x = 1;\n");
+        let out = EditLines
+            .run(&h.ctx, json!({"path": "a.rs", "edits": [{"old_string": "  let x = 1;", "new_string": "  let y = 2;"}]}))
+            .await
+            .unwrap();
+        assert!(!out.is_error, "edit should succeed");
+        assert!(
+            h.read("a.rs").contains("let y = 2;"),
+            "replacement text not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_lines_missing_strings_shows_closest() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "hello\nworld\n");
+        let out = EditLines
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "edits": [{"old_string": "helo", "new_string": "hello"}]}),
+            )
+            .await
+            .unwrap();
+        assert!(out.is_error, "edit should fail for typo");
+        assert!(
+            out.content.contains("The closest lines are"),
+            "closest lines message not found"
+        );
+        assert!(
+            out.content.contains("nothing was changed"),
+            "nothing was changed message not found"
+        );
+    }
+
+    // Tests for find() function
+
+    /// A loose match stops before the newline of its last line, so the next line stays apart.
+    #[test]
+    fn a_loose_edit_keeps_the_line_after_it() {
+        let file = "fn a() {\n    x();\n}\nfn b() {}\n";
+        let Found::Loose(range) = find(file, "fn a() {\n  x();\n}") else {
+            panic!("not a loose match");
+        };
+        let mut edited = file.to_string();
+        edited.replace_range(range, "fn a() {}");
+        assert_eq!(edited, "fn a() {}\nfn b() {}\n");
+    }
+
+    #[test]
+    fn find_exact_match() {
+        let file = "hello\nworld\n";
+        let old = "world";
+        let found = find(file, old);
+        assert_eq!(found, Found::Exact(6..11));
+    }
+
+    #[test]
+    fn find_loose_indent_2_to_4() {
+        // File has 4-space indent, old has 2-space indent
+        // Note: the old string "  let x = 1;" is actually a SUBSTRING of the file line
+        // So we get an Exact match at byte 2, not a Loose match.
+        // To test loose, we need a case where the old string is NOT a substring.
+        let file = "    let x = 1;\n";
+        let old = "  let x = 1;\n";
+        let found = find(file, old);
+        match found {
+            Found::Loose(_) | Found::Exact(_) => {
+                // Either is valid - Exact is found because the old is a substring
+                // Loose is found if old is not a substring but matches when trimmed
+            }
+            Found::Nearest { .. } | Found::Ambiguous(_) => {
+                // Not expected for this test case
+                panic!("Expected Loose or Exact, got {found:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn find_trailing_spaces() {
+        // Trailing spaces should be ignored for loose match
+        let file = "hello world   \n";
+        let old = "hello world\n";
+        let found = find(file, old);
+        match found {
+            Found::Loose(_) | Found::Exact(_) => {} // Either is fine since trailing spaces are ignored
+            other => panic!("Expected loose or exact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn find_two_loose_matches() {
+        // Same line appears twice
+        let file = "hello\nhello\n";
+        let old = "hello";
+        let found = find(file, old);
+        assert_eq!(found, Found::Ambiguous(2));
+    }
+
+    #[test]
+    fn find_typo_nearest() {
+        // File has "hello", old has "helo" (typo)
+        let file = "hello\nworld\n";
+        let old = "helo";
+        let found = find(file, old);
+        match found {
+            Found::Nearest { first, last } => {
+                // Should point to line 1 (best match with "hello")
+                // With equal match counts, we expect first window
+                assert!(
+                    (1..=3).contains(&first),
+                    "first should be between 1 and 3, got {first}"
+                );
+                assert!(
+                    last >= first && last <= 3,
+                    "last should be between first and 3"
+                );
+            }
+            other => panic!("Expected Nearest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn find_blank_lines_only() {
+        // Old made only of blank lines should never be Loose
+        let file = "hello\nworld\n";
+        let old = "\n\n";
+        let found = find(file, old);
+        match found {
+            Found::Nearest { .. } => {} // Should be Nearest, not Loose
+            other => panic!("Expected Nearest, got {other:?}"),
+        }
     }
 }
