@@ -4,6 +4,8 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-20
+
 ### Changed
 
 - Interface: end a turn by its progress when no step limit is set.
