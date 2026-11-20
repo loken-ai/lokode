@@ -172,7 +172,7 @@ impl Discovery {
         // The turn runs in plan mode, so every tool that changes anything refuses before it runs.
         // A model told to finish with numbered steps writes them instead of looking anything up.
         let mut system =
-            crate::agent::agent_loop::Agent::contract(&self.registry, self.protocol.get());
+            crate::agent::agent_loop::Agent::contract(&self.registry, self.protocol.get(), false);
         system.push_str(
             "\n\nYou are looking into a project so that later work does not have to. Read \
              and search only: every tool that writes, runs a command or reaches the \

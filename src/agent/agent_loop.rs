@@ -1009,7 +1009,7 @@ impl Agent {
         mode: Mode,
         instructions: Option<&str>,
     ) -> String {
-        let mut prompt = Self::contract(reg, protocol);
+        let mut prompt = Self::contract(reg, protocol, mode == Mode::Plan);
         // Stated in the contract rather than only enforced at dispatch: a model that knows it is
         // planning writes a plan, where one that is merely refused writes the same call again.
         if mode == Mode::Plan {
@@ -1035,7 +1035,8 @@ impl Agent {
     }
 
     /// What the model is told about calling tools, before anything about this turn.
-    pub(crate) fn contract(reg: &Registry, protocol: ToolProtocol) -> String {
+    /// `planning` says whether the tools offered only while planning are listed.
+    pub(crate) fn contract(reg: &Registry, protocol: ToolProtocol, planning: bool) -> String {
         match protocol {
             ToolProtocol::Native => format!(
                 "You are a local-first code agent driving a TUI on the user's machine.\n\
@@ -1043,7 +1044,7 @@ impl Agent {
                  Stop calling tools when the task is finished or when you only need to talk.\n\
                  {NEVER_ASK}\n\n\
                  {}",
-                tool_manifest(reg)
+                tool_manifest(reg, planning)
             ),
             ToolProtocol::Envelope => format!(
                 "You are a local-first code agent driving a TUI on the user's machine.\n\
@@ -1053,7 +1054,7 @@ impl Agent {
                  Tool results will be returned to you as role=tool messages on the next turn.\n\
                  {NEVER_ASK}\n\n\
                  {}",
-                tool_manifest(reg)
+                tool_manifest(reg, planning)
             ),
         }
     }
@@ -1875,7 +1876,7 @@ impl Agent {
         let ask = text.clone();
         self.session.push(Message::user(text));
 
-        let turn_schema = build_turn_schema(&self.registry);
+        let turn_schema = build_turn_schema(&self.registry, self.cfg.mode == Mode::Plan);
         let validator = Validator::new(&turn_schema).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         for step in 0.. {
@@ -3342,7 +3343,7 @@ impl Agent {
         let req = TurnRequest {
             model: self.cfg.model.clone(),
             messages: self.session.history.clone(),
-            tools: native.then(|| tool_specs(&self.registry)),
+            tools: native.then(|| tool_specs(&self.registry, self.cfg.mode == Mode::Plan)),
             grammar,
             max_tokens: self.cfg.max_answer_tokens as u32,
             // The model's own sampling, as the server applies it when none is asked for.
@@ -4787,6 +4788,17 @@ mod tests {
             assert_eq!(h.path("b.txt").exists(), approve, "approve: {approve}");
             assert_eq!(agent.cfg.mode == Mode::Act, approve);
             assert_eq!(tasks.get().await.len(), usize::from(approve));
+            // submit_plan is offered while planning and not once the plan is acted on.
+            let offers_plan = |request: &Value| {
+                request["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|t| t["function"]["name"] == "submit_plan")
+            };
+            let sent = backend.seen.lock().unwrap();
+            assert!(offers_plan(&sent[0]));
+            assert_eq!(offers_plan(&sent[1]), !approve, "approve: {approve}");
         }
     }
 

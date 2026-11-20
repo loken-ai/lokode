@@ -161,6 +161,11 @@ impl Tool for SubmitPlan {
         false
     }
 
+    /// Outside planning it is refused, so it is not offered there.
+    fn planning_only(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "While planning, put the finished plan to the user: a short summary and the steps, \
          each naming what it would run or change. Approved, planning ends, the steps become \

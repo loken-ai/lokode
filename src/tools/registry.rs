@@ -582,6 +582,11 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// Whether the tool is offered only while planning.
+    fn planning_only(&self) -> bool {
+        false
+    }
+
     /// Whether a call can leave files changed without being gated as a change itself.
     /// An example is a call that hands work to a session whose own tools ask.
     /// Such a call is recorded for `/undo` once it ends.
@@ -622,6 +627,11 @@ impl Registry {
     }
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
+    }
+    /// The tools offered to the model, while planning or not.
+    pub fn offered(&self, planning: bool) -> impl Iterator<Item = (&String, &Arc<dyn Tool>)> {
+        self.iter()
+            .filter(move |(_, tool)| planning || !tool.planning_only())
     }
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Arc<dyn Tool>)> {
         self.tools.iter()

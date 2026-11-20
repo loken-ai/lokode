@@ -19,9 +19,9 @@ use crate::tools::registry::Registry;
 /// Per-tool argument schemas are unioned via `oneOf` keyed on `name`.
 /// The `additionalProperties: false` and `required` constraints make the grammar fail closed
 /// if the model invents a tool.
-pub fn build_turn_schema(reg: &Registry) -> Value {
+pub fn build_turn_schema(reg: &Registry, planning: bool) -> Value {
     let mut variants = Vec::with_capacity(reg.len());
-    for (_, tool) in reg.iter() {
+    for (_, tool) in reg.offered(planning) {
         variants.push(json!({
             "type": "object",
             "properties": {
@@ -60,8 +60,8 @@ pub fn build_turn_schema(reg: &Registry) -> Value {
 /// The same per-tool schemas the envelope grammar is built from.
 /// They are carried in the field the server understands, not described in the preamble.
 /// Entries are sorted, so the order is stable and so is the prompt prefix.
-pub fn tool_specs(reg: &Registry) -> Vec<ToolSpec> {
-    let mut tools: Vec<_> = reg.iter().collect();
+pub fn tool_specs(reg: &Registry, planning: bool) -> Vec<ToolSpec> {
+    let mut tools: Vec<_> = reg.offered(planning).collect();
     tools.sort_by(|a, b| a.0.cmp(b.0));
     tools
         .into_iter()
@@ -80,9 +80,9 @@ pub fn tool_specs(reg: &Registry) -> Vec<ToolSpec> {
 ///
 /// The schema is the source of truth for structure.
 /// This block is semantic guidance only.
-pub fn tool_manifest(reg: &Registry) -> String {
+pub fn tool_manifest(reg: &Registry, planning: bool) -> String {
     let mut out = String::from("Tools available:\n");
-    let mut entries: Vec<_> = reg.iter().collect();
+    let mut entries: Vec<_> = reg.offered(planning).collect();
     entries.sort_by(|a, b| a.0.cmp(b.0));
     for (_, tool) in entries {
         out.push_str(&format!("- {}: {}\n", tool.name(), tool.description()));
@@ -99,7 +99,7 @@ mod tests {
     fn schema_includes_registered_tool() {
         let mut reg = Registry::new();
         reg.register(ListDir);
-        let schema = build_turn_schema(&reg);
+        let schema = build_turn_schema(&reg, false);
         let one_of = schema["properties"]["tool_calls"]["items"]["oneOf"]
             .as_array()
             .unwrap();
