@@ -17,6 +17,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Changed
 
+- Agent: free room in a long turn by shortening stale tool results first.
 - Tools: tell the model which lines a write changed instead of repeating it.
 - Tools: apply an edit whose text differs from the file only by spaces, and show the closest lines of a missing one.
 - Tools: stop copying build options from the model's cargo commands into the check after a write.

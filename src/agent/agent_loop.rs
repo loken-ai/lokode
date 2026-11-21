@@ -1940,6 +1940,7 @@ impl Agent {
                     .iter()
                     .rposition(|m| m.role == "user" && m.content == ask)
                     .unwrap_or(1);
+                self.session.lighten(from);
                 if self.session.would_cut_from(from) {
                     self.stop_on_steps(
                         &events,

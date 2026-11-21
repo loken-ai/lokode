@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use uuid::Uuid;
 
 use crate::agent::transcript::{Record, Transcript};
@@ -45,6 +47,39 @@ const KEEP_RECENT: usize = 4;
 /// Note left in place of what was dropped.
 /// It tells the model that the conversation it can see is not the whole of it.
 const ELISION: &str = "[earlier steps of this session were elided to fit the context window]";
+
+/// Note left in place of an old tool result, to fit the context window.
+const ELIDED_RESULT: &str =
+    "[result elided to fit the context window; call the tool again if you need it]";
+
+/// The tools whose call names a file that a later read supersedes.
+const NAMES_A_FILE: [&str; 4] = ["read_file", "write_file", "edit_file", "edit_lines"];
+
+/// The note for the tool result at `at` when a later call made it stale.
+///
+/// A read is stale once the same file is read or changed again.
+/// A command's output is stale once the same command runs again.
+fn superseded(calls: &HashMap<usize, (String, serde_json::Value)>, at: usize) -> Option<String> {
+    let (name, args) = calls.get(&at)?;
+    let mut later = calls.iter().filter(|(&i, _)| i > at).map(|(_, call)| call);
+    match name.as_str() {
+        "read_file" => {
+            let path = args.get("path")?;
+            later
+                .any(|(n, a)| NAMES_A_FILE.contains(&n.as_str()) && a.get("path") == Some(path))
+                .then(|| {
+                    format!(
+                        "[superseded: {} was read or changed again later]",
+                        path.as_str().unwrap_or_default()
+                    )
+                })
+        }
+        "bash" | "run_tests" => later
+            .any(|(n, a)| n == name && a == args)
+            .then(|| "[superseded: the same command ran again later]".to_string()),
+        _ => None,
+    }
+}
 
 /// What the history holds against its budget, in characters, and who wrote it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -257,7 +292,15 @@ impl Session {
     pub fn size_chars(&self) -> usize {
         self.history
             .iter()
-            .map(|m| m.content.len() + m.role.len())
+            .map(|m| {
+                let mut total = m.content.len() + m.role.len();
+                if let Some(calls) = &m.tool_calls {
+                    for call in calls {
+                        total += call.function.arguments.len();
+                    }
+                }
+                total
+            })
             .sum()
     }
 
@@ -416,6 +459,75 @@ impl Session {
         kept > target
     }
 
+    /// The call each tool result answers, by the index of the result: its name and arguments.
+    ///
+    /// A call whose arguments do not parse is left out.
+    fn calls_answered(&self) -> HashMap<usize, (String, serde_json::Value)> {
+        let mut by_id = HashMap::new();
+        for call in self
+            .history
+            .iter()
+            .flat_map(|m| m.tool_calls.iter().flatten())
+        {
+            if let Ok(args) = serde_json::from_str(&call.function.arguments) {
+                by_id.insert(call.id.as_str(), (call.function.name.clone(), args));
+            }
+        }
+        self.history
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.role == "tool")
+            .filter_map(|(at, m)| Some((at, by_id.get(m.tool_call_id.as_deref()?)?.clone())))
+            .collect()
+    }
+
+    /// Replace old tool results of the turn that starts at `from` by a short note, until the
+    /// history fits under the compaction target.
+    ///
+    /// Returns how many characters went.
+    ///
+    /// Superseded results go first, oldest first: a read of a file read or changed again since,
+    /// the output of a command run again since.
+    /// Then any old result longer than its note.
+    /// The calls stay, so the model still sees what it did.
+    /// The last `KEEP_RECENT` messages are never touched.
+    pub fn lighten(&mut self, from: usize) -> usize {
+        let start = self.size_chars();
+        if self.budget_chars == 0 || start <= self.budget_chars {
+            return 0;
+        }
+        let target = (self.budget_chars as f64 * COMPACT_TO) as usize;
+        let calls = self.calls_answered();
+        let end = self.history.len().saturating_sub(KEEP_RECENT);
+        let old: Vec<usize> = (from.max(1)..end)
+            .filter(|&at| self.history[at].role == "tool")
+            .collect();
+        let mut size = start;
+        for superseded_pass in [true, false] {
+            for &at in &old {
+                if size <= target {
+                    return start - size;
+                }
+                let content = &self.history[at].content;
+                if content.starts_with('[') {
+                    continue;
+                }
+                let note = match superseded_pass {
+                    true => match superseded(&calls, at) {
+                        Some(note) => note,
+                        None => continue,
+                    },
+                    false => ELIDED_RESULT.to_string(),
+                };
+                if note.len() < content.len() {
+                    size -= content.len() - note.len();
+                    self.history[at].content = note;
+                }
+            }
+        }
+        start - size
+    }
+
     /// Drop the oldest steps until the history is comfortably inside the budget, and
     /// report how many messages went.
     ///
@@ -457,6 +569,16 @@ impl Session {
         // Then the steps of the turn still running.
         // One long turn has no second user message to cut at.
         if self.size_chars() > target {
+            // Try to lighten tool results before dropping steps
+            let from = self
+                .history
+                .iter()
+                .rposition(|m| m.role == "user" && !m.content.starts_with(ELISION))
+                .unwrap_or(1);
+            self.lighten(from);
+            if self.size_chars() <= target {
+                return dropped;
+            }
             dropped += self.drop_oldest_steps();
         }
         dropped
@@ -932,6 +1054,135 @@ mod context_tests {
             notes[0].content.contains("[~] write b"),
             "{}",
             notes[0].content
+        );
+    }
+
+    use crate::backend::wire::{FunctionCall, ToolCall};
+
+    /// A call to `name` with `args`, answered by a result holding `result`.
+    fn step(s: &mut Session, id: &str, name: &str, args: &str, result: &str) {
+        let call = ToolCall {
+            id: id.into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: name.into(),
+                arguments: args.into(),
+            },
+        };
+        s.push(Message::assistant_calling("", vec![call]));
+        s.push(Message::tool(result, id));
+    }
+
+    /// A session over its budget: one big result at index 3, then the steps `more` adds, then
+    /// enough small messages that none of those steps is among the last kept.
+    fn over_budget(first: (&str, &str), more: impl FnOnce(&mut Session)) -> Session {
+        let mut s = Session::new("sys".into(), 1000, 0);
+        s.push(Message::user("ask"));
+        step(&mut s, "c1", first.0, first.1, &"x".repeat(5000));
+        more(&mut s);
+        for i in 0..KEEP_RECENT {
+            s.push(Message::user(format!("small {i}")));
+        }
+        assert!(
+            s.size_chars() > s.budget_chars(),
+            "the setup must be over budget"
+        );
+        s
+    }
+
+    #[test]
+    fn a_read_of_a_file_read_again_is_superseded() {
+        let mut s = over_budget(("read_file", r#"{"path": "a.rs"}"#), |s| {
+            step(s, "c2", "read_file", r#"{"path": "a.rs"}"#, "again");
+        });
+        assert!(s.lighten(1) > 0);
+        assert_eq!(
+            s.history[3].content,
+            "[superseded: a.rs was read or changed again later]"
+        );
+        assert_eq!(s.history[5].content, "again");
+    }
+
+    #[test]
+    fn a_read_of_a_file_changed_since_is_superseded() {
+        let mut s = over_budget(("read_file", r#"{"path": "a.rs"}"#), |s| {
+            step(s, "c2", "edit_file", r#"{"path": "a.rs"}"#, "edited a.rs");
+        });
+        s.lighten(1);
+        assert!(s.history[3].content.starts_with("[superseded: a.rs"));
+    }
+
+    #[test]
+    fn a_command_run_again_is_superseded() {
+        let mut s = over_budget(("bash", r#"{"cmd": "cargo build"}"#), |s| {
+            step(s, "c2", "bash", r#"{"cmd": "cargo build"}"#, "ok");
+        });
+        s.lighten(1);
+        assert_eq!(
+            s.history[3].content,
+            "[superseded: the same command ran again later]"
+        );
+    }
+
+    #[test]
+    fn a_result_nothing_supersedes_is_elided_only_when_needed() {
+        let mut s = over_budget(("read_file", r#"{"path": "a.rs"}"#), |_| {});
+        s.lighten(1);
+        assert_eq!(s.history[3].content, ELIDED_RESULT);
+        assert!(!s.would_cut_from(1));
+    }
+
+    #[test]
+    fn the_last_messages_and_those_before_the_turn_stay() {
+        let mut s = over_budget(("read_file", r#"{"path": "a.rs"}"#), |_| {});
+        let before = s.history.clone();
+        // The turn starts after the big result.
+        s.lighten(4);
+        assert_eq!(s.history[3].content, before[3].content);
+        let n = s.history.len();
+        for (now, was) in s.history[n - KEEP_RECENT..]
+            .iter()
+            .zip(&before[n - KEEP_RECENT..])
+        {
+            assert_eq!(now.content, was.content);
+        }
+    }
+
+    #[test]
+    fn a_history_within_its_budget_is_left_as_it_was() {
+        let mut s = Session::new("sys".into(), 100_000, 0);
+        s.push(Message::user("ask"));
+        step(&mut s, "c1", "read_file", r#"{"path": "a.rs"}"#, "text");
+        step(&mut s, "c2", "read_file", r#"{"path": "a.rs"}"#, "text");
+        let before: Vec<String> = s.history.iter().map(|m| m.content.clone()).collect();
+        assert_eq!(s.lighten(1), 0);
+        let after: Vec<String> = s.history.iter().map(|m| m.content.clone()).collect();
+        assert_eq!(before, after);
+    }
+
+    /// Test that size_chars counts function.arguments length.
+    #[test]
+    fn size_chars_counts_arguments() {
+        let mut s = Session::new("sys".into(), 8192, 4096);
+        s.push(Message::user("ask"));
+
+        let long_args = r#"{"path": "a.rs", "extra": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"#;
+        let call = ToolCall {
+            id: "c1".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "read_file".into(),
+                arguments: long_args.into(),
+            },
+        };
+        s.push(Message::assistant_calling("reading", vec![call.clone()]));
+
+        // The size should include the arguments length
+        let args_len = long_args.len();
+        let expected_min = "reading".len() + "assistant".len() + args_len;
+        assert!(
+            s.size_chars() >= expected_min,
+            "size should include arguments"
         );
     }
 }
