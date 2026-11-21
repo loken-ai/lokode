@@ -759,6 +759,8 @@ pub struct TurnTally {
     pub last_change: usize,
     /// The step of the turn's last change or first call of something, counted from one.
     pub last_progress: usize,
+    /// How many steps of the turn changed a file.
+    pub changes: usize,
     /// Every call this turn has asked for, by its name and arguments.
     pub asked: std::collections::HashSet<String>,
 }
@@ -2571,6 +2573,7 @@ impl Agent {
             if changed {
                 self.this_turn.first_change.get_or_insert(step + 1);
                 self.this_turn.last_change = step + 1;
+                self.this_turn.changes += 1;
             }
             if changed || explored {
                 self.this_turn.last_progress = step + 1;
@@ -2627,12 +2630,19 @@ impl Agent {
             return (step >= self.cfg.max_steps)
                 .then(|| format!("stopped after {step} steps (max_steps)"));
         }
-        let allowance = self.this_turn.first_change?;
+        // The turn has as long as its first change took, or as long as a change has taken it on
+        // average so far: a turn whose changes come slowly gets the steps they take.
+        let first = self.this_turn.first_change?;
+        let average = self
+            .this_turn
+            .last_change
+            .div_ceil(self.this_turn.changes.max(1));
+        let allowance = first.max(average);
         let without = step - self.this_turn.last_progress;
         (without >= allowance).then(|| {
             format!(
-                "stopped after {step} steps: {without} without a change or a new call, as \
-                 many as the first change took"
+                "stopped after {step} steps: {without} without a change or a new call, more \
+                 than the turn has needed to move on before"
             )
         })
     }
@@ -4246,6 +4256,46 @@ mod tests {
         let events = drive(&mut agent, "write and check").await;
         assert_eq!(stopped(&events), None);
         assert_eq!(backend.seen.lock().unwrap().len(), 6);
+    }
+
+    /// A turn whose changes come slowly gets as many steps without progress as a change has
+    /// taken it on average.
+    #[tokio::test]
+    async fn a_slow_turn_gets_the_steps_its_changes_take() {
+        let h = Harness::new(Answer::Yes);
+        for i in 1..=4 {
+            h.write(&format!("r{i}.txt"), "text");
+        }
+        let read = |i: usize| {
+            tool_step(
+                &format!("r{i}"),
+                "read_file",
+                serde_json::json!({"path": format!("r{i}.txt")}),
+            )
+        };
+        let mut w = writes(2);
+        let second = w.pop().unwrap();
+        let first = w.pop().unwrap();
+        // Changes at steps 1 and 6: 3 steps a change on average.
+        let script = vec![
+            first,
+            read(1),
+            read(2),
+            read(3),
+            read(4),
+            second,
+            read(1),
+            read(2),
+            answer_step("done"),
+        ];
+        let backend = fake_backend(script).await;
+        let mut agent = agent_with_all_tools(&h, &backend, ToolProtocol::Native);
+        agent.session.set_window(131_072, 4096);
+        agent.cfg.max_steps = 16;
+        agent.cfg.steps_by_progress = true;
+        let events = drive(&mut agent, "look and write").await;
+        assert_eq!(stopped(&events), None);
+        assert_eq!(backend.seen.lock().unwrap().len(), 9);
     }
 
     /// A stated step limit stops the turn at its value, changes or not.
