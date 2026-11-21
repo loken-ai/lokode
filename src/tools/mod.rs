@@ -13,4 +13,5 @@ pub mod search;
 pub mod skill;
 pub mod text;
 pub mod web_fetch;
+pub mod web_search;
 pub mod worktree;

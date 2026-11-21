@@ -407,6 +407,7 @@ mod tests {
             "write_file",
             "bash",
             "web_fetch",
+            "web_search",
             "run_tests",
             "apply_patch",
         ] {
@@ -434,7 +435,7 @@ mod tests {
             ApprovePolicy::Edits.decide("apply_patch"),
             ApprovalDecision::Once
         );
-        for tool in ["bash", "run_tests", "web_fetch"] {
+        for tool in ["bash", "run_tests", "web_fetch", "web_search"] {
             assert_eq!(
                 ApprovePolicy::Edits.decide(tool),
                 ApprovalDecision::Deny(None),
@@ -445,7 +446,7 @@ mod tests {
 
     #[test]
     fn all_means_all() {
-        for tool in ["write_file", "bash", "run_tests", "web_fetch"] {
+        for tool in ["write_file", "bash", "run_tests", "web_fetch", "web_search"] {
             assert_eq!(ApprovePolicy::All.decide(tool), ApprovalDecision::Once);
         }
     }
@@ -459,7 +460,14 @@ mod tests {
             ApprovePolicy::Edits,
             ApprovePolicy::All,
         ] {
-            for tool in ["write_file", "bash", "run_tests", "web_fetch", "edit_file"] {
+            for tool in [
+                "write_file",
+                "bash",
+                "run_tests",
+                "web_fetch",
+                "web_search",
+                "edit_file",
+            ] {
                 assert_ne!(policy.decide(tool), ApprovalDecision::Always);
             }
         }

@@ -470,6 +470,10 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
     }
     warnings.shrink_to_fit();
 
+    // Resolve web search configuration.
+    let (web_search, ws_warnings) = config::resolve_web_search(&file);
+    warnings.extend(ws_warnings);
+
     Ok(Resolved {
         show_config: cli.show_config,
         sources,
@@ -528,6 +532,7 @@ fn resolve(cli: Cli, root: PathBuf, file: config::FileConfig) -> Result<Resolved
             backends,
             accept_writes: cli.accept_edits || (starting_mode == "edits" && !cli.plan),
             sandbox,
+            web_search,
         },
     })
 }

@@ -609,6 +609,22 @@ pub struct WebSection {
     /// Hosts `web_fetch` may reach despite resolving to a private address.
     #[serde(default)]
     pub allow_hosts: Vec<String>,
+    /// Web search configuration, once set.
+    #[serde(default)]
+    pub search: Option<WebSearchSection>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct WebSearchSection {
+    /// searxng, brave, tavily, exa or kagi.
+    pub provider: Option<String>,
+    /// The address of the instance, for searxng only.
+    pub url: Option<String>,
+    /// A key written in the file itself, under the same rule as a backend's.
+    pub api_key: Option<String>,
+    /// The name of an environment variable to take the key from instead.
+    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -638,7 +654,8 @@ fn parse(text: &str, path: &Path) -> Result<FileConfig> {
 
     let has_key = cfg.backend.api_key.is_some()
         || cfg.backends.values().any(|b| b.api_key.is_some())
-        || cfg.dashboard.secret.is_some();
+        || cfg.dashboard.secret.is_some()
+        || cfg.web.search.as_ref().is_some_and(|s| s.api_key.is_some());
     if has_key && is_readable_by_others(path) {
         anyhow::bail!(
             "{} contains an api-key or a dashboard secret and is readable by others; \
@@ -718,6 +735,8 @@ pub fn merge(base: FileConfig, over: FileConfig) -> FileConfig {
                 hosts.extend(over.web.allow_hosts);
                 hosts
             },
+            // A project's table replaces the user's whole: a provider and its key go together.
+            search: over.web.search.or(base.web.search),
         },
         session: SessionSection {
             transcripts: over.session.transcripts.or(base.session.transcripts),
@@ -1285,6 +1304,109 @@ pub fn resolve_allow_hosts(cfg: &FileConfig, cli: Vec<String>) -> HashSet<String
         .collect()
 }
 
+/// Resolves the web search configuration, once `[web.search]` is given.
+///
+/// Returns `None` with warnings when the table is malformed, and `Some` with the config when it
+/// is valid. The warnings explain the resolution: no table, missing provider, missing URL for
+/// searxng, unexpected URL for other providers, or missing key for API-backed providers.
+pub fn resolve_web_search(
+    cfg: &FileConfig,
+) -> (Option<crate::tools::web_search::SearchConfig>, Vec<String>) {
+    let Some(search) = &cfg.web.search else {
+        return (None, Vec::new());
+    };
+    let mut warnings = Vec::new();
+    let Some(table) = &search.provider else {
+        warnings.push(
+            "[web.search] names no provider: searxng, brave, tavily, exa or kagi".to_string(),
+        );
+        return (None, warnings);
+    };
+    let provider = match crate::tools::web_search::Provider::parse(table) {
+        Some(p) => p,
+        None => {
+            warnings.push(
+                "web search provider must be one of: searxng, brave, tavily, exa or kagi"
+                    .to_string(),
+            );
+            return (None, warnings);
+        }
+    };
+    match provider {
+        crate::tools::web_search::Provider::Searxng => {
+            let url = match &search.url {
+                Some(u)
+                    if u.parse::<url::Url>()
+                        .is_ok_and(|p| matches!(p.scheme(), "http" | "https")) =>
+                {
+                    u.clone()
+                }
+                Some(u) => {
+                    warnings.push("searxng url must be an http(s) address, got: ".to_owned() + u);
+                    return (None, warnings);
+                }
+                None => {
+                    warnings.push("searxng requires a url".to_string());
+                    return (None, warnings);
+                }
+            };
+            (
+                Some(crate::tools::web_search::SearchConfig {
+                    provider,
+                    url: Some(url),
+                    key: None,
+                }),
+                warnings,
+            )
+        }
+        crate::tools::web_search::Provider::Brave
+        | crate::tools::web_search::Provider::Tavily
+        | crate::tools::web_search::Provider::Exa
+        | crate::tools::web_search::Provider::Kagi => {
+            if search.url.is_some() {
+                warnings.push(
+                    "only searxng takes a url; brave, tavily, exa and kagi have fixed addresses"
+                        .to_string(),
+                );
+                return (None, warnings);
+            }
+            let key = match resolve_web_search_key(search) {
+                Some(k) => k,
+                None => {
+                    let why = match &search.api_key_env {
+                        Some(v) => format!("{v} is not set"),
+                        None => "no api-key or api-key-env was given".to_string(),
+                    };
+                    warnings.push(format!("web search provider {table} needs a key: {why}"));
+                    return (None, warnings);
+                }
+            };
+            (
+                Some(crate::tools::web_search::SearchConfig {
+                    provider,
+                    url: None,
+                    key: Some(key),
+                }),
+                warnings,
+            )
+        }
+    }
+}
+
+/// The key for a web search provider, from the environment variable or from `api-key`.
+fn resolve_web_search_key(search: &WebSearchSection) -> Option<String> {
+    // Prefer the environment variable, then the file.
+    if let Some(env_name) = &search.api_key_env {
+        if let Some(value) = std::env::var(env_name)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+        {
+            return Some(value);
+        }
+    }
+    search.api_key.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1565,6 +1687,226 @@ mod tests {
         assert!(!sends_secret_in_clear("https://gpu.example.com"));
         assert!(!sends_secret_in_clear("http://127.0.0.1:11435"));
         assert!(!sends_secret_in_clear("http://localhost:11435"));
+    }
+
+    #[test]
+    fn resolve_web_search_no_table() {
+        let cfg: FileConfig = toml::from_str("").unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_none());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_web_search_ftp_url_and_no_provider_warn() {
+        let cfg: FileConfig =
+            toml::from_str("[web.search]\nprovider = \"searxng\"\nurl = \"ftp://h\"\n").unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_none());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let cfg: FileConfig = toml::from_str("[web.search]\nurl = \"https://h\"\n").unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_none());
+        assert!(warnings[0].contains("names no provider"), "{warnings:?}");
+    }
+
+    #[test]
+    fn resolve_web_search_unknown_provider() {
+        let text = r#"
+[web.search]
+provider = "google"
+"#;
+        let cfg: FileConfig = toml::from_str(text).unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_none());
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("searxng, brave, tavily, exa or kagi")));
+    }
+
+    #[test]
+    fn resolve_web_search_searxng_without_url() {
+        let text = r#"
+[web.search]
+provider = "searxng"
+"#;
+        let cfg: FileConfig = toml::from_str(text).unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_none());
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("searxng requires a url")));
+    }
+
+    #[test]
+    fn resolve_web_search_searxng_invalid_url() {
+        let text = r#"
+[web.search]
+provider = "searxng"
+url = "not-a-url"
+"#;
+        let cfg: FileConfig = toml::from_str(text).unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_none());
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("must be an http(s) address")));
+    }
+
+    #[test]
+    fn resolve_web_search_brave_with_url() {
+        let text = r#"
+[web.search]
+provider = "brave"
+url = "https://example.com"
+"#;
+        let cfg: FileConfig = toml::from_str(text).unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_none());
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("only searxng takes a url")));
+    }
+
+    #[test]
+    fn resolve_web_search_brave_without_key() {
+        let text = r#"
+[web.search]
+provider = "brave"
+"#;
+        let cfg: FileConfig = toml::from_str(text).unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_none());
+        assert!(warnings.iter().any(|w| w.contains("needs a key")));
+    }
+
+    #[test]
+    fn resolve_web_search_tavily_with_env_var() {
+        let unique_var = "LOKODE_TAVILIY_TEST_VAR_UNIQUE";
+        std::env::set_var(unique_var, "env-key-value");
+        let text = format!(
+            r#"
+[web.search]
+provider = "tavily"
+api-key-env = "{unique_var}"
+"#
+        );
+        let cfg: FileConfig = toml::from_str(&text).unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_some());
+        assert_eq!(
+            config.as_ref().unwrap().key,
+            Some("env-key-value".to_string())
+        );
+        assert!(warnings.is_empty());
+        std::env::remove_var(unique_var);
+    }
+
+    #[test]
+    fn resolve_web_search_searxng_good() {
+        let text = r#"
+[web.search]
+provider = "searxng"
+url = "https://searxng.example.com/"
+"#;
+        let cfg: FileConfig = toml::from_str(text).unwrap();
+        let (config, warnings) = resolve_web_search(&cfg);
+        assert!(config.is_some());
+        assert_eq!(
+            config.as_ref().unwrap().provider,
+            crate::tools::web_search::Provider::Searxng
+        );
+        assert_eq!(
+            config.as_ref().unwrap().url,
+            Some("https://searxng.example.com/".to_string())
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn merge_web_search_user_has_none_project_has_some() {
+        let user: FileConfig = toml::from_str("").unwrap();
+        let project: FileConfig = toml::from_str(
+            r#"
+[web.search]
+provider = "brave"
+api-key-env = "BRAVE_API_KEY"
+"#,
+        )
+        .unwrap();
+        let merged = merge(user, project);
+        assert!(merged.web.search.is_some());
+        assert_eq!(
+            merged.web.search.as_ref().unwrap().provider,
+            Some("brave".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_web_search_user_has_some_project_has_none() {
+        let user: FileConfig = toml::from_str(
+            r#"
+[web.search]
+provider = "exa"
+api-key = "user-key"
+"#,
+        )
+        .unwrap();
+        let project: FileConfig = toml::from_str("").unwrap();
+        let merged = merge(user, project);
+        assert!(merged.web.search.is_some());
+        assert_eq!(
+            merged.web.search.as_ref().unwrap().provider,
+            Some("exa".to_string())
+        );
+        assert_eq!(
+            merged.web.search.as_ref().unwrap().api_key,
+            Some("user-key".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_web_search_project_replaces_user() {
+        let user: FileConfig = toml::from_str(
+            r#"
+[web.search]
+provider = "brave"
+api-key-env = "USER_KEY"
+"#,
+        )
+        .unwrap();
+        let project: FileConfig = toml::from_str(
+            r#"
+[web.search]
+provider = "tavily"
+api-key = "project-key"
+"#,
+        )
+        .unwrap();
+        let merged = merge(user, project);
+        assert!(merged.web.search.is_some());
+        assert_eq!(
+            merged.web.search.as_ref().unwrap().provider,
+            Some("tavily".to_string())
+        );
+        assert_eq!(
+            merged.web.search.as_ref().unwrap().api_key,
+            Some("project-key".to_string())
+        );
+    }
+
+    /// A file with `[web.search]` holding `api-key` and readable by others is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_web_search_key_in_a_world_readable_file_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[web.search]\napi-key = \"secret\"\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let err = read(&path).unwrap_err().to_string();
+        assert!(err.contains("readable by others"), "unexpected: {err}");
     }
 }
 

@@ -84,6 +84,12 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         build_registry_with(cfg.root.clone(), tasks.clone(), cfg.lsp.clone());
     // The project's servers start reading it now, while the session opens.
     lsp.warm();
+    // Register web search tool if configured.
+    if let Some(config) = &cfg.web_search {
+        registry.register(crate::tools::web_search::WebSearch {
+            config: config.clone(),
+        });
+    }
     // Third-party tools go in after the built-ins.
     // A server cannot take a name the agent already relies on.
     // What answers the servers' questions is set once the backend is known below.

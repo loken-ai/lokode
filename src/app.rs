@@ -79,6 +79,8 @@ pub struct AppConfig {
     pub sandbox: Option<crate::sandbox::confine::Sandbox>,
     /// Whether the screen follows a session of a `lokode serve` rather than one of its own.
     pub remote: bool,
+    /// The resolved web search configuration, if configured.
+    pub web_search: Option<crate::tools::web_search::SearchConfig>,
 }
 
 /// How tools should be asked for.
