@@ -130,6 +130,16 @@ impl Harness {
         p
     }
 
+    /// Write bytes to a file.
+    pub fn write_bytes(&self, rel: &str, body: &[u8]) -> PathBuf {
+        let p = self.path(rel);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).expect("create parent");
+        }
+        std::fs::write(&p, body).expect("write bytes fixture");
+        p
+    }
+
     pub fn read(&self, rel: &str) -> String {
         std::fs::read_to_string(self.path(rel)).expect("read back")
     }

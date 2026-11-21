@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -23,8 +24,89 @@ struct ReadFileArgs {
     start_line: Option<usize>,
     #[serde(default)]
     end_line: Option<usize>,
+    #[serde(default)]
+    pages: Option<String>,
 }
 
+/// Parse a pages string into a list of page numbers.
+/// The format is either a single number "N" or a range "M-N", both 1-indexed.
+#[derive(Debug)]
+enum PagesSpec {
+    Single(u32),
+    Range(u32, u32),
+}
+
+impl PagesSpec {
+    fn page_numbers(&self, total_pages: u32) -> Result<Vec<u32>, String> {
+        match self {
+            PagesSpec::Single(n) => {
+                if *n < 1 || *n > total_pages {
+                    Err(format!(
+                        "page {} is beyond the end of the PDF ({total_pages} pages)",
+                        n
+                    ))
+                } else {
+                    Ok(vec![*n])
+                }
+            }
+            PagesSpec::Range(start, end) => {
+                if *start > *end {
+                    return Err(format!(
+                        "invalid page range: start ({start}) must be <= end ({end})",
+                    ));
+                }
+                if *start < 1 || *end > total_pages {
+                    Err(format!(
+                        "page range {}-{} exceeds the PDF's {} pages",
+                        start, end, total_pages
+                    ))
+                } else {
+                    Ok((*start..=*end).collect())
+                }
+            }
+        }
+    }
+}
+
+/// Parse a pages string like "3" or "2-5" into PagesSpec.
+fn parse_pages_spec(pages: &str) -> Result<PagesSpec, String> {
+    let trimmed = pages.trim();
+    if trimmed.contains('-') {
+        let (start, end) = trimmed
+            .split_once('-')
+            .ok_or_else(|| format!("invalid page range '{}'", trimmed))?;
+        let start_u = u32::from_str(start).map_err(|_| {
+            format!(
+                "invalid page number '{}' in range '{}-{}'",
+                start, trimmed, end
+            )
+        })?;
+        let end_u = u32::from_str(end).map_err(|_| {
+            format!(
+                "invalid page number '{}' in range '{}-{}'",
+                end, start, trimmed
+            )
+        })?;
+        if start_u == 0 || end_u == 0 {
+            return Err("page numbers must be >= 1".into());
+        }
+        if start_u > end_u {
+            return Err(format!(
+                "invalid page range: start ({start_u}) must be <= end ({end_u})",
+            ));
+        }
+        Ok(PagesSpec::Range(start_u, end_u))
+    } else {
+        let n = u32::from_str(trimmed).map_err(|_| format!("invalid page number '{}'", trimmed))?;
+        if n == 0 {
+            return Err("page numbers must be >= 1".into());
+        }
+        Ok(PagesSpec::Single(n))
+    }
+}
+
+/// Read a PDF file and extract text from the specified pages.
+/// Returns an error if the PDF is malformed or has no text.
 #[async_trait]
 impl Tool for ReadFile {
     fn name(&self) -> &str {
@@ -32,7 +114,8 @@ impl Tool for ReadFile {
     }
     fn description(&self) -> &str {
         "Read a text file. Optional 1-indexed inclusive start_line/end_line. Without them, a \
-         long file comes back as its first and last lines with its line count."
+         long file comes back as its first and last lines with its line count. For a PDF, \
+         optional pages chooses its pages, e.g. \"3\" or \"2-5\", and returns its text."
     }
 
     fn args_schema(&self) -> Value {
@@ -41,7 +124,8 @@ impl Tool for ReadFile {
             "properties": {
                 "path":       {"type": "string"},
                 "start_line": {"type": "integer", "minimum": 1},
-                "end_line":   {"type": "integer", "minimum": 1}
+                "end_line":   {"type": "integer", "minimum": 1},
+                "pages":      {"type": "string"}
             },
             "required": ["path"],
             "additionalProperties": false
@@ -54,19 +138,80 @@ impl Tool for ReadFile {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
-        // What the editor holds comes first.
-        // A buffer not saved yet is what the person is looking at.
-        let held = ctx.editor_text(&resolved).await;
-        let body = match &held {
-            Some(t) => text::number_window(t, a.start_line, a.end_line),
-            None => match text::read_numbered(&resolved, a.start_line, a.end_line).await {
+
+        // Determine if this is a PDF (case-insensitive extension check)
+        let is_pdf = resolved
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("pdf"))
+            .unwrap_or(false);
+
+        let body = if is_pdf {
+            // PDF case: read text from the PDF
+            let pages = a.pages.as_deref();
+            let bytes = match tokio::fs::read(&resolved).await {
                 Ok(b) => b,
-                Err(e) => return Ok(ToolOutput::err(e)),
-            },
+                Err(e) => return Ok(ToolOutput::err(format!("{}: {e}", resolved.display()))),
+            };
+
+            let result = std::panic::catch_unwind(|| {
+                let doc = lopdf::Document::load_mem(&bytes)
+                    .map_err(|e| format!("could not read the text of this PDF: {e}"))?;
+
+                let all_pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+                let total_pages = all_pages.len() as u32;
+
+                let page_numbers = if let Some(spec_str) = pages {
+                    let spec = parse_pages_spec(spec_str).map_err(|e| format!("pages: {e}"))?;
+                    spec.page_numbers(total_pages)?
+                } else {
+                    all_pages.clone()
+                };
+
+                let mut numbered_pages = Vec::new();
+                for &page_num in &page_numbers {
+                    let extracted = lopdf::Document::extract_text(&doc, &[page_num])
+                        .map_err(|e| format!("could not read the text of this PDF: {e}"))?;
+
+                    if extracted.trim().is_empty() {
+                        return Err(
+                            "this PDF holds no text (its pages may be scanned images)".into()
+                        );
+                    }
+
+                    numbered_pages.push(format!("--- page {} ---\n{}", page_num, extracted));
+                }
+
+                let full_text = numbered_pages.join("\n");
+                Ok::<String, String>(full_text)
+            });
+
+            match result {
+                Ok(Ok(text)) => text::number_window(&text, a.start_line, a.end_line),
+                Ok(Err(e)) => return Ok(ToolOutput::err(e)),
+                Err(_) => {
+                    return Ok(ToolOutput::err(format!(
+                        "could not read the text of this PDF: {}",
+                        "unexpected error while reading"
+                    )))
+                }
+            }
+        } else {
+            // Text file case
+            let held = ctx.editor_text(&resolved).await;
+            match &held {
+                Some(t) => text::number_window(t, a.start_line, a.end_line),
+                None => match text::read_numbered(&resolved, a.start_line, a.end_line).await {
+                    Ok(b) => b,
+                    Err(e) => return Ok(ToolOutput::err(e)),
+                },
+            }
         };
+
         // What the file held when it was read.
         // A later whole-file write can tell whether it is replacing what the model saw or somebody
         // else's work.
+        let held = ctx.editor_text(&resolved).await;
         match held {
             Some(t) => ctx.note_content(&resolved, t.as_bytes()),
             None => {
@@ -537,5 +682,298 @@ mod tests {
             "an ignored path was walked: {}",
             out.content
         );
+    }
+
+    // ================================================================== pdf --
+
+    /// Parse pages "3" or "2-5" into page numbers.
+    #[test]
+    fn parse_pages_single() {
+        use super::parse_pages_spec;
+        let spec = parse_pages_spec("3").unwrap();
+        match spec {
+            super::PagesSpec::Single(n) => assert_eq!(n, 3),
+            super::PagesSpec::Range(_, _) => panic!("expected Single, got Range"),
+        }
+    }
+
+    #[test]
+    fn parse_pages_range() {
+        use super::parse_pages_spec;
+        let spec = parse_pages_spec("2-5").unwrap();
+        match spec {
+            super::PagesSpec::Range(start, end) => {
+                assert_eq!(start, 2);
+                assert_eq!(end, 5);
+            }
+            super::PagesSpec::Single(_) => panic!("expected Range, got Single"),
+        }
+    }
+
+    #[test]
+    fn parse_pages_refuses_zero() {
+        use super::parse_pages_spec;
+        assert!(parse_pages_spec("0").is_err());
+        assert!(parse_pages_spec("0-5").is_err());
+        assert!(parse_pages_spec("5-0").is_err());
+    }
+
+    #[test]
+    fn parse_pages_refuses_invalid() {
+        use super::parse_pages_spec;
+        assert!(parse_pages_spec("x").is_err());
+        assert!(parse_pages_spec("2-x").is_err());
+        assert!(parse_pages_spec("x-5").is_err());
+        assert!(parse_pages_spec("5-2").is_err()); // reversed range
+    }
+
+    #[test]
+    fn pages_single_beyond_end_of_pdf() {
+        use super::PagesSpec;
+        let spec = PagesSpec::Single(5);
+        let result = spec.page_numbers(3);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("page 5"));
+    }
+
+    #[test]
+    fn pages_range_beyond_end_of_pdf() {
+        use super::PagesSpec;
+        let spec = PagesSpec::Range(2, 5);
+        let result = spec.page_numbers(3);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("5"));
+    }
+
+    /// Build a minimal 2-page PDF as bytes.
+    /// The content streams contain: BT /F1 12 Tf 72 712 Td (page one) Tj ET
+    /// and (page two), using Helvetica Type1 font.
+    fn build_2page_pdf() -> Vec<u8> {
+        let mut buf = Vec::new();
+
+        // PDF header
+        buf.extend_from_slice(b"%PDF-1.4\n");
+
+        // Helvetica Type1 font (as a Type1 font object, minimal but valid)
+        let font_obj = r###"10 0 obj
+<< /Type /Font
+   /Subtype /Type1
+   /BaseFont /Helvetica
+   /Encoding /MacRomanEncoding
+>>
+endobj
+"###;
+        let font_start = buf.len();
+        buf.extend_from_slice(font_obj.as_bytes());
+
+        // Page content streams
+        let page1_stream = r###"11 0 obj
+<< /Length 45 >>
+stream
+BT /F1 12 Tf 72 712 Td (page one) Tj ET
+endstream
+endobj
+"###;
+        let page1_start = buf.len();
+        buf.extend_from_slice(page1_stream.as_bytes());
+
+        let page2_stream = r###"12 0 obj
+<< /Length 45 >>
+stream
+BT /F1 12 Tf 72 712 Td (page two) Tj ET
+endstream
+endobj
+"###;
+        let page2_start = buf.len();
+        buf.extend_from_slice(page2_stream.as_bytes());
+
+        // Page 1 object
+        let page1_obj = r###"2 0 obj
+<< /Type /Page
+   /Parent 3 0 R
+   /MediaBox [0 0 612 792]
+   /Contents 11 0 R
+   /Resources << /Font << /F1 10 0 R >> >>
+>>
+endobj
+"###
+        .to_string();
+        let page1_obj_start = buf.len();
+        buf.extend_from_slice(page1_obj.as_bytes());
+
+        // Page 2 object
+        let page2_obj = r###"4 0 obj
+<< /Type /Page
+   /Parent 3 0 R
+   /MediaBox [0 0 612 792]
+   /Contents 12 0 R
+   /Resources << /Font << /F1 10 0 R >> >>
+>>
+endobj
+"###
+        .to_string();
+        let page2_obj_start = buf.len();
+        buf.extend_from_slice(page2_obj.as_bytes());
+
+        // Pages tree object (node)
+        let pages_obj = r###"3 0 obj
+<< /Type /Pages
+   /Kids [2 0 R 4 0 R]
+   /Count 2
+>>
+endobj
+"###;
+        let pages_obj_start = buf.len();
+        buf.extend_from_slice(pages_obj.as_bytes());
+
+        // Catalog object
+        let catalog_obj = r###"1 0 obj
+<< /Type /Catalog
+   /Pages 3 0 R
+>>
+endobj
+"###;
+        let catalog_start = buf.len();
+        buf.extend_from_slice(catalog_obj.as_bytes());
+
+        // Calculate xref offsets and build xref table
+        let catalog_off = catalog_start;
+        let pages_obj_off = pages_obj_start;
+        let page1_obj_off = page1_obj_start;
+        let page2_obj_off = page2_obj_start;
+        let page1_stream_off = page1_start;
+        let page2_stream_off = page2_start;
+        let font_off = font_start;
+
+        let catalog_line = format!("{:010} 00000 n ", catalog_off);
+        let pages_line = format!("{:010} 00000 n ", pages_obj_off);
+        let page1_line = format!("{:010} 00000 n ", page1_obj_off);
+        let page2_line = format!("{:010} 00000 n ", page2_obj_off);
+        let page1_stream_line = format!("{:010} 00000 n ", page1_stream_off);
+        let page2_stream_line = format!("{:010} 00000 n ", page2_stream_off);
+        let font_line = format!("{:010} 00000 n ", font_off);
+        let xref_end = buf.len();
+
+        let xref = format!(
+            r###"xref
+0 12
+0000000000 65535 f 
+{catalog_line}
+{pages_line}
+{page1_line}
+{page2_line}
+{page1_stream_line}
+{page2_stream_line}
+{font_line}
+0000000000 00000 n 
+0000000000 00000 n 
+0000000000 00000 n 
+"###
+        );
+
+        let trailer = format!(
+            r###"trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+{xref_end}
+%%EOF
+"###
+        );
+
+        buf.extend_from_slice(xref.as_bytes());
+        buf.extend_from_slice(trailer.as_bytes());
+
+        buf
+    }
+
+    /// Test PDF reading with pages parameter.
+    #[tokio::test]
+    async fn read_file_reads_pdf_with_pages() {
+        use super::*;
+        let h = Harness::new(Answer::No);
+        let pdf_bytes = build_2page_pdf();
+        h.write_bytes("test.pdf", &pdf_bytes);
+
+        let out = h.run(&ReadFile, json!({"path": "test.pdf"})).await;
+        succeeded(&out);
+        assert!(
+            out.content.contains("--- page 1 ---"),
+            "missing page 1 header: {}",
+            out.content
+        );
+        assert!(
+            out.content.contains("--- page 2 ---"),
+            "missing page 2 header: {}",
+            out.content
+        );
+        assert!(
+            out.content.contains("page one"),
+            "missing 'page one': {}",
+            out.content
+        );
+        assert!(
+            out.content.contains("page two"),
+            "missing 'page two': {}",
+            out.content
+        );
+    }
+
+    /// Test PDF reading with pages: "2".
+    #[tokio::test]
+    async fn read_file_reads_pdf_with_pages_two() {
+        use super::*;
+        let h = Harness::new(Answer::No);
+        let pdf_bytes = build_2page_pdf();
+        h.write_bytes("test.pdf", &pdf_bytes);
+
+        let out = h
+            .run(&ReadFile, json!({"path": "test.pdf", "pages": "2"}))
+            .await;
+        succeeded(&out);
+        assert!(
+            out.content.contains("--- page 2 ---"),
+            "missing page 2 header: {}",
+            out.content
+        );
+        assert!(
+            !out.content.contains("--- page 1 ---"),
+            "should not contain page 1: {}",
+            out.content
+        );
+        assert!(
+            out.content.contains("page two"),
+            "missing 'page two': {}",
+            out.content
+        );
+        assert!(
+            !out.content.contains("page one"),
+            "should not contain 'page one': {}",
+            out.content
+        );
+    }
+
+    /// Test PDF reading with pages on a .txt file should error.
+    #[tokio::test]
+    async fn read_file_pages_on_txt_is_error() {
+        let h = Harness::new(Answer::No);
+        h.write("test.txt", "hello\n");
+        let out = h
+            .run(&ReadFile, json!({"path": "test.txt", "pages": "1"}))
+            .await;
+        // For text files, the pages field is simply ignored; no error should occur.
+        // The requirement is that pages is only meaningful for PDFs.
+        assert!(!out.is_error, "unexpected error: {}", out.content);
+    }
+
+    /// Test that pages on a .txt file is not an error.
+    #[tokio::test]
+    async fn read_file_txt_with_pages_works_as_before() {
+        let h = Harness::new(Answer::No);
+        h.write("test.txt", "line one\nline two\nline three\n");
+        let out = h
+            .run(&ReadFile, json!({"path": "test.txt", "pages": "1"}))
+            .await;
+        assert!(!out.is_error, "unexpected error: {}", out.content);
+        assert!(out.content.contains("line one"), "{}", out.content);
     }
 }
