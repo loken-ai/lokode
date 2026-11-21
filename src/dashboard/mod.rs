@@ -7,6 +7,7 @@
 pub mod actions;
 pub mod client;
 pub mod discovery;
+pub mod noise;
 pub mod state;
 pub mod view;
 pub mod wire;

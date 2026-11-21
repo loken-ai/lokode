@@ -74,7 +74,9 @@ sha2 = "0.10"
 base64 = "0.22"
 # The sound that tells an action has finished
 rodio = { version = "0.23", default-features = false, features = ["playback", "wav", "mp3", "flac", "vorbis", "mp4"], optional = true }
-snow = { version = "0.10.0", default-features = false, features = ["default-resolver", "use-curve25519", "use-chacha20poly1305", "use-blake2", "use-getrandom"] }
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc"] }
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+blake2 = "0.10.6"
 hmac = "0.12"
 socket2 = { version = "0.6", features = ["all"] }
 

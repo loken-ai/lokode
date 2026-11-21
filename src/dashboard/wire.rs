@@ -16,21 +16,18 @@
 use std::io;
 use std::sync::Arc;
 
+use super::noise::{Handshake, Transport};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use snow::StatelessTransportState;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-
-/// The Noise protocol every channel speaks.
-const PATTERN: &str = "Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s";
 
 /// The most a Noise message holds, tag included.
 const FRAME: usize = 65535;
 
 /// The tag Noise adds to every message.
-const TAG: usize = 16;
+const TAG: usize = super::noise::TAG;
 
 /// The most one JSON message may take.
 const MAX_MESSAGE: usize = 64 * 1024 * 1024;
@@ -63,17 +60,11 @@ impl Group {
         hash.finalize().into()
     }
 
-    fn handshake(&self, initiator: bool) -> io::Result<snow::HandshakeState> {
-        let params = PATTERN.parse().map_err(io::Error::other)?;
-        let psk = self.psk();
-        let builder = snow::Builder::new(params)
-            .psk(0, &psk)
-            .map_err(io::Error::other)?;
-        match initiator {
-            true => builder.build_initiator(),
-            false => builder.build_responder(),
-        }
-        .map_err(io::Error::other)
+    /// A handshake with a fresh ephemeral key, as one end or the other.
+    fn handshake(&self, initiator: bool) -> io::Result<Handshake> {
+        let mut ephemeral = [0u8; 32];
+        getrandom::fill(&mut ephemeral).map_err(|e| io::Error::other(e.to_string()))?;
+        Ok(Handshake::new(initiator, self.psk(), ephemeral))
     }
 }
 
@@ -96,14 +87,13 @@ async fn read_frame(stream: &mut OwnedReadHalf) -> io::Result<Vec<u8>> {
 pub async fn connect(stream: TcpStream, group: &Group) -> io::Result<(Sender, Receiver)> {
     let mut handshake = group.handshake(true)?;
     let (mut read, mut write) = stream.into_split();
-    let mut buf = vec![0u8; FRAME];
-    let n = handshake
-        .write_message(&[], &mut buf)
-        .map_err(io::Error::other)?;
-    write_frame(&mut write, &buf[..n]).await?;
+    let first = handshake
+        .write_message(&[])
+        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    write_frame(&mut write, &first).await?;
     let answer = read_frame(&mut read).await?;
     handshake
-        .read_message(&answer, &mut buf)
+        .read_message(&answer)
         .map_err(|_| io::Error::other("the other end does not hold the same secret"))?;
     finish(handshake, read, write)
 }
@@ -112,27 +102,26 @@ pub async fn connect(stream: TcpStream, group: &Group) -> io::Result<(Sender, Re
 pub async fn accept(stream: TcpStream, group: &Group) -> io::Result<(Sender, Receiver)> {
     let mut handshake = group.handshake(false)?;
     let (mut read, mut write) = stream.into_split();
-    let mut buf = vec![0u8; FRAME];
     let first = read_frame(&mut read).await?;
     handshake
-        .read_message(&first, &mut buf)
+        .read_message(&first)
         .map_err(|_| io::Error::other("the other end does not hold the same secret"))?;
-    let n = handshake
-        .write_message(&[], &mut buf)
-        .map_err(io::Error::other)?;
-    write_frame(&mut write, &buf[..n]).await?;
+    let answer = handshake
+        .write_message(&[])
+        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    write_frame(&mut write, &answer).await?;
     finish(handshake, read, write)
 }
 
 fn finish(
-    handshake: snow::HandshakeState,
+    handshake: Handshake,
     read: OwnedReadHalf,
     write: OwnedWriteHalf,
 ) -> io::Result<(Sender, Receiver)> {
     let state = Arc::new(
         handshake
-            .into_stateless_transport_mode()
-            .map_err(io::Error::other)?,
+            .into_transport()
+            .map_err(|e| io::Error::other(format!("{e:?}")))?,
     );
     Ok((
         Sender {
@@ -151,7 +140,7 @@ fn finish(
 /// The sending half of a channel.
 pub struct Sender {
     write: OwnedWriteHalf,
-    state: Arc<StatelessTransportState>,
+    state: Arc<Transport>,
     nonce: u64,
 }
 
@@ -166,7 +155,6 @@ impl Sender {
         let mut pieces = bytes.chunks(piece).peekable();
         // An empty message is one empty piece.
         let empty: &[u8] = &[];
-        let mut buf = vec![0u8; FRAME];
         let mut plain = Vec::with_capacity(FRAME);
         loop {
             let (chunk, last) = match pieces.next() {
@@ -176,12 +164,9 @@ impl Sender {
             plain.clear();
             plain.push(last as u8);
             plain.extend_from_slice(chunk);
-            let n = self
-                .state
-                .write_message(self.nonce, &plain, &mut buf)
-                .map_err(io::Error::other)?;
+            let sealed = self.state.seal(self.nonce, &plain);
             self.nonce += 1;
-            write_frame(&mut self.write, &buf[..n]).await?;
+            write_frame(&mut self.write, &sealed).await?;
             if last {
                 return Ok(());
             }
@@ -192,7 +177,7 @@ impl Sender {
 /// The receiving half of a channel.
 pub struct Receiver {
     read: OwnedReadHalf,
-    state: Arc<StatelessTransportState>,
+    state: Arc<Transport>,
     nonce: u64,
 }
 
@@ -200,7 +185,6 @@ impl Receiver {
     /// The next JSON message, or `None` when the other end has closed.
     pub async fn recv(&mut self) -> io::Result<Option<Value>> {
         let mut message = Vec::new();
-        let mut plain = vec![0u8; FRAME];
         loop {
             let frame = match read_frame(&mut self.read).await {
                 Ok(frame) => frame,
@@ -209,12 +193,12 @@ impl Receiver {
                 }
                 Err(e) => return Err(e),
             };
-            let n = self
+            let plain = self
                 .state
-                .read_message(self.nonce, &frame, &mut plain)
+                .open(self.nonce, &frame)
                 .map_err(|_| io::Error::other("a frame could not be decrypted"))?;
             self.nonce += 1;
-            let Some((&last, piece)) = plain[..n].split_first() else {
+            let Some((&last, piece)) = plain.split_first() else {
                 return Err(io::Error::other("a frame is empty"));
             };
             message.extend_from_slice(piece);
