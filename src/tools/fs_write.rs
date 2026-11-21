@@ -247,10 +247,13 @@ pub struct EditFile;
 struct EditFileArgs {
     path: PathBuf,
     /// Existing substring to replace.
-    /// Must occur exactly once.
+    /// Must occur exactly once, unless `replace_all` is true.
     old_string: String,
     /// Replacement.
     new_string: String,
+    /// Replace all exact occurrences of `old_string` in the file.
+    #[serde(default)]
+    replace_all: bool,
 }
 
 #[async_trait]
@@ -262,7 +265,8 @@ impl Tool for EditFile {
         true
     }
     fn description(&self) -> &str {
-        "Replace a unique substring in a file. Fails if old_string is not found or is ambiguous."
+        "Replace a unique substring in a file. Fails if old_string is not found or is ambiguous. \
+         When `replace_all` is true, replace every exact occurrence."
     }
 
     fn args_schema(&self) -> Value {
@@ -271,7 +275,8 @@ impl Tool for EditFile {
             "properties": {
                 "path":       {"type": "string"},
                 "old_string": {"type": "string"},
-                "new_string": {"type": "string"}
+                "new_string": {"type": "string"},
+                "replace_all": {"type": "boolean"}
             },
             "required": ["path", "old_string", "new_string"],
             "additionalProperties": false
@@ -290,6 +295,20 @@ impl Tool for EditFile {
         };
 
         let found = find(&before, &a.old_string);
+        // Every exact occurrence is replaced when there is at least one.
+        // With none, the edit is found loosely or reported as for a single replacement.
+        if a.replace_all {
+            let count = before.matches(&a.old_string).count();
+            if count > 0 {
+                let after = before.replace(&a.old_string, &a.new_string);
+                let mut out = apply_found(ctx, &target, &before, after, false).await?;
+                if count > 1 && !out.is_error {
+                    out.content
+                        .push_str(&format!("\nreplaced {count} occurrences"));
+                }
+                return Ok(out);
+            }
+        }
         return match found {
             found @ (Found::Exact(_) | Found::Loose(_)) => {
                 let (Found::Exact(range) | Found::Loose(range)) = found.clone() else {
@@ -1167,6 +1186,86 @@ mod tests {
             )
             .await;
         refused(&out, "not found");
+    }
+
+    /// With no exact occurrence, replace_all applies an edit found once its spaces are ignored.
+    #[tokio::test]
+    async fn edit_file_replace_all_finds_a_loose_match() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "fn a() {\n    x();\n}\n");
+        let out = EditFile
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "old_string": "x();  ", "new_string": "    y();", "replace_all": true}),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{out:?}");
+        assert_eq!(h.read("a.rs"), "fn a() {\n    y();\n}\n");
+    }
+
+    #[tokio::test]
+    async fn edit_file_replace_all_with_three_occurrences() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "same\nsame\nsame\n");
+        let out = EditFile
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "old_string": "same", "new_string": "changed", "replace_all": true}),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{out:?}");
+        assert_eq!(h.read("a.rs"), "changed\nchanged\nchanged\n");
+        assert!(out.content.contains("replaced 3 occurrences"), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn edit_file_replace_all_with_one_occurrence() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "same\n");
+        let out = EditFile
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "old_string": "same", "new_string": "changed", "replace_all": true}),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{out:?}");
+        assert_eq!(h.read("a.rs"), "changed\n");
+        assert!(!out.content.contains("replaced"), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn edit_file_replace_all_with_no_occurrences() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "hello\n");
+        let out = EditFile
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "old_string": "goodbye", "new_string": "x", "replace_all": true}),
+            )
+            .await;
+        let out = out.unwrap();
+        assert!(out.is_error, "should fail when nothing found");
+        assert!(out.content.contains("not found"), "{out:?}");
+        assert!(out.content.contains("closest lines"), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn edit_file_without_replace_all_still_refuses_ambiguous() {
+        let h = Harness::new(Answer::Yes);
+        h.write("a.rs", "same\nsame\n");
+        let out = EditFile
+            .run(
+                &h.ctx,
+                json!({"path": "a.rs", "old_string": "same", "new_string": "changed"}),
+            )
+            .await;
+        let out = out.unwrap();
+        assert!(out.is_error);
+        assert!(out.content.contains("ambiguous"), "{out:?}");
+        assert_eq!(h.read("a.rs"), "same\nsame\n", "file should not be changed");
     }
 
     // ---------------------------------------------------------------- apply_patch --
