@@ -1,3 +1,4 @@
+pub mod background;
 pub mod bash;
 pub mod delegate;
 pub mod fs_read;

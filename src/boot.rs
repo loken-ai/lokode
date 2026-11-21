@@ -668,6 +668,8 @@ pub fn build_registry_with(
     });
     reg.register(ApplyPatch);
     reg.register(Bash);
+    reg.register(crate::tools::background::ProcessOutput);
+    reg.register(crate::tools::background::ProcessStop);
     reg.register(RunTests);
     reg.register(WebFetch);
     // The language-server tools are registered only where a server can answer for the project.

@@ -24,6 +24,9 @@ struct BashArgs {
     timeout_s: Option<u64>,
     #[serde(default)]
     outside_sandbox: bool,
+    /// Start the command and answer at once; its output is read with process_output.
+    #[serde(default)]
+    background: bool,
 }
 
 #[async_trait]
@@ -39,7 +42,8 @@ impl Tool for Bash {
             crate::shell::Dialect::Posix => {
                 "Run a shell command. Requires user approval. cwd must be inside project root. It \
                  runs in a sandbox where there is one; outside_sandbox asks the user to run it \
-                 unconfined, for a command the sandbox stopped."
+                 unconfined, for a command the sandbox stopped. background starts it and answers \
+                 at once with a process id for process_output and process_stop."
             }
             crate::shell::Dialect::PowerShell => {
                 "Run a PowerShell command. Requires user approval. cwd must be inside project \
@@ -56,7 +60,8 @@ impl Tool for Bash {
                 "cmd":       {"type": "string"},
                 "cwd":       {"type": "string"},
                 "timeout_s": {"type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_S},
-                "outside_sandbox": {"type": "boolean"}
+                "outside_sandbox": {"type": "boolean"},
+                "background": {"type": "boolean"}
             },
             "required": ["cmd"],
             "additionalProperties": false
@@ -65,6 +70,11 @@ impl Tool for Bash {
 
     async fn run(&self, ctx: &ToolCtx, args: Value) -> Result<ToolOutput> {
         let a: BashArgs = serde_json::from_value(args)?;
+        if a.background && cfg!(not(unix)) {
+            return Ok(ToolOutput::err(
+                "background commands are not supported here",
+            ));
+        }
         let cwd = match a.cwd.as_ref() {
             Some(p) => match allowlist::resolve(&ctx.root, p, true) {
                 Ok(resolved) => resolved,
@@ -149,6 +159,11 @@ impl Tool for Bash {
             Err(e) => return Ok(ToolOutput::err(format!("spawn failed: {e}"))),
         };
         let mut group = Group::of(&child);
+        if a.background {
+            let id =
+                crate::tools::background::start(a.cmd.clone(), child, group, ctx.max_output_chars);
+            return Ok(ToolOutput::ok(format!("started process {id}\n{}", a.cmd)));
+        }
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let collect = async {

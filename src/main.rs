@@ -329,10 +329,16 @@ fn main() -> Result<()> {
                 prompt,
                 cfg.approve,
                 cfg.output,
-            ))?;
-            std::process::exit(code);
+            ));
+            // The background commands of the session end with it.
+            lokode::tools::background::stop_all();
+            std::process::exit(code?);
         }
-        None => runtime.block_on(app::run(cfg.app)),
+        None => {
+            let ended = runtime.block_on(app::run(cfg.app));
+            lokode::tools::background::stop_all();
+            ended
+        }
     }
 }
 
