@@ -161,6 +161,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         tail: Default::default(),
         sandbox: sandbox.map(Arc::new),
         planning: cfg.mode == crate::agent::agent_loop::Mode::Plan,
+        sees_images: false,
     };
 
     let earlier = open_session(cfg)?;
@@ -471,7 +472,7 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         })
         .transpose()?;
 
-    let agent = Agent {
+    let mut agent = Agent {
         this_turn: Default::default(),
         repairs: crate::agent::repairs::Repairs::open(crate::paths::state_dir(), &cfg.root),
         background: background_provider(cfg).ok(),
@@ -526,6 +527,9 @@ pub async fn boot(cfg: &AppConfig) -> Result<Booted> {
         mcp: mcp_clients.clone(),
         turn: 0,
     };
+
+    // Learn whether the model takes images.
+    agent.learn_vision().await;
 
     Ok(Booted {
         session_approvals,

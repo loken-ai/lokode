@@ -110,4 +110,11 @@ pub trait Provider: Send + Sync {
     /// This returns the error rather than an empty list, which would read as a server that
     /// serves nothing.
     async fn models(&self) -> Result<Vec<String>>;
+
+    /// Whether `model` takes images, when the backend says.
+    ///
+    /// `None` when it has no way to say.
+    async fn sees_images(&self, _model: &str) -> Option<bool> {
+        None
+    }
 }

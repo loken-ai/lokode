@@ -71,6 +71,21 @@ impl AnthropicProvider {
     }
 }
 
+/// The content of a user or tool message: its text alone, or with its images a list of blocks.
+fn content_of(m: &crate::backend::wire::Message) -> Value {
+    if m.images.is_empty() {
+        return m.content.clone().into();
+    }
+    let mut blocks = vec![json!({"type": "text", "text": m.content})];
+    blocks.extend(m.images.iter().map(|img| {
+        json!({
+            "type": "image",
+            "source": {"type": "base64", "media_type": img.media_type, "data": img.data},
+        })
+    }));
+    Value::Array(blocks)
+}
+
 /// Turn the internal conversation into an Anthropic request body.
 ///
 /// It is separate from the request so it can be tested without a server.
@@ -96,7 +111,7 @@ pub fn render(req: &TurnRequest, stream: bool) -> Value {
                 let block = json!({
                     "type": "tool_result",
                     "tool_use_id": m.tool_call_id.clone().unwrap_or_default(),
-                    "content": m.content,
+                    "content": content_of(m),
                 });
                 match messages.last_mut() {
                     Some(last)
@@ -134,7 +149,9 @@ pub fn render(req: &TurnRequest, stream: bool) -> Value {
                     messages.push(json!({"role": "assistant", "content": blocks}));
                 }
             }
-            _ => messages.push(json!({"role": "user", "content": m.content})),
+            _ => {
+                messages.push(json!({"role": "user", "content": content_of(m)}));
+            }
         }
     }
 
@@ -340,6 +357,11 @@ impl Provider for AnthropicProvider {
                     .collect()
             })
             .unwrap_or_default())
+    }
+
+    async fn sees_images(&self, _model: &str) -> Option<bool> {
+        // Anthropic models take images
+        Some(true)
     }
 
     async fn stream(&self, req: TurnRequest) -> Result<ChunkStream> {
@@ -666,5 +688,73 @@ mod tests {
     fn unknown_events_are_ignored_rather_than_failing_the_turn() {
         assert!(ev(r#"{"type":"ping"}"#).is_empty());
         assert!(ev(r#"{"type":"content_block_stop","index":0}"#).is_empty());
+    }
+
+    /// A tool result with 1 image gives a tool_result with content array holding text then image.
+    #[test]
+    fn tool_result_with_image_has_content_array() {
+        let images = vec![crate::backend::wire::Image {
+            media_type: "image/png".to_string(),
+            data: "AAAA".to_string(),
+        }];
+        let msg = Message::tool("AAA", "c1").with_images(images);
+        let body = render(&req(vec![msg]), true);
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1);
+        let block = &blocks[0];
+        assert_eq!(block["type"], "tool_result");
+        assert_eq!(block["tool_use_id"], "c1");
+        let content = &block["content"];
+        assert!(content.is_array(), "content should be array with image");
+        let content_arr = content.as_array().unwrap();
+        assert_eq!(content_arr.len(), 2);
+        assert_eq!(content_arr[0]["type"], "text");
+        assert_eq!(content_arr[0]["text"], "AAA");
+        assert_eq!(content_arr[1]["type"], "image");
+        assert_eq!(content_arr[1]["source"]["type"], "base64");
+        assert_eq!(content_arr[1]["source"]["media_type"], "image/png");
+        assert_eq!(content_arr[1]["source"]["data"], "AAAA");
+    }
+
+    /// Consecutive tool results with images still join one user message.
+    #[test]
+    fn consecutive_tools_with_images_still_coalesce() {
+        let images = vec![crate::backend::wire::Image {
+            media_type: "image/png".to_string(),
+            data: "AAAA".to_string(),
+        }];
+        let body = render(
+            &req(vec![
+                Message::user("read them"),
+                Message::tool("AAA", "c1").with_images(images.clone()),
+                Message::tool("BBB", "c2"),
+            ]),
+            true,
+        );
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 2, "results should still coalesce");
+        let blocks = msgs[1]["content"].as_array().unwrap();
+        assert_eq!(
+            blocks.len(),
+            2,
+            "both results should be in the same message"
+        );
+    }
+
+    /// A user message with an image gives a content array.
+    #[test]
+    fn user_message_with_image_has_content_array() {
+        let images = vec![crate::backend::wire::Image {
+            media_type: "image/png".to_string(),
+            data: "AAAA".to_string(),
+        }];
+        let msg = Message::user("look").with_images(images);
+        let body = render(&req(vec![msg]), true);
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "look");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
     }
 }

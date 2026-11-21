@@ -2,6 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// An image a message carries, as its bytes in base64.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Image {
+    /// The media type, such as `image/png`.
+    pub media_type: String,
+    /// The bytes, in standard base64 with padding.
+    pub data: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
@@ -17,6 +26,8 @@ pub struct Message {
     /// A server that checks rejects one whose `tool_call_id` matches nothing it was shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
 }
 
 /// One call, as the wire carries it.
@@ -65,6 +76,7 @@ impl Message {
             name: None,
             tool_call_id: None,
             tool_calls: None,
+            images: Vec::new(),
         }
     }
     pub fn user(content: impl Into<String>) -> Self {
@@ -74,6 +86,7 @@ impl Message {
             name: None,
             tool_call_id: None,
             tool_calls: None,
+            images: Vec::new(),
         }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
@@ -83,6 +96,7 @@ impl Message {
             name: None,
             tool_call_id: None,
             tool_calls: None,
+            images: Vec::new(),
         }
     }
     /// An assistant turn that asked for tools to be run.
@@ -93,6 +107,7 @@ impl Message {
             name: None,
             tool_call_id: None,
             tool_calls: Some(calls),
+            images: Vec::new(),
         }
     }
     pub fn tool(content: impl Into<String>, id: impl Into<String>) -> Self {
@@ -102,8 +117,66 @@ impl Message {
             name: None,
             tool_call_id: Some(id.into()),
             tool_calls: None,
+            images: Vec::new(),
         }
     }
+    pub fn with_images(mut self, images: Vec<Image>) -> Self {
+        self.images = images;
+        self
+    }
+}
+
+/// The messages in OpenAI's dialect.
+///
+/// The OpenAI format accepts text only in a tool message.
+/// The images of a run of consecutive tool messages follow it, in one user message.
+fn openai_messages<S: serde::Serializer>(messages: &[Message], s: S) -> Result<S::Ok, S::Error> {
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(messages.len());
+    let mut held: Vec<&Image> = Vec::new();
+    for (at, msg) in messages.iter().enumerate() {
+        out.push(openai_message(msg).map_err(serde::ser::Error::custom)?);
+        if msg.role == "tool" {
+            held.extend(&msg.images);
+        }
+        let run_ends = messages.get(at + 1).is_none_or(|next| next.role != "tool");
+        if run_ends && !held.is_empty() {
+            let mut parts = vec![serde_json::json!({
+                "type": "text",
+                "text": "The images the tool results above returned.",
+            })];
+            parts.extend(held.drain(..).map(image_part));
+            out.push(serde_json::json!({"role": "user", "content": parts}));
+        }
+    }
+    s.collect_seq(out)
+}
+
+/// The OpenAI form of one message: itself, without its images.
+///
+/// A user message carries its images as parts of its content, after its text.
+/// A tool message keeps its text only: its images follow in a user message.
+fn openai_message(msg: &Message) -> Result<serde_json::Value, serde_json::Error> {
+    let mut value = serde_json::to_value(msg)?;
+    if msg.images.is_empty() {
+        return Ok(value);
+    }
+    if let Some(fields) = value.as_object_mut() {
+        fields.remove("images");
+        if msg.role == "user" {
+            let mut parts = vec![serde_json::json!({"type": "text", "text": msg.content})];
+            parts.extend(msg.images.iter().map(image_part));
+            fields.insert("content".into(), serde_json::Value::Array(parts));
+        }
+    }
+    Ok(value)
+}
+
+/// One image as an OpenAI content part.
+fn image_part(img: &Image) -> serde_json::Value {
+    serde_json::json!({
+        "type": "image_url",
+        "image_url": {"url": format!("data:{};base64,{}", img.media_type, img.data)}
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -130,6 +203,7 @@ impl ResponseFormat {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ChatCompletionRequest {
     pub model: String,
+    #[serde(serialize_with = "openai_messages")]
     pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
@@ -323,4 +397,175 @@ pub struct FunctionDelta {
     pub name: Option<String>,
     #[serde(default)]
     pub arguments: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A request with [user "look" + 1 image] gives a content array of 2 parts.
+    #[test]
+    fn user_with_image_serializes_as_array() {
+        let images = vec![Image {
+            media_type: "image/png".to_string(),
+            data: "AAAA".to_string(),
+        }];
+        let msg = Message::user("look").with_images(images);
+        let value = openai_message(&msg).unwrap();
+
+        assert_eq!(value["role"], "user");
+        let content = value["content"]
+            .as_array()
+            .expect("content should be an array");
+        assert_eq!(content.len(), 2, "should have 2 parts");
+
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "look");
+
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,AAAA");
+    }
+
+    /// A request without images serializes exactly as before (content as string).
+    #[test]
+    fn message_without_images_serializes_as_string() {
+        let msg = Message::user("hello");
+        let value = openai_message(&msg).unwrap();
+
+        assert_eq!(value["role"], "user");
+        assert_eq!(value["content"], "hello");
+        assert!(!value.as_object().unwrap().contains_key("images"));
+    }
+
+    /// A request without images is the JSON each message gives by itself.
+    #[test]
+    fn a_request_without_images_is_unchanged() {
+        let call = ToolCall {
+            id: "c1".into(),
+            kind: "function".into(),
+            function: FunctionCall {
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+        };
+        let messages = vec![
+            Message::system("rules"),
+            Message::user("hi"),
+            Message::assistant_calling("", vec![call]),
+            Message::tool("text", "c1"),
+        ];
+        let request = ChatCompletionRequest {
+            model: "m".into(),
+            messages: messages.clone(),
+            ..Default::default()
+        };
+        let sent = serde_json::to_value(&request).unwrap();
+        let own: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| serde_json::to_value(m).unwrap())
+            .collect();
+        assert_eq!(sent["messages"], serde_json::Value::Array(own));
+        assert_eq!(sent["messages"][2]["tool_calls"][0]["type"], "function");
+    }
+
+    /// Consecutive tool results with images get a user message after the run.
+    #[test]
+    fn consecutive_tools_with_images_add_user_message() {
+        let images1 = vec![Image {
+            media_type: "image/png".to_string(),
+            data: "AAAA".to_string(),
+        }];
+        let images2 = vec![Image {
+            media_type: "image/jpeg".to_string(),
+            data: "BBBB".to_string(),
+        }];
+
+        let messages = vec![
+            Message::assistant("run tools").with_images(Vec::new()),
+            Message::tool("result c1", "c1").with_images(images1),
+            Message::tool("result c2", "c2").with_images(images2),
+            Message::user("next"),
+        ];
+
+        // We need to test the full serialization
+        let request = ChatCompletionRequest {
+            model: "test".to_string(),
+            messages,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            seed: None,
+            response_format: None,
+            user: None,
+            stream_options: None,
+            tools: None,
+            tool_choice: None,
+            reasoning_effort: None,
+        };
+
+        let value = serde_json::to_value(&request).unwrap();
+        let msgs: Vec<serde_json::Value> = value["messages"].as_array().unwrap().clone();
+
+        // First: assistant (string content)
+        assert_eq!(msgs[0]["role"], "assistant");
+        assert_eq!(msgs[0]["content"], "run tools");
+
+        // Second: tool c1 (string content, no `images` key)
+        assert_eq!(msgs[1]["role"], "tool");
+        assert_eq!(msgs[1]["content"], "result c1");
+        assert!(!msgs[1].as_object().unwrap().contains_key("images"));
+
+        // Third: tool c2 (string content, no `images` key)
+        assert_eq!(msgs[2]["role"], "tool");
+        assert_eq!(msgs[2]["content"], "result c2");
+        assert!(!msgs[2].as_object().unwrap().contains_key("images"));
+
+        // Fourth: user message with 3 parts (text, c1's image, c2's image)
+        assert_eq!(msgs[3]["role"], "user");
+        let content = msgs[3]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 3, "should have 3 parts");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(
+            content[0]["text"],
+            "The images the tool results above returned."
+        );
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,AAAA");
+        assert_eq!(content[2]["type"], "image_url");
+        assert_eq!(
+            content[2]["image_url"]["url"],
+            "data:image/jpeg;base64,BBBB"
+        );
+
+        // Fifth: user "next"
+        assert_eq!(msgs[4]["role"], "user");
+        assert_eq!(msgs[4]["content"], "next");
+    }
+
+    /// A Message with images goes through serde_json roundtrip.
+    #[test]
+    fn message_with_images_roundtrips() {
+        let images = vec![Image {
+            media_type: "image/png".to_string(),
+            data: "AAAA".to_string(),
+        }];
+        let msg = Message::user("test").with_images(images.clone());
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let msg_back: Message = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(msg_back.role, msg.role);
+        assert_eq!(msg_back.images.len(), 1);
+        assert_eq!(msg_back.images[0].media_type, "image/png");
+        assert_eq!(msg_back.images[0].data, "AAAA");
+    }
+
+    /// A JSON message without an `images` key loads with an empty list.
+    #[test]
+    fn message_without_images_key_loads_empty() {
+        let json = r#"{"role":"user","content":"hello","name":null,"tool_call_id":null,"tool_calls":null}"#;
+        let msg: Message = serde_json::from_str(json).unwrap();
+        assert!(msg.images.is_empty());
+    }
 }

@@ -673,6 +673,29 @@ impl crate::backend::provider::Provider for BackendClient {
         let body: serde_json::Value = serde_json::from_str(&body).context("decoding /v1/models")?;
         Ok(model_ids(&body))
     }
+
+    async fn sees_images(&self, model: &str) -> Option<bool> {
+        use std::time::Duration;
+        let root = server_root(&self.base);
+        let url = format!("{}/api/show", root);
+        let timeout = Duration::from_secs(3);
+        match self
+            .http
+            .post(&url)
+            .timeout(timeout)
+            .json(&serde_json::json!({"model": model}))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(body) => vision_in(&body),
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The widest window a models listing states for `model`, `max_model_len` in its row.
@@ -707,6 +730,23 @@ fn model_ids(body: &serde_json::Value) -> Vec<String> {
             .collect()
     })
     .unwrap_or_default()
+}
+
+/// The server root for the /api/show endpoint.
+///
+/// Strips trailing `/` from base, then removes a trailing `/v1` if present.
+fn server_root(base: &str) -> String {
+    let root = base.trim_end_matches('/');
+    root.strip_suffix("/v1").unwrap_or(root).to_string()
+}
+
+/// Whether a body from `/api/show` indicates the model takes images.
+///
+/// Looks for a `capabilities` array containing the string `"vision"`.
+fn vision_in(body: &serde_json::Value) -> Option<bool> {
+    body.get("capabilities")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().any(|c| c.as_str() == Some("vision")))
 }
 
 impl BackendClient {
@@ -966,5 +1006,33 @@ mod tests {
         let alive = String::from_utf8(comment_event(b": keep-alive")).expect("text");
         assert!(alive.starts_with("event: alive\n"), "{alive}");
         assert!(matches!(prefill_of("not json"), StreamEvent::Alive));
+    }
+}
+
+#[cfg(test)]
+mod backend_tests {
+    use super::*;
+
+    #[test]
+    fn server_root_strips_trailing_slash_and_v1() {
+        assert_eq!(server_root("http://h:11434/v1"), "http://h:11434");
+        assert_eq!(server_root("http://h:11434/v1/"), "http://h:11434");
+        assert_eq!(server_root("http://h:11434"), "http://h:11434");
+        assert_eq!(server_root("http://h:11434/"), "http://h:11434");
+    }
+
+    #[test]
+    fn vision_in_detects_vision_capability() {
+        let with_vision = serde_json::json!({"capabilities": ["completion", "vision"]});
+        assert_eq!(vision_in(&with_vision), Some(true));
+
+        let without_vision = serde_json::json!({"capabilities": ["completion"]});
+        assert_eq!(vision_in(&without_vision), Some(false));
+
+        let no_capabilities = serde_json::json!({});
+        assert_eq!(vision_in(&no_capabilities), None);
+
+        let empty_capabilities = serde_json::json!({"capabilities": []});
+        assert_eq!(vision_in(&empty_capabilities), Some(false));
     }
 }

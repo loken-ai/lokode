@@ -86,6 +86,7 @@ impl Harness {
             planning: false,
             known: Default::default(),
             tail: Default::default(),
+            sees_images: false,
         };
 
         Self {
@@ -115,6 +116,12 @@ impl Harness {
             unset: vec!["LOKODE_API_KEY".into()],
         }));
         h
+    }
+
+    /// Tell this harness that the model takes images.
+    pub fn seeing_images(mut self) -> Self {
+        self.ctx.sees_images = true;
+        self
     }
 
     pub fn path(&self, rel: &str) -> PathBuf {

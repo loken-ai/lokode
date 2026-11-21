@@ -598,6 +598,7 @@ fn said_before(known: &ToolOutput) -> ToolOutput {
     ToolOutput {
         content: format!("{SAID_BEFORE}\n{}", known.content),
         is_error: known.is_error,
+        images: Vec::new(),
     }
 }
 
@@ -1672,6 +1673,7 @@ impl Agent {
         tracing::info!(from = %previous, to = %name, context, "model changed");
         // Remembered for the next session.
         // Failing to write is worth saying and is not worth refusing the switch over.
+        self.learn_vision().await;
         let Some(path) = self.cfg.remember_model_in.clone() else {
             return format!("now on {name}, window {context}");
         };
@@ -1682,6 +1684,15 @@ impl Agent {
             ),
             Err(e) => format!("now on {name}, window {context}; could not remember it: {e:#}"),
         }
+    }
+
+    /// Ask the backend whether the current model takes images, and tell the tools.
+    pub async fn learn_vision(&mut self) {
+        self.ctx.sees_images = self
+            .backend
+            .sees_images(&self.cfg.model)
+            .await
+            .unwrap_or(false);
     }
 
     /// Run one user turn end-to-end.
@@ -2472,10 +2483,10 @@ impl Agent {
                         })
                         .await;
                     let prefix = if result.is_error { "[error] " } else { "" };
-                    self.session.push(Message::tool(
-                        format!("{prefix}{}", result.content),
-                        call.id,
-                    ));
+                    self.session.push(
+                        Message::tool(format!("{prefix}{}", result.content), call.id)
+                            .with_images(result.images.clone()),
+                    );
 
                     // After the call rather than before it: the state to return to is the one that
                     // preceded this turn, and that was recorded when the turn before it ended.

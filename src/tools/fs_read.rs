@@ -1,17 +1,35 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use base64::Engine;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::backend::wire::Image;
 use crate::sandbox::allowlist;
 use crate::tools::registry::{Tool, ToolCtx, ToolOutput};
 use crate::tools::text;
 
 const MAX_LIST_ENTRIES: usize = 1024;
 const MAX_GLOB_HITS: usize = 512;
+
+/// Whether a path is an image file and what its media type is.
+///
+/// Case-insensitive check for .png, .jpg, .jpeg, .gif, .webp.
+fn image_type(path: &Path) -> Option<&'static str> {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .and_then(|ext| match ext.as_str() {
+            "png" => Some("image/png"),
+            "jpg" | "jpeg" => Some("image/jpeg"),
+            "gif" => Some("image/gif"),
+            "webp" => Some("image/webp"),
+            _ => None,
+        })
+}
 
 // ============================================================== read_file --
 
@@ -115,7 +133,9 @@ impl Tool for ReadFile {
     fn description(&self) -> &str {
         "Read a text file. Optional 1-indexed inclusive start_line/end_line. Without them, a \
          long file comes back as its first and last lines with its line count. For a PDF, \
-         optional pages chooses its pages, e.g. \"3\" or \"2-5\", and returns its text."
+         optional pages chooses its pages, e.g. \"3\" or \"2-5\", and returns its text. \
+         For images (PNG, JPG, GIF, WEBP), the file is returned to a model that sees images \
+         as a base64-encoded image."
     }
 
     fn args_schema(&self) -> Value {
@@ -138,6 +158,40 @@ impl Tool for ReadFile {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
+
+        // An image the editor holds no buffer for goes to the model as an image.
+        let image = match image_type(&resolved) {
+            Some(media_type) if ctx.editor_text(&resolved).await.is_none() => Some(media_type),
+            _ => None,
+        };
+        if let Some(media_type) = image {
+            if a.start_line.is_some() || a.end_line.is_some() || a.pages.is_some() {
+                return Ok(ToolOutput::err(
+                    "an image is read whole; omit start_line, end_line, and pages",
+                ));
+            }
+            if !ctx.sees_images {
+                return Ok(ToolOutput::err(
+                    "this model does not take images: the server does not say it sees them",
+                ));
+            }
+            let bytes = match tokio::fs::read(&resolved).await {
+                Ok(b) => b,
+                Err(e) => return Ok(ToolOutput::err(format!("{}: {e}", ctx.short(&resolved)))),
+            };
+            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let output = ToolOutput::ok(format!(
+                "image {}: {media_type}, {} bytes",
+                ctx.short(&resolved),
+                bytes.len()
+            ))
+            .with_images(vec![Image {
+                media_type: media_type.to_string(),
+                data,
+            }]);
+            ctx.note_content(&resolved, &bytes);
+            return Ok(output);
+        }
 
         // Determine if this is a PDF (case-insensitive extension check)
         let is_pdf = resolved
@@ -505,9 +559,10 @@ mod tests {
 
     #[tokio::test]
     async fn read_file_refuses_a_binary_file() {
+        // A file with a non-image extension that is binary data refuses to read as text.
         let h = Harness::new(Answer::No);
-        h.write("logo.png", "\u{0}\u{0}not text");
-        let out = h.run(&ReadFile, json!({"path": "logo.png"})).await;
+        h.write("logo.bin", "\u{0}\u{0}not text");
+        let out = h.run(&ReadFile, json!({"path": "logo.bin"})).await;
         refused(&out, "not a text file");
     }
 
@@ -975,5 +1030,96 @@ startxref
             .await;
         assert!(!out.is_error, "unexpected error: {}", out.content);
         assert!(out.content.contains("line one"), "{}", out.content);
+    }
+
+    // ================================================================= image --
+
+    /// Test image_type function.
+    #[test]
+    fn image_type_detects_formats_case_insensitively() {
+        use super::image_type;
+        use std::path::Path;
+
+        assert_eq!(image_type(Path::new("a.PNG")), Some("image/png"));
+        assert_eq!(image_type(Path::new("b.jpeg")), Some("image/jpeg"));
+        assert_eq!(image_type(Path::new("c.jpg")), Some("image/jpeg"));
+        assert_eq!(image_type(Path::new("d.gif")), Some("image/gif"));
+        assert_eq!(image_type(Path::new("e.webp")), Some("image/webp"));
+        assert_eq!(image_type(Path::new("f.png")), Some("image/png"));
+        assert_eq!(image_type(Path::new("g.TXT")), None);
+        assert_eq!(image_type(Path::new("h.txt")), None);
+    }
+
+    /// Test reading a PNG image returns the image with correct media type and data.
+    #[tokio::test]
+    async fn read_file_returns_png_as_image() {
+        use super::*;
+        use base64::Engine;
+
+        let h = Harness::new(Answer::No).seeing_images();
+        let png_data: &[u8] = b"\x89PNG\r\n\x1a\n"; // minimal valid PNG header
+        h.write_bytes("test.png", png_data);
+
+        let out = h.run(&ReadFile, json!({"path": "test.png"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("image"));
+        assert!(out.content.contains("8 bytes"));
+        assert_eq!(out.images.len(), 1);
+        assert_eq!(out.images[0].media_type, "image/png");
+        // Decode and verify the data
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&out.images[0].data)
+            .expect("valid base64");
+        assert_eq!(decoded.as_slice(), png_data);
+    }
+
+    /// Test reading an image without seeing_images enabled returns an error.
+    #[tokio::test]
+    async fn read_file_requires_seeing_images() {
+        use super::*;
+
+        let h = Harness::new(Answer::No);
+        h.write_bytes("test.jpg", b"JPGDATA");
+
+        let out = h.run(&ReadFile, json!({"path": "test.jpg"})).await;
+        assert!(out.is_error);
+        assert!(
+            out.content.contains("this model does not take images"),
+            "expected vision error: {}",
+            out.content
+        );
+    }
+
+    /// Test reading an image with start_line returns an error.
+    #[tokio::test]
+    async fn read_file_image_with_start_line_is_error() {
+        use super::*;
+
+        let h = Harness::new(Answer::No).seeing_images();
+        h.write_bytes("test.png", b"PNGDATA");
+
+        let out = h
+            .run(&ReadFile, json!({"path": "test.png", "start_line": 1}))
+            .await;
+        assert!(out.is_error);
+        assert!(
+            out.content.contains("an image is read whole"),
+            "expected range error: {}",
+            out.content
+        );
+    }
+
+    /// Test that .txt files still read as text with no image.
+    #[tokio::test]
+    async fn read_file_txt_still_reads_as_text() {
+        use super::*;
+
+        let h = Harness::new(Answer::No).seeing_images();
+        h.write("test.txt", "hello world\n");
+
+        let out = h.run(&ReadFile, json!({"path": "test.txt"})).await;
+        succeeded(&out);
+        assert!(out.content.contains("hello world"));
+        assert!(out.images.is_empty(), "text files should not have images");
     }
 }

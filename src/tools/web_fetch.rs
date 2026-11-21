@@ -422,6 +422,7 @@ mod tests {
             planning: false,
             known: Default::default(),
             tail: Default::default(),
+            sees_images: false,
         }
     }
 

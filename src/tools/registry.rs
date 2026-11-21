@@ -90,6 +90,8 @@ pub struct ToolCtx {
     /// What the person asked this session, in order.
     /// These are the project's objectives when an agent's work is reconciled with it.
     pub asked: Arc<std::sync::Mutex<Vec<String>>>,
+    /// Whether the model takes images, learned from the backend.
+    pub sees_images: bool,
 }
 
 /// The files each agent working in the background has written, held until it answers so
@@ -547,6 +549,7 @@ pub enum SubEvent {
 pub struct ToolOutput {
     pub content: String,
     pub is_error: bool,
+    pub images: Vec<crate::backend::wire::Image>,
 }
 
 impl ToolOutput {
@@ -554,13 +557,19 @@ impl ToolOutput {
         Self {
             content: s.into(),
             is_error: false,
+            images: Vec::new(),
         }
     }
     pub fn err(s: impl Into<String>) -> Self {
         Self {
             content: s.into(),
             is_error: true,
+            images: Vec::new(),
         }
+    }
+    pub fn with_images(mut self, images: Vec<crate::backend::wire::Image>) -> Self {
+        self.images = images;
+        self
     }
 }
 
