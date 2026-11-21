@@ -547,7 +547,10 @@ pub enum SubEvent {
 
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
+    /// What the conversation carries to the model.
     pub content: String,
+    /// What the person sees in place of `content`, when it differs.
+    pub shown: Option<String>,
     pub is_error: bool,
     pub images: Vec<crate::backend::wire::Image>,
 }
@@ -556,6 +559,7 @@ impl ToolOutput {
     pub fn ok(s: impl Into<String>) -> Self {
         Self {
             content: s.into(),
+            shown: None,
             is_error: false,
             images: Vec::new(),
         }
@@ -563,6 +567,7 @@ impl ToolOutput {
     pub fn err(s: impl Into<String>) -> Self {
         Self {
             content: s.into(),
+            shown: None,
             is_error: true,
             images: Vec::new(),
         }
@@ -570,6 +575,15 @@ impl ToolOutput {
     pub fn with_images(mut self, images: Vec<crate::backend::wire::Image>) -> Self {
         self.images = images;
         self
+    }
+    /// A shorter form for the conversation; a longer `shown` for the person.
+    pub fn showing(mut self, shown: String) -> Self {
+        self.shown = Some(shown);
+        self
+    }
+    /// What the person sees: `shown` when set, else `content`.
+    pub fn for_person(&self) -> &str {
+        self.shown.as_deref().unwrap_or(&self.content)
     }
 }
 

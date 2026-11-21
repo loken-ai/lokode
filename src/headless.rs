@@ -268,7 +268,7 @@ pub async fn run(
                     name,
                     error: output.is_error,
                     check: crate::lsp::check::read(&output.content).map(|(o, _)| o),
-                    output: output.content,
+                    output: output.for_person().to_string(),
                 });
             }
             // A headless run has nobody typing.

@@ -597,6 +597,7 @@ fn repeat_key(call: &ResolvedCall) -> String {
 fn said_before(known: &ToolOutput) -> ToolOutput {
     ToolOutput {
         content: format!("{SAID_BEFORE}\n{}", known.content),
+        shown: None,
         is_error: known.is_error,
         images: Vec::new(),
     }

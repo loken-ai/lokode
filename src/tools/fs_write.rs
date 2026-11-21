@@ -63,11 +63,11 @@ async fn apply_found(
         true => "\napplied where the text matched once leading and trailing spaces were ignored",
         false => "",
     };
-    Ok(ToolOutput::ok(format!(
-        "edited {}\n{}{note}",
-        ctx.short(target),
-        preview(&diff)
-    )))
+    let line_info = changed_lines(&diff);
+    Ok(
+        ToolOutput::ok(format!("edited {}\n{}{note}", ctx.short(target), line_info))
+            .showing(preview(&diff)),
+    )
 }
 
 /// Find where an `old` stands in `file`.
@@ -236,12 +236,14 @@ impl Tool for WriteFile {
         ctx.write_text(&target, &after).await?;
         ctx.note_content(&target, after.as_bytes());
 
+        let line_info = changed_lines(&diff);
         Ok(ToolOutput::ok(format!(
             "wrote {} ({} bytes)\n{}",
             ctx.short(&target),
             after.len(),
-            preview(&diff)
-        )))
+            line_info
+        ))
+        .showing(preview(&diff)))
     }
 }
 
@@ -490,12 +492,14 @@ impl Tool for EditLines {
 
         ctx.write_text(&target, &after).await?;
         ctx.note_content(&target, after.as_bytes());
+        let line_info = changed_lines(&diff);
         Ok(ToolOutput::ok(format!(
             "applied {} edit(s) to {}\n{}",
             a.edits.len(),
             ctx.short(&target),
-            preview(&diff)
-        )))
+            line_info
+        ))
+        .showing(preview(&diff)))
     }
 }
 
@@ -626,13 +630,16 @@ impl Tool for ApplyPatch {
             ctx.note_content(&s.target, s.after.as_bytes());
         }
 
-        Ok(ToolOutput::ok(
-            staged
-                .iter()
-                .map(|s| format!("patched {}", ctx.short(&s.target)))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ))
+        // Build content line by line with line info
+        let mut content_lines = Vec::new();
+        for s in &committed {
+            let before = s.before.as_deref().unwrap_or("");
+            let diff = unified_diff(before, &s.after, &ctx.short(&s.target));
+            let line_info = changed_lines(&diff);
+            content_lines.push(format!("patched {}\n{}", ctx.short(&s.target), line_info));
+        }
+
+        Ok(ToolOutput::ok(content_lines.join("\n")).showing(preview(&a.unified_diff)))
     }
 }
 
@@ -763,6 +770,42 @@ fn preview(s: &str) -> String {
         out
     } else {
         s.to_string()
+    }
+}
+
+/// The lines of the new text that a unified diff changed, read from its hunk headers.
+///
+/// A header `@@ -a,b +c,d @@` changed lines `c` to `c+d-1` of the new text.
+/// A count left out is 1.
+/// A hunk that adds nothing removed lines after line `c`.
+pub fn changed_lines(diff: &str) -> String {
+    // `c` and `d` of one side of a header, such as `+12,3` or `+12`.
+    fn side(part: &str) -> Option<(usize, usize)> {
+        let (start, count) = part.split_once(',').unwrap_or((part, "1"));
+        Some((start.parse().ok()?, count.parse().ok()?))
+    }
+    let mut changes = Vec::new();
+    for line in diff.lines() {
+        let Some(header) = line.strip_prefix("@@ ") else {
+            continue;
+        };
+        let mut parts = header.split_whitespace();
+        let (Some(_), Some(plus)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Some((start, count)) = plus.strip_prefix('+').and_then(side) else {
+            continue;
+        };
+        changes.push(match count {
+            0 if start == 0 => "lines removed at the top".to_string(),
+            0 => format!("lines removed after line {start}"),
+            1 => format!("line {start} changed"),
+            n => format!("lines {start}-{} changed", start + n - 1),
+        });
+    }
+    match changes.is_empty() {
+        true => "no line changed".to_string(),
+        false => changes.join(", "),
     }
 }
 
@@ -1703,5 +1746,71 @@ mod edit_lines_tests {
             Found::Nearest { .. } => {} // Should be Nearest, not Loose
             other => panic!("Expected Nearest, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn changed_lines_two_hunks() {
+        // Test with 2 hunks: @@ -1,3 +1,4 @@ and @@ -10,2 +11,0 @@
+        let diff = r#"--- a/f.rs
++++ b/f.rs
+@@ -1,3 +1,4 @@
+ line1
++added
+ line2
+ line3
+@@ -10,2 +11,0 @@
+ line10
+-line11
+"#;
+        assert_eq!(
+            changed_lines(diff),
+            "lines 1-4 changed, lines removed after line 11"
+        );
+    }
+
+    #[test]
+    fn changed_lines_only_removal() {
+        // Hunk that only removes lines
+        let diff = r#"--- a/f.rs
++++ b/f.rs
+@@ -10,2 +11,0 @@
+ line10
+-line11
+"#;
+        assert_eq!(changed_lines(diff), "lines removed after line 11");
+    }
+
+    #[test]
+    fn changed_lines_single_line() {
+        // Single line change
+        let diff = r#"--- a/f.rs
++++ b/f.rs
+@@ -1,1 +1,1 @@
+-old
++new
+"#;
+        assert_eq!(changed_lines(diff), "line 1 changed");
+    }
+
+    #[test]
+    fn changed_lines_reads_a_header_without_counts() {
+        let diff = "@@ -3 +3 @@\n-old\n+new\n@@ -1,2 +0,0 @@\n-a\n-b\n";
+        assert_eq!(
+            changed_lines(diff),
+            "line 3 changed, lines removed at the top"
+        );
+    }
+
+    #[test]
+    fn changed_lines_addition() {
+        // Adding lines to empty file
+        let diff = r#"--- a/f.rs
++++ b/f.rs
+@@ -0,0 +1,3 @@
++line1
++line2
++line3
+"#;
+        assert_eq!(changed_lines(diff), "lines 1-3 changed");
     }
 }

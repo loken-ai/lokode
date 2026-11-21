@@ -197,6 +197,8 @@ async fn check_one(server: &Server, root: &Path, files: &[PathBuf]) -> Verdict {
         }
     }
     let mut lines = Vec::new();
+    let errors = first_on_each_line(&errors);
+    let warnings = first_on_each_line(&warnings);
     for (uri, d) in errors.iter().chain(warnings.iter()).take(SHOWN) {
         lines.push(describe(server, root, uri, d).await);
     }
@@ -337,6 +339,17 @@ fn code(d: &Diagnostic) -> Option<String> {
     })
 }
 
+/// The first of the diagnostics that share a file, a start line and what they say.
+///
+/// A server can report one problem once per column it spans: that is one problem.
+fn first_on_each_line<'a>(list: &[(Url, &'a Diagnostic)]) -> Vec<(Url, &'a Diagnostic)> {
+    let mut seen = std::collections::HashSet::new();
+    list.iter()
+        .filter(|(uri, d)| seen.insert((uri.clone(), d.range.start.line, key(d))))
+        .cloned()
+        .collect()
+}
+
 /// One diagnostic as a line a model can act on.
 ///
 /// The line holds where it is in characters, its severity and code, what it says,
@@ -462,5 +475,31 @@ mod tests {
         assert_eq!(new.len(), 1);
         assert_eq!(new[0].range.start.line, 12);
         assert_eq!(kept.len(), 2);
+    }
+
+    /// Diagnostics at different columns but same line and message are deduplicated.
+    #[test]
+    fn diagnostics_deduplicated_by_line_and_key() {
+        use std::path::Path;
+
+        let base_url = Url::from_file_path(Path::new("/project/test.rs")).unwrap();
+
+        // Two diagnostics with same file, line and message but different columns
+        let d1 = Diagnostic {
+            range: Range::new(Position::new(5, 0), Position::new(5, 5)),
+            severity: Some(DiagnosticSeverity::ERROR),
+            message: "type error".into(),
+            ..Default::default()
+        };
+        let d2 = Diagnostic {
+            range: Range::new(Position::new(5, 2), Position::new(5, 7)),
+            severity: Some(DiagnosticSeverity::ERROR),
+            message: "type error".into(),
+            ..Default::default()
+        };
+
+        let errors: Vec<(Url, &Diagnostic)> =
+            vec![(base_url.clone(), &d1), (base_url.clone(), &d2)];
+        assert_eq!(first_on_each_line(&errors).len(), 1);
     }
 }

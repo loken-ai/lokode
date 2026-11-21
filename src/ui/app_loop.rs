@@ -810,7 +810,7 @@ async fn run_ui(
                             name,
                             Outcome {
                                 is_error: output.is_error,
-                                body: output.content,
+                                body: output.for_person().to_string(),
                                 took,
                                 origin,
                             },
