@@ -6,6 +6,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Added
 
+- Tools: filter grep by glob, show context lines, list files or counts, and limit its output.
 - Tools: replace every occurrence of a text with edit_file's replace_all.
 - Tools: write a long new file in several calls with write_file's append.
 
