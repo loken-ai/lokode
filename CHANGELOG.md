@@ -21,6 +21,7 @@ All notable changes to lokode. The format follows [Keep a Changelog](https://kee
 
 ### Fixed
 
+- Tools: let write_file create again a file deleted since it was read.
 - Interface: give a turn without a step limit as many steps as its changes take on average.
 - Shell: let the system kill a command rather than the session when memory runs out.
 - Interface: count a first run of a command as progress when no step limit is set.

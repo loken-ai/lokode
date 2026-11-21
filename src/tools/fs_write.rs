@@ -183,14 +183,20 @@ impl Tool for WriteFile {
             Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
 
-        let before = match ctx.read_text_if_exists(&target).await {
-            Ok(b) => b.unwrap_or_default(),
+        let existing = match ctx.read_text_if_exists(&target).await {
+            Ok(b) => b,
             Err(e) => return Ok(ToolOutput::err(e)),
         };
         // A whole-file write replaces what the model believes the file says.
         // If someone has changed the file since the model read it, that belief is stale.
         // The write would throw their work away without either of them seeing it happen.
-        if ctx.changed_since_seen(&target, before.as_bytes()) {
+        //
+        // A file that is gone holds no work to lose: writing it creates it again.
+        let stale = existing
+            .as_ref()
+            .is_some_and(|now| ctx.changed_since_seen(&target, now.as_bytes()));
+        let before = existing.unwrap_or_default();
+        if stale {
             return Ok(ToolOutput::err(format!(
                 "{} changed on disk since you read it; read it again before writing it",
                 ctx.short(&target)
@@ -861,6 +867,32 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(h.root.join("a.txt")).unwrap(),
             "one, and their change"
+        );
+    }
+
+    /// A file deleted since it was read holds nothing to lose, so writing it creates it again.
+    #[tokio::test]
+    async fn a_file_deleted_since_it_was_read_can_be_written_again() {
+        let h = crate::tools::harness::Harness::new(crate::tools::harness::Answer::Yes);
+        h.write("a.txt", "one");
+        let read = crate::tools::fs_read::ReadFile
+            .run(&h.ctx, serde_json::json!({"path": "a.txt"}))
+            .await
+            .unwrap();
+        assert!(!read.is_error, "{read:?}");
+        std::fs::remove_file(h.root.join("a.txt")).unwrap();
+
+        let out = WriteFile
+            .run(
+                &h.ctx,
+                serde_json::json!({"path": "a.txt", "content": "two"}),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{out:?}");
+        assert_eq!(
+            std::fs::read_to_string(h.root.join("a.txt")).unwrap(),
+            "two"
         );
     }
 
