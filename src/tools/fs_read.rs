@@ -98,6 +98,12 @@ pub struct ListDir;
 #[derive(Deserialize)]
 struct ListDirArgs {
     path: PathBuf,
+    #[serde(default = "default_depth")]
+    depth: usize,
+}
+
+fn default_depth() -> usize {
+    1
 }
 
 #[async_trait]
@@ -106,7 +112,7 @@ impl Tool for ListDir {
         "list_dir"
     }
     fn description(&self) -> &str {
-        "List immediate children of a directory under the project root."
+        "List immediate children of a directory under the project root. With a depth, also list children of subdirectories up to that depth."
     }
 
     fn args_schema(&self) -> Value {
@@ -124,30 +130,42 @@ impl Tool for ListDir {
             Ok(p) => p,
             Err(e) => return Ok(ToolOutput::err(allowlist::refusal(&ctx.root, &a.path, &e))),
         };
-        let mut rd = match tokio::fs::read_dir(&dir).await {
-            Ok(r) => r,
-            Err(e) => return Ok(ToolOutput::err(format!("read_dir failed: {e}"))),
-        };
 
-        let mut entries: Vec<String> = Vec::new();
-        while let Some(entry) = rd.next_entry().await? {
-            if entries.len() >= MAX_LIST_ENTRIES {
-                entries.push("… (truncated)".into());
-                break;
-            }
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let meta = entry.metadata().await.ok();
-            let kind = match meta.as_ref().map(|m| m.is_dir()) {
-                Some(true) => "DIR ",
-                Some(false) => "FILE",
-                None => "?   ",
-            };
-            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-            entries.push(format!("{kind}  {size:>10}  {name}"));
+        if a.depth == 0 {
+            return Ok(ToolOutput::err("depth must be at least 1"));
         }
-        entries.sort();
-        // Clamped like every other result.
-        // One result must not be able to displace the conversation.
+
+        let entries = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            use ignore::WalkBuilder;
+            let mut out = Vec::new();
+            let walker = WalkBuilder::new(&dir).max_depth(Some(a.depth)).build();
+            for r in walker {
+                let entry = match r {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                if out.len() >= MAX_LIST_ENTRIES {
+                    out.push("… (truncated)".into());
+                    break;
+                }
+                let meta = entry.metadata().ok();
+                let kind = match meta.as_ref().map(|m| m.is_dir()) {
+                    Some(true) => "DIR ",
+                    Some(false) => "FILE",
+                    None => "?   ",
+                };
+                let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                // Show path relative to the listed directory, not the project root.
+                let rel_path = match entry.path().strip_prefix(&dir) {
+                    Ok(p) => p.display().to_string(),
+                    Err(_) => continue,
+                };
+                out.push(format!("{kind}  {size:>10}  {rel_path}"));
+            }
+            Ok(out)
+        })
+        .await??;
+
         Ok(ToolOutput::ok(ctx.clamp(entries.join("\n"))))
     }
 }
@@ -158,6 +176,7 @@ pub struct Glob;
 
 #[derive(Deserialize)]
 struct GlobArgs {
+    path: Option<PathBuf>,
     pattern: String,
 }
 
@@ -167,13 +186,16 @@ impl Tool for Glob {
         "glob"
     }
     fn description(&self) -> &str {
-        "Recursively list files matching a gitignore-aware glob from the project root."
+        "Recursively list files matching a gitignore-aware glob from the project root. With a path, search from that directory instead."
     }
 
     fn args_schema(&self) -> Value {
         json!({
             "type": "object",
-            "properties": {"pattern": {"type": "string"}},
+            "properties": {
+                "path":     {"type": "string"},
+                "pattern":  {"type": "string"}
+            },
             "required": ["pattern"],
             "additionalProperties": false
         })
@@ -184,13 +206,23 @@ impl Tool for Glob {
         let root = ctx.root.clone();
         let pattern = a.pattern;
 
+        let start = match a.path {
+            Some(ref p) => match allowlist::resolve(&root, p, true) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Ok(ToolOutput::err(allowlist::refusal(&root, p, &e)));
+                }
+            },
+            None => root.clone(),
+        };
+
         let hits = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
             use ignore::WalkBuilder;
-            let mut matcher = ignore::overrides::OverrideBuilder::new(&root);
+            let mut matcher = ignore::overrides::OverrideBuilder::new(&start);
             matcher.add(&pattern)?;
             let overrides = matcher.build()?;
             let mut out = Vec::new();
-            let walker = WalkBuilder::new(&root).overrides(overrides).build();
+            let walker = WalkBuilder::new(&start).overrides(overrides).build();
             for r in walker {
                 let entry = match r {
                     Ok(e) => e,
@@ -422,5 +454,88 @@ mod tests {
         let out = h.run(&Glob, json!({"pattern": "**/*.rs"})).await;
         succeeded(&out);
         assert_eq!(out.content, "");
+    }
+
+    // -------------------------------------------------------------------- glob --
+    // Test with path parameter
+
+    #[tokio::test]
+    async fn glob_with_path_searches_from_directory() {
+        let h = Harness::new(Answer::No);
+        h.write("src/a.rs", "");
+        h.write("b.rs", "");
+        let out = h
+            .run(&Glob, json!({"path": "src", "pattern": "*.rs"}))
+            .await;
+        succeeded(&out);
+        assert!(out.content.contains("src/a.rs"), "{}", out.content);
+        assert!(!out.content.contains("b.rs"), "{}", out.content);
+    }
+
+    #[tokio::test]
+    async fn glob_with_path_outside_root_is_refused() {
+        let h = Harness::new(Answer::No);
+        let out = h
+            .run(&Glob, json!({"path": "/etc", "pattern": "*.rs"}))
+            .await;
+        refused(&out, "outside the project root");
+    }
+
+    // ---------------------------------------------------------------- list_dir --
+    // Test with depth parameter
+
+    #[tokio::test]
+    async fn list_dir_depth_2_shows_subdirectory_contents() {
+        let h = Harness::new(Answer::No);
+        h.write("src/a.rs", "");
+        h.write("sub/x.txt", "");
+        let out = h.run(&ListDir, json!({"path": ".", "depth": 2})).await;
+        succeeded(&out);
+        assert!(out.content.contains("sub/x.txt"), "{}", out.content);
+    }
+
+    #[tokio::test]
+    async fn list_dir_depth_1_same_as_default() {
+        let h = Harness::new(Answer::No);
+        h.write("src/a.rs", "");
+        h.write("sub/x.txt", "");
+        let out = h.run(&ListDir, json!({"path": "."})).await;
+        succeeded(&out);
+        assert!(out.content.contains("src"), "{}", out.content);
+        assert!(!out.content.contains("a.rs"), "{}", out.content);
+        assert!(!out.content.contains("sub/x.txt"), "{}", out.content);
+        let out_depth_1 = h.run(&ListDir, json!({"path": ".", "depth": 1})).await;
+        succeeded(&out_depth_1);
+        assert_eq!(out.content, out_depth_1.content);
+    }
+
+    #[tokio::test]
+    async fn list_dir_depth_0_is_error() {
+        let h = Harness::new(Answer::No);
+        let out = h.run(&ListDir, json!({"path": ".", "depth": 0})).await;
+        assert!(out.is_error, "expected an error: {}", out.content);
+        assert!(
+            out.content.contains("depth must be at least 1"),
+            "{}",
+            out.content
+        );
+    }
+
+    #[tokio::test]
+    async fn list_dir_depth_2_respects_gitignore() {
+        let h = Harness::new(Answer::No);
+        // The rules only apply inside a repository, so there has to be one.
+        std::fs::create_dir_all(h.path(".git")).unwrap();
+        h.write(".gitignore", "target/\n");
+        h.write("src/a.rs", "");
+        h.write("target/debug/b.rs", "");
+        let out = h.run(&ListDir, json!({"path": ".", "depth": 2})).await;
+        succeeded(&out);
+        assert!(out.content.contains("src/a.rs"), "{}", out.content);
+        assert!(
+            !out.content.contains("target/debug/b.rs"),
+            "an ignored path was walked: {}",
+            out.content
+        );
     }
 }
